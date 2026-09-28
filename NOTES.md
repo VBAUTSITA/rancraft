@@ -735,12 +735,16 @@ The 19 originals are unchanged.
 | (not mentioned) | **The 4-cell cut now always keeps the serving cell** (`SignalSamplePayload.topCells`) | **Bug found and fixed.** A plain top-4 cut dropped a serving cell that hysteresis held at rank 5 or lower, which is easy next to a column of stacked co-channel masts, all within 3 dB of each other. The HUD then drew NO SERVICE over a real (interference-drowned) serving link, hiding the diagnosis; the trail would have logged a false outage. The lens's `chooseLinks` already used this rule. **This changes the meter HUD in that one edge case**, so slice 4's "byte-identical meter" gate compares against this slice, not Phase 2. |
 | `drivetest-<timestamp>.csv` | one file per dimension: `drivetest-<yyyyMMdd-HHmmss>-<dimension>.csv`, e.g. `...-minecraft_overworld.csv` | Overworld and Nether coordinates are different places. One table mixing them would place rows next to each other that describe unrelated ground. The column header is exactly as designed. |
 | one log | one `DriveTestLog` per dimension, keyed by the client's level at receipt | Same reason, for drawing: an Overworld trail must not be drawn in the Nether. The dimension at receipt is the dimension measured in: samples and the respawn packet travel one ordered connection, and both are queued FIFO on the client thread (checked in NeoForge's `MainThreadPayloadHandler` / `ClientPayloadContext.enqueueWork` and vanilla `PacketUtils.ensureRunningOnSameThread`). |
-| default 3,600 samples | `driveTestCapacity` in a new **CLIENT** config spec, plus `trailRenderDistance` | "Everything tunable goes in RanCraftConfig." These are client-only knobs, so they sit in a CLIENT spec (FML loads it only on a physical client) rather than COMMON, where a server admin would see settings they cannot affect. A capacity change applies to a dimension's log when it next starts (after `clear`). |
+| default 3,600 samples | `driveTestCapacity` in a new **CLIENT** config spec, plus `trailRenderDistance` | "Everything tunable goes in RanCraftConfig." These are client-only knobs, so they sit in a CLIENT spec (FML loads it only on a physical client) rather than COMMON, where a server admin would see settings they cannot affect. A capacity change applies to a dimension's log when it next starts (after `clear`, or since the follow-ups below, after a relog). |
 | trail samples | every received sample is logged, from the meter or the lens | A Field Test Meter is what a real drive-test scanner is, so a walk with the meter out is a drive test too. The trail layer only decides whether the log is drawn. |
 | (not mentioned) | the lens band filter does not apply to the trail | The trail records what the receiver got; the serving band is part of that result, not a view choice. |
 | (not mentioned) | pre-3a lens saves: a missing `show_trail` is derived as `lobes && links && coverage` | A lens saved on ALL gains the trail (ALL now includes it). A lens narrowed to one layer (say LINKS) stays on it, rather than waking up with the trail on and reading as an unnamed combination. `show_trail` is always written from now on, so the rule only touches pre-3a data. Pinned by `LensSettingsTest`. |
 
 ### Clearing: kept until `/rancraftc drivetest clear`
+
+> **Superseded by "Vision Step 3a follow-ups" below:** the log is now also cleared on logging out,
+> like every other client readout. It still survives respawn and dimension change. The text below
+> is what slice 0 shipped.
 
 The brief said to clear the log on disconnect and dimension change only if `VISION_STEP3.md` says
 so. It does not (it only says `/rancraftc drivetest clear` resets it). So **the log survives
@@ -750,7 +754,7 @@ clears. Per-dimension logs keep a portal trip from smearing trails together.
 Consequence, stated plainly: the client cannot reliably tell which world it joined, so **joining a
 different world keeps the old trail under the same dimension names** (drawn in the new world at the
 old coordinates, and exported together). Run `/rancraftc drivetest clear` when switching worlds.
-Logged as a follow-up in `PHASE_3.md`.
+Logged as a follow-up in `PHASE_3.md`. ~~Accepted limitation.~~ Fixed by the follow-ups below.
 
 ### Server cost
 
@@ -1108,3 +1112,100 @@ creates it: `src/test/java/dev/rancraft/PackagePurityTest.java`, part of `./grad
 | `./gradlew runGameTestServer`, new layout | 2 of 2 passed, exit 0 (twice, the second on the final tree) |
 | `./gradlew runGameTestServer`, old layout | 2 of 2 failed, exit 2 (see the table above) |
 | Built jar | contains `loot_table/`, `tags/block/`, the template and `HarvestGameTests`; no `loot_tables/`, no `tags/blocks/`, no probe |
+
+---
+
+## Vision Step 3a follow-ups — trail cleared on logout, export link opens the folder
+
+Two minor findings from the slice 0 gate, fixed together. Neither touches the server, the wire or a
+save format, so no version moves (`PROTOCOL_VERSION` stays "4", `SignalSamplePayload.VERSION` 3).
+
+### 1. The drive-test log is cleared on logging out
+
+**The bug.** `ClientDriveTest` keyed its logs only by dimension and survived disconnect (slice 0's
+"kept until clear" rule, above). The client cannot tell one world's `minecraft:overworld` from
+another's, so after joining a different world the old trail was drawn at its old coordinates in the
+new world, the new world's first sample was classified against the old world's last one (a
+different serving cell, so a false RESELECTION), and the export wrote both worlds into one file.
+
+**The fix.** `ClientEvents.onLoggingOut` now calls `ClientDriveTest.clear()`, next to the meter and
+lens readouts it already clears. `onClone` (respawn, dimension change) still leaves the log alone,
+so within a session the per-dimension split works as before: the Overworld trail is not drawn in
+the Nether and is still there on return.
+
+**When the event fires (checked in the patched sources).** `Minecraft.disconnect(Screen, boolean)`
+calls `ClientHooks.firePlayerLogout`, which posts `ClientPlayerNetworkEvent.LoggingOut`. Every way
+into a world goes through `disconnect()` first: `doWorldLoad` (singleplayer), and
+`ConnectScreen.startConnecting` (a server, and a server transfer via `handleTransfer`). So each
+session starts empty even if a previous one ended without a clean logout. `setLevel` (dimension
+change) and respawn do not fire it.
+
+**No stray sample after the clear (checked in the same sources).** The client handles a
+`SignalSamplePayload` as a queued task: `ClientPayloadContext.enqueueWork` submits it to the
+client's event loop. On every path out of a world, the channel is closed before
+`Minecraft.disconnect` runs. The pause screen's quit calls `ClientLevel.disconnect`, which closes it
+and waits (`channel.close().awaitUninterruptibly()`). A kick, a lost connection or a transfer reaches
+`Minecraft.disconnect` from `onDisconnect`, after the channel has gone. `disconnect` then runs
+`dropAllTasks()` before it posts `LoggingOut`. So nothing read from the old connection can run after
+the clear and seed the next world's log.
+
+**Residual limit (not fixed, logged in `PHASE_3.md`).** A proxy (Velocity, BungeeCord) that moves
+a player to another backend server without a reconnect does not fire `LoggingOut`. A switch through
+the configuration phase goes `handleConfigurationStart` → `Minecraft.clearClientLevel`, which posts no
+logout, and a switch through a respawn packet looks like a dimension change. The trail then carries
+over, as the meter and lens readouts already do. Vanilla and NeoForge do not reconfigure a
+connection in normal play, so this needs a proxy. Possible fix: also clear on `LoggingIn`, which
+`handleLogin` fires again after a reconfiguration. The respawn-packet case would still carry over.
+
+**Trade-off, stated plainly.** Leaving a world now discards an unexported trail. Export first. The
+README says so. Keying the log by server address or save name instead (the old follow-up's idea)
+was not done: the client cannot name a singleplayer save reliably, and nothing in the design needs a
+trail to outlive its session.
+
+### 2. The export chat link opens the folder, not the CSV
+
+**The problem.** The link used `ClickEvent.Action.OPEN_FILE` on the CSV itself. On Windows that hands
+the file to its default app, usually Excel. Excel on a comma-decimal locale (the user's `es-PE`)
+opened by double-click splits on `;` and reads `.` as a thousands separator, so `-82.4` can become
+`-824`. That is exactly what the grey hint printed next to the link warns against.
+
+**The fix.** The link text is still the file name. The `ClickEvent` value is the file's folder
+(`<game dir>/rancraft/drivetests`), absolute and normalised, as vanilla does for profiler results
+(`Minecraft.debugClientMetricsStart`: `OPEN_FILE` on `path.toFile().getParent()`). The folder opens
+in Explorer with the new file in it, and the hint says how to import it. `Util.OS.openFile(File)` is
+`openUri(file.toURI())`, which on Windows runs `rundll32 url.dll,FileProtocolHandler <uri>`, the same
+path vanilla's profiler link takes. The CSV itself is unchanged (still RFC 4180, `.` decimals).
+
+### Tests
+
+| | |
+|---|---|
+| `ClientDriveTestTest` (new, 4) | Two dimensions keep separate logs in visit order; `ClientEvents.onClone` keeps both; `ClientEvents.onLoggingOut` empties every dimension; after a logout the next world's first Overworld sample starts a one-entry log with event `NONE`. Before the fix, that sample would have been classified RESELECTION against the old world. Drives the real handlers with hand-built events (null player and connection, which NeoForge itself passes when a world is being created); no client starts. |
+| `DriveTestCommandsTest.linkOpensTheFolder` (new) | The link shows the file name, is underlined, and its `OPEN_FILE` value is the absolute, normalised folder (built from a relative `./rancraft/drivetests/...` path), never the `.csv`. |
+| Seam | `ClientDriveTest.record(ResourceKey<Level>, DriveTestLog.Sample)` (package-private) is what `accept` calls after reading the client's level, so the tests can feed the log without a running client. `DriveTestCommands.fileLink` went from private to package-private. |
+
+**The tests bite.** With `ClientDriveTest.clear()` taken out of `onLoggingOut` and the link pointed
+back at the file (both temporarily, then restored), `logoutClearsEveryDimension`,
+`nextWorldDoesNotInheritTheOldTrail` and `linkOpensTheFolder` failed (3 of 8 in the two classes).
+With the fix, all pass.
+
+### APIs verified against sources (new to this codebase)
+
+`ClientPlayerNetworkEvent.LoggingOut(MultiPlayerGameMode, LocalPlayer, Connection)` and
+`Clone(MultiPlayerGameMode, LocalPlayer, LocalPlayer, Connection)` constructors (NeoForge sources
+jar; `LoggingOut` documents its nullable arguments); where `LoggingOut` is fired (`Minecraft.disconnect`,
+above); `ClickEvent.getAction()` / `getValue()`, `Style.getClickEvent()` / `isUnderlined()`;
+`ResourceKey.create(Registries.DIMENSION, ResourceLocation.withDefaultNamespace(...))` (the tests'
+dimension keys, built the way `Level.OVERWORLD` is).
+
+### Verification
+
+| Check | Result |
+|---|---|
+| `./gradlew build` | succeeds |
+| Unit tests | **224: 223 passed, 0 failed, 1 skipped** (219 + 4 `ClientDriveTestTest` + 1 `DriveTestCommandsTest`; the skip is still `utilIsPure`) |
+| `rf` purity | unchanged, asserted by `PackagePurityTest` (no `rf` file touched) |
+
+**Needs a human in game** (in `PHASE_3.md`): export, click the file name, and check that Explorer
+opens the `drivetests` folder rather than Excel opening the CSV. Walk in world A, quit to the title
+screen, join world B with the lens on TRAIL: no markers from A, and an export holds only B's rows.

@@ -122,8 +122,11 @@ slice 0):
   meter HUD when hysteresis holds the serving cell at rank 5 or lower).
 - **One log per dimension**, and the export writes one file per dimension:
   `drivetest-<yyyyMMdd-HHmmss>-<dimension>.csv`. The header is exactly as above.
-- The log is **kept across disconnect, respawn and dimension change** until
-  `/rancraftc drivetest clear`.
+- The log is **kept across respawn and dimension change** until `/rancraftc drivetest clear`, and
+  **cleared on leaving the world** (Phase 3 follow-up; slice 0 first kept it across disconnect too,
+  which drew one world's trail in the next).
+- The export's chat link opens the `drivetests` folder, not the CSV, so Excel never opens it by
+  double-click on a comma-decimal locale (Phase 3 follow-up).
 - Every received sample is logged, from the meter or the lens; the trail layer only decides
   whether it is drawn. The lens band filter does not apply to the trail.
 - **Every evaluation is sent** (slice 0 gate fix). The server evaluates a player who holds the

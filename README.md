@@ -39,8 +39,9 @@ To run a headless dedicated server instead: `.\gradlew.bat runServer`
   (default keys `B` / `V`).
 - **RF Vision, Step 3a** — drive-test trail: with the lens on, every server measurement leaves a
   marker where it was taken, coloured by service level, with pillars at handovers. Export it as CSV
-  with `/rancraftc drivetest export` (written to `<game dir>/rancraft/drivetests/`), reset it with
-  `/rancraftc drivetest clear`.
+  with `/rancraftc drivetest export` (written to `<game dir>/rancraft/drivetests/`; the chat link
+  opens that folder), reset it with `/rancraftc drivetest clear`. The trail lasts one session:
+  leaving the world clears it, so export first.
 
 See `VISION.md` for the full design of the vision feature, `VISION_STEP3.md` for Step 3 (the
 drive-test log, and the planned automatic problem diagnosis), and `NOTES.md` for the full build log,

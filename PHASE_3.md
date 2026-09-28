@@ -38,6 +38,7 @@ Legend: `[x]` done and verified · `[~]` partly done / needs a manual in-game ch
 | # | Slice | Part | Status | Commit |
 |---|---|---|---|---|
 | 0 | Land Vision Step 3a (drive-test trail) | pre | [~] landed + gate fixes, build green (210 tests); in-game checks below | af20bb4; gate fixes 3906418 |
+| 0a | Vision Step 3a follow-ups: trail cleared on logout, export link opens the folder | pre | [~] both fixed, build green (224 tests, 1 skipped); two in-game checks below | 0afda73 |
 | 1 | Datapack folder fix + runtime check + purity test | pre | [x] folders fixed, harvest game test red before / green after, purity test in `build` (219 tests, 1 skipped until `util` exists); one quick in-game look below | 212f86c; 1471bf3 |
 | 2 | DeviceRequirement + tests | 3A | [ ] | |
 | 3 | Ranging + LocatorSolver + tests 2–12 | 3A | [ ] | |
@@ -84,8 +85,10 @@ Needs a human in game:
 - [~] *(gate fix)* On the LINKS preset, walk across two cell boundaries (or A→B→A), then cycle to
       TRAIL or take the meter out: a white pillar at each handover point and **none at the switch
       point**; the exported CSV has `HANDOVER` on those rows only.
-- [~] `/rancraftc drivetest export` writes `run/client/rancraft/drivetests/drivetest-*.csv`, the chat
-      link opens it, and Excel's Data > From Text/CSV reads the numbers correctly on `es-PE`.
+- [~] `/rancraftc drivetest export` writes `run/client/rancraft/drivetests/drivetest-*.csv`;
+      *(follow-up 0a)* clicking the underlined file name in chat opens the `drivetests` folder in
+      Explorer with the new file in it, and does **not** open the CSV in Excel; Excel's Data > From
+      Text/CSV then reads the numbers correctly on `es-PE`.
 - [~] `/rancraftc drivetest clear` empties the trail and reports the count.
 - [~] Through a Nether portal: the Overworld trail is not drawn in the Nether, is still there on
       return, and export writes one file per dimension.
@@ -93,6 +96,32 @@ Needs a human in game:
       the gate fix, a links-only wearer, who both receive samples now), link rays behave as before,
       and the handover counter still increments while standing still at a boundary.
 - [~] The layers key cycles ALL -> Antennas -> Links -> Coverage -> Drive-test trail -> ALL.
+
+## Slice 0a (Vision Step 3a follow-ups) checks
+
+Headless (verified by `./gradlew build`, 224 tests, 1 skipped):
+
+- [x] Logging out clears every dimension's drive-test log (`ClientEvents.onLoggingOut` →
+      `ClientDriveTest.clear()`); respawn and dimension change (`onClone`) keep it, per dimension
+      (`ClientDriveTestTest`, 4 tests, driving the real handlers).
+- [x] After a logout the next world's first Overworld sample starts a fresh one-entry log with no
+      event (before: appended to the old trail and classified RESELECTION against it).
+- [x] The export chat link shows the file name but its `OPEN_FILE` target is the absolute,
+      normalised `drivetests` folder, never the `.csv` (`DriveTestCommandsTest.linkOpensTheFolder`).
+- [x] The three new assertions fail with the old behaviour put back temporarily (3 of 8 in the two
+      classes), then pass with the fix.
+- [x] Checked in the patched sources: every way into or out of a world goes through
+      `Minecraft.disconnect`, which fires `LoggingOut`; dimension change and respawn do not (details
+      in NOTES.md).
+
+Needs a human in game:
+
+- [~] Export, then click the file name in chat: Explorer opens `run/client/rancraft/drivetests/`
+      (Excel does not start). Merged into the slice 0 export check above.
+- [~] Walk with the lens on TRAIL in world A, quit to the title screen, open world B: no markers from
+      A are drawn, and `/rancraftc drivetest export` in B writes only B's rows (or reports nothing
+      recorded before B has samples). A portal trip inside one world still keeps both trails (slice 0
+      check above).
 
 ## Slice 1 (datapack folders, purity test) checks
 
@@ -189,10 +218,11 @@ came from.
   the meter out sees a current reading at once rather than the last one received (see NOTES.md).
 - (from slice 0) §4's `PROTOCOL_VERSION` "+1 from whatever it is at start": Step 3a took it to "4",
   so 3A's bump is "4" -> "5".
-- (from slice 0) The drive-test log is kept until `/rancraftc drivetest clear`, per dimension. The
-  client cannot reliably tell which world it joined, so joining a different world keeps the old trail
-  under the same dimension names. Possible later fix: also key the log by server address or save
-  name.
+- **[x] Done in slice 0a (0afda73).** (from slice 0) The drive-test log is kept until
+  `/rancraftc drivetest clear`, per dimension. The client cannot reliably tell which world it joined,
+  so joining a different world keeps the old trail under the same dimension names. Possible later
+  fix: also key the log by server address or save name. *Fixed instead by clearing it on logging
+  out; see the s0 gate item below.*
 - (from slice 0, optional slice 17) Adding `fix_x, fix_z, fix_err` to the CSV means appending
   components to `DriveTestLog.Sample` (a public `rf` record, so append only) and columns at the end
   of `CSV_HEADER`; `DriveTestLogTest.csvIgnoresDefaultLocale` pins the current row exactly and will
@@ -213,3 +243,30 @@ came from.
   `build.gradle`, or the test template leaves the `rancraft` namespace. When reading a green run,
   check the "N tests are now running" line. Possible later guard: a `RegisterGameTestsEvent`-time or
   post-run count check.
+- **[ ] Open, for slice 4.** (from the duplicated s0 gate-fix agent, 2026-09-28) **Stale armed
+  handover candidate across an evaluation gap.** When a player stops being evaluated (meter put
+  away, lens switched to ANTENNAS/COVERAGE), their ReceiverState freezes, including an armed
+  candidate and its candidateSinceTick. On the first evaluation after they resume, CellSelector
+  computes a huge heldTicks, so if the same neighbour still qualifies, the handover fires
+  immediately: the time-to-trigger was never observed through the gap. Phase 2 behaviour, not a 3a
+  regression (the drive-test log records where the server really fired). Candidate fix, fits slice
+  4: drop an armed candidate when the gap since the player's last evaluation exceeds about one
+  evaluation interval. Needs a headless test in CellSelectorTest or around the ticker. *(Same defect
+  as the "handover candidate armed before evaluation pauses" item above, found independently; this
+  entry adds the candidate fix and the test to write.)*
+- **[x] Done in slice 0a (0afda73).** (from the s0 gate, minor, not fixed by the gate) Drive-test
+  log survives disconnect and bleeds across worlds (keyed by dimension only). Simplest fix: clear
+  ClientDriveTest on logging out. *Done: `ClientEvents.onLoggingOut` clears it; respawn and dimension
+  change still keep it per dimension. Pinned by `ClientDriveTestTest`.*
+- **[x] Done in slice 0a (0afda73).** (from the s0 gate, minor, not fixed by the gate) Export chat
+  link opens the CSV itself (OPEN_FILE), which on es-PE Excel misparses; point the ClickEvent at the
+  drivetests folder instead. *Done: the link text is still the file name; the click opens the
+  folder, as vanilla's profiler link does. Pinned by `DriveTestCommandsTest.linkOpensTheFolder`; the
+  manual export check above is updated.*
+- **[ ] Open, minor.** (from slice 0a) A proxy (Velocity, BungeeCord) that moves a player to another
+  backend server without a reconnect fires no `LoggingOut`: a configuration-phase switch goes through
+  `Minecraft.clearClientLevel`, and a respawn-packet switch looks like a dimension change. The
+  drive-test trail then carries over to the new server, as the meter and lens readouts already do.
+  Not reachable on vanilla or NeoForge alone. Possible fix: also clear on
+  `ClientPlayerNetworkEvent.LoggingIn`, which `handleLogin` fires again after a reconfiguration
+  (checked in the patched sources); the respawn-packet case would remain. Details in NOTES.md.
