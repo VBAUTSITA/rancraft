@@ -42,7 +42,7 @@ Legend: `[x]` done and verified · `[~]` partly done / needs a manual in-game ch
 | 1 | Datapack folder fix + runtime check + purity test | pre | [x] folders fixed, harvest game test red before / green after, purity test in `build` (219 tests, 1 skipped until `util` exists); one quick in-game look below | 212f86c; 1471bf3 |
 | 2 | DeviceRequirement + tests | 3A | [x] `rf/DeviceRequirement` per §3A.1, verdict order NO_SERVICE → LOW_QUALITY → LOW_TIER on the serving cell; test 1 green (7 tests, 231 total, 1 skipped) | 4ab5967 |
 | 3 | Ranging + LocatorSolver + tests 2–12 | 3A | [x] `Band.bandwidthMhz` + JSON 10/10/20/100, `Ranging`, `RangeMeasurement`, `LocatorFix`, `LocatorParams`, `LocatorSolver`; 5 locator tunables in `RanCraftConfig`, 4 of them in `RfConfig`; tests 2–12 green (259 total, 1 skipped). Two recorded deviations (floor not round; extra solver starts) and one spec conflict (test 10 vs `errorBlocks`), see follow-ups | 0837945 |
-| 4 | SignalDevice + ticker refactor + meter port (regression gate) | 3A | [~] in progress: part 1 (stale armed candidate dropped after an evaluation gap) committed | |
+| 4 | SignalDevice + ticker refactor + meter port (regression gate) | 3A | [~] `device/` (`SignalDevice`, `DeviceContext` per §3A.2, `DeviceMemory`, `ReplayGuard`); ticker scans carried devices, dispatches every sample (replays too), keeps "evaluated ⇒ sent"; meter ported (payload byte-identical to bd996d6, checked against the old code); stale armed candidate dropped after a gap of more than one interval. Regression gate passed headless (299 tests, 1 skipped; `runGameTestServer` 2/2); in-game checks below | a51e13a; 85bd051; docs in the slice commit |
 | 5 | Locator item, payload, HUD, rings, waypoints, emergency record | 3A | [ ] | |
 | 6 | ColumnScan + mast columns + lens column/on-air | 3B | [ ] | |
 | 7 | BinTraversal + region epochs + cache rework | 3B | [ ] | |
@@ -164,10 +164,61 @@ Headless (verified by `./gradlew build`, 259 tests, 1 skipped):
 
 Nothing in game yet: slices 2 and 3 have no caller until slices 4 and 5.
 
+## Slice 4 (SignalDevice, ticker refactor, meter port) checks
+
+Headless (verified by `./gradlew build`, 299 tests, 1 skipped; method and checklist in NOTES.md,
+slice 4):
+
+- [x] `SignalDevice` and `DeviceContext` exactly as §3A.2; `CarriedDevice` and
+      `carried(ServerPlayer)` as §3A.3 (main hand, offhand, hotbar 0-8; the main-hand stack, which is
+      also a hotbar slot's object, is not counted twice).
+- [x] Evaluated ⇒ sent survives the refactor: `sendsSample` takes the carried devices; a device only
+      in the hotbar is evaluated **and** sent the sample (`SignalTickerTest`).
+- [x] One sample to every carried device with its own `DeviceRequirement` verdict (LOW_TIER read off
+      the serving band), fresh and replayed; a guarded device counts a replay once (`dispatch`,
+      `ReplayGuard` tests).
+- [x] `forget()` (logout, dimension change, respawn) and server stop also clear device state.
+- [x] Meter payload byte-identical to bd996d6: the old ticker, run side by side in a throwaway test,
+      produces the stored fixtures (3/3) and the same bytes for 20,000 random samples; `sendsSample`
+      identical in all 49 lens states except the intended hotbar case; `chooseLinks` identical on
+      5,000 random cases.
+- [x] The cache decision (armed candidate skips it, epoch, site registry version, 0.5-block move,
+      links never starved, same filter and cap), the stagger and the link cap pinned as pure helpers
+      extracted unchanged (`SignalTickerCacheTest`, `SignalTickerTest`).
+- [x] Stale armed candidate: dropped after a gap of more than one interval, re-armed at resumption,
+      fires one TTT later; continuous evaluation still fires at exactly TTT (`CellSelectorTest`).
+- [x] `runGameTestServer`: boots with the refactor, 2 of 2 passed (no player, so not the per-player
+      path; a mock `ServerPlayer` cannot receive custom payloads, see follow-ups).
+
+Needs a human in game (the regression gate's in-game half):
+
+- [~] Meter in the main hand, then the offhand: the HUD looks and updates exactly as before (compact
+      and detailed; right-click toggles), including NO SERVICE far from any mast.
+- [~] Meter moved to a hotbar slot that is not selected: no HUD. Select it again: the HUD shows a
+      current reading at once (new: before, NO SERVICE until the next evaluation if the last reading
+      was over 5 s old).
+- [~] Handover counter (detailed HUD "HO:"): standing still at a cell boundary it still increments
+      after the time-to-trigger (the cache skip while a candidate is armed).
+- [~] Stale candidate (the logic is pinned headless): set `timeToTriggerTicks` to 200 (10 s) so the
+      window is wide. No lens, or the lens on ANTENNAS/COVERAGE. With the detailed HUD out, walk well
+      into a neighbour's area (its RSRP clearly above the serving cell's) and stand for about 3 s, so
+      the candidate is armed but has not fired. Move the meter out of the hotbar (main inventory or a
+      chest) for 15 s, then take it back and watch "HO:". Fixed: it goes up about 10 s later (one full
+      TTT from the resumption). Old behaviour: on the first reading. The meter must leave the hotbar:
+      in the hotbar it keeps the player evaluated. Restore `timeToTriggerTicks` (40) afterwards.
+- [~] Lens on LINKS or ALL: link rays as before, serving ray highlighted, at most `lensMaxLinks`
+      rays; retilting an antenna while standing still updates the rays (site registry version key).
+- [~] Drive-test trail (lens on TRAIL): with the meter only in the hotbar and walking across a
+      boundary, the white HANDOVER pillar lands where the handover fired, not at the point where you
+      later take the meter out.
+
 ## 3A done-when
 
-- [ ] Meter and lens behave exactly as before the ticker refactor.
-- [ ] Carrying the Locator costs no extra evaluation (EvaluationStats).
+- [~] Meter and lens behave exactly as before the ticker refactor. *(Headless half verified in slice
+      4: payload bytes, who is evaluated, cache decision, link cut; in-game half listed above. One
+      intended difference: a meter only in the hotbar keeps its carrier evaluated, §3A.3.)*
+- [ ] Carrying the Locator costs no extra evaluation (EvaluationStats). *(Structure in place since
+      slice 4: devices only receive the one sample; the check itself needs the Locator, slice 5.)*
 - [ ] Triangle of three masts → FIX with a sensible ±; three in a line → POOR GEOMETRY. *(Solver
       side verified headless in slice 3, tests 6 and 7; the item is slice 5.)*
 - [ ] Adding a band_3500 site visibly shrinks ±. *(Headless: 1.29× in a good triangle, 4.17× at the
@@ -206,9 +257,12 @@ Anything found along the way that is out of scope for the current slice goes her
 came from.
 
 - (from RF Vision Step 2) The Step 2 adversarial review stopped after round 1 (account usage limit).
-  Round 1 fixes are applied; rounds 2+ never ran. Slice 4 rewrites the ticker's link-lens
-  plumbing, so the Phase 3A review re-covers that code path.
-- (from slice 0 and its gate fixes, **for slice 4: spec vs tree**) §3A.3 says "a player is
+  Round 1 fixes are applied; rounds 2+ never ran. ~~Slice 4 rewrites the ticker's link-lens
+  plumbing, so the Phase 3A review re-covers that code path.~~ *Slice 4 did not rewrite it: the link
+  path was left in place (only `linkLensOf` / `linkCap` / `canReplay` extracted unchanged, and
+  `chooseLinks` checked identical against the old code). A Phase 3A review should still cover it.*
+- **[x] Done in slice 4 (85bd051), as proposed here.** (from slice 0 and its gate fixes, **for slice
+  4: spec vs tree**) §3A.3 says "a player is
   evaluated if they carry any device or wear a link lens", and §3A.2 says the meter "sends
   SignalSamplePayload only when held". The tree's rule is stricter: **every evaluation sends the
   sample** (`SignalTicker.sendsSample`, pinned by `SignalTickerTest`). The drive-test log reads
@@ -225,15 +279,18 @@ came from.
   the carried-device input rather than adding a second gate;
   (c) don't replace the rule with a client-side tick-gap check: a cached replay carries the tick of
   the evaluation it replays.
-- (from slice 0 gate fixes, for slice 4; pre-existing since Phase 2) A handover candidate armed
-  before evaluation pauses survives the pause (meter put away, lens removed or switched to
+- **[x] Done in slice 4 part 1 (a51e13a), see the entry below.** (from slice 0 gate fixes, for
+  slice 4; pre-existing since Phase 2) A handover candidate armed before evaluation pauses survives
+  the pause (meter put away, lens removed or switched to
   ANTENNAS/COVERAGE). `CellSelector` measures time-to-trigger as a tick difference. So if the same
   neighbour still qualifies when evaluation resumes, the handover fires on the first evaluation
   without the A3 condition having been observed for the whole TTT. The log marks it where it fired,
   but the handover may be early. Possible fixes: drop an armed candidate when the ticker skips a
   player, or treat a gap longer than one interval as a fresh arm (needs a last-evaluated tick
   appended to `ReceiverState`).
-- (from slice 0, for slice 4) The payload's 4-cell cut now keeps the serving cell
+- **[x] Done in slice 4:** the meter payload was compared against bd996d6 (slice 0 with its gate
+  fixes), byte for byte, by running the old code. (from slice 0, for slice 4) The payload's 4-cell
+  cut now keeps the serving cell
   (`SignalSamplePayload.topCells`). That changed the meter HUD in one edge case (serving cell held at
   rank 5 or lower). The "byte-identical meter" regression gate compares against slice 0 (with its
   gate fixes), not Phase 2. The gate fixes add one more HUD edge case: a LINKS-only wearer who takes
@@ -265,8 +322,12 @@ came from.
   `build.gradle`, or the test template leaves the `rancraft` namespace. When reading a green run,
   check the "N tests are now running" line. Possible later guard: a `RegisterGameTestsEvent`-time or
   post-run count check.
-- **[ ] Open, for slice 4.** (from the duplicated s0 gate-fix agent, 2026-09-28) **Stale armed
-  handover candidate across an evaluation gap.** When a player stops being evaluated (meter put
+- **[x] Done in slice 4 part 1 (a51e13a).** *`ReceiverStateStore` records each state's evaluation
+  tick; `evaluate()` reads the state through `resume()`, which drops an armed candidate when the gap
+  exceeds one evaluation interval (`SignalTicker.staleCandidateGapTicks`, config-free; justified in
+  its javadoc and NOTES.md slice 4). Tests in `CellSelectorTest` and `SignalTickerTest`.* (from the
+  duplicated s0 gate-fix agent, 2026-09-28) **Stale armed handover candidate across an evaluation
+  gap.** When a player stops being evaluated (meter put
   away, lens switched to ANTENNAS/COVERAGE), their ReceiverState freezes, including an armed
   candidate and its candidateSinceTick. On the first evaluation after they resume, CellSelector
   computes a huge heldTicks, so if the same neighbour still qualifies, the handover fires
@@ -325,3 +386,34 @@ came from.
   `locatorMaxCells` is capped at 8 in the config because the payload carries 8 rings; point the cap
   at the payload's constant once it exists. (h) Quantisation is deterministic: a player standing
   still sees a fixed error, not noise; say so where the ± is explained.
+- **[ ] Open, for slice 5 (from slice 4).** How the Locator should use the device framework:
+  (a) compute the fix from `ctx.sample()` on **every** dispatch (it is pure and deterministic, so a
+  replay gives the same fix) and guard only state changes (the per-player previous fix for
+  `likely`, the emergency record stamp) with a `ReplayGuard`; (b) keep per-player state in a
+  `DeviceMemory` (forgotten on logout, dimension change, respawn), not in a map of its own; the
+  emergency record is a `copyOnDeath` attachment instead, which `forget()` must not touch; (c) under
+  `/tick freeze` fresh evaluations share a `timestampTick`, so a tick-keyed guard sees them as
+  replays (documented in `ReplayGuard`); with (a) the HUD still follows the player; (d) send
+  `LocatorFixPayload` only when `held`; the `SignalSamplePayload` is already sent by the ticker;
+  (e) `ReplayGuard` is per player: two Locators on one player act once per evaluation.
+- **[ ] Open, for slices 5 and 8 (from slice 4).** A runtime (GameTest) check of the ticker cannot
+  use `GameTestHelper.makeMockServerPlayerInLevel` as is: the mock player joins the real player list,
+  so the real ticker evaluates it once it carries a device, and its connection negotiated no
+  channels, so the first `SignalSamplePayload` throws `UnsupportedOperationException` in
+  `NetworkRegistry.checkPacket` (NeoForge 21.1.251 sources). A runtime test needs a fake connection
+  with the `rancraft` channels negotiated. Never leave a mock `ServerPlayer` carrying a device on the
+  list in a game test.
+- **[ ] Open, for slice 8 (from slice 4).** `staleCandidateGapTicks` is derived from the player
+  ticker's cadence (exactly one interval, guaranteed by the stagger). `FixedReceiverTicker` is
+  round-robin under a time budget, "at most once per `evaluationIntervalTicks`", so its gaps can be
+  longer while the budget is exhausted. Reuse `ReceiverStateStore.resume` with a threshold derived
+  from that ticker's own worst case, or a budget overrun will be read as a pause and delay handovers
+  (by at most one TTT each time).
+- **[ ] Open, for slice 7 (from slice 4).** `SignalTicker.canReplay` is now the single place the cache
+  decision is made, and `SignalTickerCacheTest` pins every current condition. The region-epoch rework
+  (§3B.2) replaces the `epoch` condition there; keep the rest, including the armed-candidate skip and
+  "never starve links".
+- **Accepted, minor (from slice 4).** A live change of `evaluationIntervalTicks` re-phases the stagger:
+  the first gap after it can reach `old + new - gcd(old, new)` ticks, so an armed candidate may be
+  dropped once and re-armed (a handover delayed by at most one TTT, never early). Pinned by
+  `SignalTickerTest.liveIntervalChangeStretchesOneGap`.

@@ -456,8 +456,9 @@ public final class SignalTicker {
         UUID receiverKey = player.getUUID();
         BandTable bands = RfDataLoader.bands();
 
-        // The stored state is checked as stored: a stale candidate (see below) also skips the cache,
-        // so the fresh evaluation can drop it and re-arm it.
+        // Replay the cached evaluation when nothing it depends on changed (canReplay). Any armed
+        // candidate in the stored state skips the cache, a stale one included, so the fresh
+        // evaluation below can drop it and re-arm it.
         Cached cached = CACHE.get(receiverKey);
         if (canReplay(cached, config.enableSampleCaching(), RECEIVERS.get(receiverKey).hasCandidate(),
                 eyeX, eyeY, eyeZ, epoch, siteVersion, linkLens, linkCap)) {

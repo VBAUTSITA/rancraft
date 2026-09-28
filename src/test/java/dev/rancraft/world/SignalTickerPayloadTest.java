@@ -28,7 +28,9 @@ import org.junit.jupiter.api.Test;
  * by reflection on exactly these fixtures, encoded each result with the real
  * {@link SignalSamplePayload#STREAM_CODEC} and saved the hex. The throwaway test was then deleted.
  * These tests feed the same fixtures to the refactored {@link SignalTicker#toPayload} and compare
- * bytes. They cover the three paths: a served sample (serving cell held at rank 5, so the four-cell
+ * bytes. Re-checked independently after the refactor: {@code bd996d6}'s whole {@code SignalTicker},
+ * run side by side in a throwaway test, produced exactly these three strings, and the same bytes as
+ * the refactored code for 20,000 random samples (NOTES.md, Phase 3 slice 4). They cover the three paths: a served sample (serving cell held at rank 5, so the four-cell
  * cut must keep it; a PCI collision and a mod-3 warning, so the note must pick the collision), an
  * out-of-service sample, and a serving band the table does not know (judged as the fallback).
  */

@@ -1445,3 +1445,228 @@ did not: an estimate lands bit-exactly on a tower only by symmetry, which that t
 
 Nothing to check in game yet: the Locator item, payload and HUD are slice 5, which is where the
 3A done-when items get their manual checks.
+
+---
+
+## Slice 4 — SignalDevice framework, ticker refactor, meter port (§3A.2, §3A.3)
+
+Three commits: part 1 `a51e13a` (stale armed candidate), part 2 `85bd051` (framework, refactor,
+meter port, regression tests), part 3 (these notes and the tracker).
+
+### What was built
+
+| Piece | Where | Notes |
+|---|---|---|
+| `SignalDevice` | `device/` | Exactly §3A.2: `requirement(ItemStack)`, `onSample(ServerPlayer, ItemStack, boolean held, DeviceContext)`. |
+| `DeviceContext` | `device/` | Exactly §3A.2: `(sample, verdict, bands, config, level, tick)`. `tick` is the dispatch's game time; `sample.timestampTick()` is the evaluation's. |
+| `DeviceMemory<V>` | `device/` | Per-player device state (the Locator's last fix, a replay guard, ...). Every instance registers itself, and `SignalTicker.forget` / server stop clear them all. This is §3A.3's "add per-device server state to forget()". |
+| `ReplayGuard` | `device/` | Helper for "devices must be idempotent on `sample.timestampTick()`": `firstSighting(player, sample)` is true once per evaluation, false for a cached replay of it. |
+| `carried(ServerPlayer)` + `CarriedDevice` | `world/SignalTicker` | Replaces `holdsMeter()`. Main hand, offhand, hotbar 0-8; `held` = a hand. |
+| `dispatch(...)` | `world/SignalTicker` | The one sample to every carried device, each with `requirement(stack).check(sample, bands)`. After the send, on fresh evaluations **and** cached replays. |
+| `sendsSample(List<CarriedDevice>, LensSettings)` | `world/SignalTicker` | Was `(boolean meterHeld, LensSettings)`. Any carried device, or a lens showing the trail or links. |
+| Stale candidate drop | `rf/CellSelector.expireStaleCandidate`, `rf/ReceiverStateStore` (tick per state, `resume`), `SignalTicker.staleCandidateGapTicks` | Part 1; below. |
+| Meter port | `item/FieldTestMeterItem` | `implements SignalDevice`, requirement `NONE`, empty `onSample` (see deviation 1). |
+| Pure helpers | `SignalTicker.isDue`, `linkLensOf`, `linkCap`, `canReplay`, `scanCarried`, `toPayload` | Extracted **unchanged** from the ticker so the regression gate can pin them headless. `Cached` is package-private for the same reason. |
+
+### Part 1: the stale armed handover candidate (follow-up from the slice 0 gate, fixed)
+
+**Defect (pre-existing since Phase 2).** Only `evaluate()` writes a player's `ReceiverState`. When a
+player stops being evaluated (meter put away, lens taken off or switched to ANTENNAS/COVERAGE), the
+state freezes, including an armed candidate and its `candidateSinceTick`. `CellSelector` measures
+time-to-trigger as `tick - candidateSinceTick`, so on the first evaluation after the pause it saw a
+huge held time and handed over at once if the same neighbour still qualified. The A3 condition was
+never observed for the TTT.
+
+**Fix.** `ReceiverStateStore` now remembers the tick of the evaluation that produced each state
+(`put(key, state, tick)`; `select` records it). `evaluate()` reads the previous state through
+`resume(key, now, maxGap)`, which calls `CellSelector.expireStaleCandidate`: if a candidate is armed
+and `now - lastEvaluated > maxGap`, the candidate is dropped (serving cell, serving-since and the
+handover tally are kept: a pause is not an outage and not a handover). If the neighbour still
+qualifies, that evaluation re-arms it, and the handover fires one full TTT after evaluation resumed,
+as if the player had just walked into the boundary.
+
+**Threshold: exactly one evaluation interval (`staleCandidateGapTicks(interval) = max(1,
+interval)`), config-free.** Why that is safe with no margin:
+
+- The stagger (`isDue`) makes each player due exactly once every `interval` server ticks (pinned).
+- While a candidate is armed the cache is skipped, so every due tick is a fresh evaluation that
+  records its game time. Game time moves by at most one per server tick (not at all under
+  `/tick freeze`), and every dimension reads the overworld's clock (checked in `MinecraftServer
+  .tickServer`, `ServerLevel.tick`/`tickTime`). So a continuously observed player's gap is at most
+  one interval; anything longer means a scheduled evaluation did not happen.
+- A margin brings the bug back for short pauses: at the defaults (interval 20, TTT 40) a candidate
+  armed at T with one evaluation skipped already reaches TTT at T + 40, observed only at T.
+
+**One harmless exception, found while writing the tests (the part 1 javadoc had it wrong): a live
+change of `evaluationIntervalTicks`.** The stagger re-phases, so the first gap after the change can
+be up to `old + new - gcd(old, new)` ticks (20 → 10: 20; 10 → 20: 20; 7 → 3: 9), pinned exhaustively
+over every id and switch-tick residue. When that exceeds the new interval, an armed candidate is
+dropped once and re-armed: the handover is delayed by at most one TTT, never made early. Not worth
+remembering the previous interval for an admin action. Javadoc corrected.
+
+Tests (`CellSelectorTest`, 5): continuous evaluation still fires at exactly TTT; a pause re-arms at
+resumption and fires one TTT later (next to the frozen-state control that fires at once); a pause
+after which the neighbour no longer qualifies leaves nothing armed; the boundary (gap = interval
+kept, +1 dropped, clock backwards dropped, never-evaluated kept); the store records and forgets the
+tick. `SignalTickerTest`: threshold = interval, stagger spacing, the live-change bound.
+
+### Deviations and decisions
+
+1. **The meter's `onSample` sends nothing (spec: "sends SignalSamplePayload only when held").**
+   Since the slice 0 gate fix the rule is "every evaluation is sent" (`sendsSample`): the client's
+   drive-test log reads handovers off consecutive samples, so an evaluation it never saw puts a
+   false HANDOVER pillar at the next one. A device in the hotbar now triggers evaluations, so a
+   send-only-when-held meter would bring that bug back for anyone carrying the Locator in a pocket.
+   The ticker sends the sample once per evaluation, whoever asked; "only when held" is enforced where
+   it shows, in `SignalHudOverlay` (client, unchanged: it draws only while a meter is in a hand).
+   Recorded as a spec-vs-tree follow-up since slice 0; resolved as that follow-up proposed.
+2. **A meter only in the hotbar now makes its carrier evaluated.** That is §3A.3 read literally ("a
+   player is evaluated if they carry any device"; the meter is a device). Observable: such a player
+   costs one evaluation per interval (the same single evaluation, cache and stagger as anyone else),
+   is sent the sample (83-425 bytes, measured in the slice 0 gate notes), and their handover counter
+   keeps counting while the meter is pocketed. Taking the meter from the hotbar into a hand shows a
+   current reading at once, where before it showed NO SERVICE (last sample over 5 s old) until the
+   next evaluation, up to one interval. The values drawn are unchanged. It is the only difference the
+   differential check (below) finds in who is evaluated.
+3. **Per-device state is a registry (`DeviceMemory`), not a map per device.** §3A.3 says to add it
+   to `forget()` but not how. A registry makes it impossible for a device to leak per-player state
+   past logout, or to carry an Overworld "previous fix" into the Nether or past a respawn.
+   `DeviceMemory` keys by player UUID only; fixed receivers (§3B.3) have a block lifecycle and need
+   their own.
+4. **`ReplayGuard` is per player, not per stack,** and keyed on `sample.timestampTick()` as §3A.3
+   says. A player carrying two of the same device acts once per evaluation, on the first dispatched
+   (main hand, offhand, hotbar left to right). Per-stack state belongs in a data component.
+5. **`/tick freeze` (found while reviewing the draft `ReplayGuard` javadoc, which claimed two
+   evaluations never share a tick; corrected before part 2 was committed).** The stagger runs on the server tick count, which keeps counting while frozen;
+   game time does not (`ServerLevel.tick` calls `tickTime()` only when `runsNormally()`), and
+   players still move (`TickRateManager.isEntityFrozen` exempts them). So while frozen, successive
+   fresh evaluations carry the same `timestampTick` and a tick-keyed guard treats all but the first
+   as replays: a device's once-per-evaluation state freezes with game time, as the handover timers
+   already do. Output built from `ctx.sample()` on every dispatch still follows the player. Kept the
+   spec's key; javadoc corrected in `ReplayGuard`, `SignalDevice`, `DeviceContext`, `dispatch`;
+   pinned by `DeviceMemoryTest.frozenGameTimeLooksLikeAReplay`. Slice 5 note in `PHASE_3.md`.
+6. **The cache entry keeps the `SignalSample`** (full cell list, up to `maxCellsEvaluated`, default
+   12 `CellSample` records per player), so a replay can be dispatched with more than the payload's
+   four cells. Server memory only, never sent; dropped by `forget()` like the rest of the entry.
+7. **`toPayload` takes the band table** the evaluation used instead of reading
+   `RfDataLoader.bands()` a second time, and lost its unused `EvaluationStats` parameter. Same table
+   in practice (one volatile read vs two, on the server thread); proven byte-identical below.
+8. **Dispatch runs after the send,** on both paths, so a device's own payload (the Locator's) follows
+   the sample it was computed from. On a replay the verdict is checked against the band table of
+   now; the cache is not keyed on the band table (pre-existing: a datapack reload does not invalidate
+   cached samples either).
+9. **A device that throws propagates** like any other ticker bug; no per-device try/catch that would
+   hide it.
+
+### Regression gate (§3A.3): method, checklist, result
+
+**Method.**
+
+1. The checklist below was written from the source of `bd996d6` (`git show`), the last commit
+   before any slice 4 edit, branch by branch: who is evaluated, what is sent, when the cache
+   replays, what `forget()` clears.
+2. **Differential run against the old code.** `bd996d6`'s `SignalTicker` was copied verbatim into
+   the test source set under another name (not subscribed to any bus), and a throwaway JUnit test
+   ran its `toPayload` (private, by reflection), `sendsSample` and `chooseLinks` side by side with
+   the refactored ones. Both files were deleted before committing. Results:
+   - the three hex fixtures stored in `SignalTickerPayloadTest` are exactly what the old code
+     produces (3/3), so that test pins the refactored meter payload against the real `bd996d6`;
+   - **20,000 seeded random samples encode byte-identically** with the real `STREAM_CODEC` and are
+     record-equal (14,171 served, 1,705 with a PCI conflict note, 5,829 without service; 0-8
+     candidates; four band ids including one the table does not know; interference sometimes
+     -Infinity);
+   - `sendsSample`: identical in all 49 lens states (no lens, and 16 flag combinations x 3 band
+     filters) with the meter in a hand or with nothing; with a device only in the hotbar, 13 of the
+     49 states are newly evaluated (no lens, or a lens without trail and links). That is deviation 2
+     and nothing else;
+   - `chooseLinks` (the lens link cut): identical on 5,000 random samples and caps.
+3. Walked the checklist against the refactored code (the `bd996d6..HEAD` diff of `SignalTicker`).
+4. Extracted the remaining inline decisions unchanged into pure helpers and pinned them.
+5. What cannot be run headless: `evaluate()` with a real `ServerPlayer`. A game test cannot do it
+   either: `GameTestHelper.makeMockServerPlayerInLevel` puts the player on the real player list, so
+   the real ticker would evaluate it, and its connection negotiated no channels, so the first
+   `SignalSamplePayload` throws `UnsupportedOperationException` in `NetworkRegistry.checkPacket`
+   (NeoForge 21.1.251 sources). A runtime test of the ticker needs a fake connection with the
+   `rancraft` channels negotiated. Left to the in-game checks in `PHASE_3.md`.
+
+**Checklist** (before = `bd996d6`; "same" = identical code or proven identical):
+
+| # | Branch | Before | After | Checked by |
+|---|---|---|---|---|
+| A1 | Stagger | due iff `floorMod(id, interval) == floorMod(tickCount, interval)`, interval = max(1, config) | same (`isDue`) | `staggerSpacingIsOneInterval`, `staggerSpreadsPlayers` |
+| A2 | Who is evaluated | meter in a hand, or lens shows trail or links; band filter irrelevant | any `SignalDevice` in a hand **or the hotbar**, or lens trail/links | differential (49 states); `SignalTickerTest` (7 `sendsSample` tests) |
+| A3 | Evaluated ⇒ sent | every evaluation sends the sample | same, devices included | `sendsSample` tests; both `evaluate` paths call `send` unconditionally |
+| A4 | Link rays wanted | `lens.showLinks()` | same (`linkLensOf`) | `SignalTickerCacheTest.linkLensOf` |
+| A5 | One evaluation | one per due player | same; devices get the sample, never run the engine | `dispatchHandsTheOneSampleToEveryDevice` (`assertSame` sample) |
+| B1 | Cache replays iff | caching on, **no armed candidate**, entry current (epoch, **site registry version**, moved < 0.5), and **not starving links** (same band filter and cap) | same (`canReplay`) | `SignalTickerCacheTest` (8 tests, one per condition) |
+| B2 | Replay sends | cached sample; cached links iff wanted; state and cache untouched | same, then **dispatch of the cached sample** | code walk; `replaysAreDispatchedAndDevicesStayIdempotent` |
+| B3 | Lens link cap | `min(lensMaxLinks, 12)`, 0 without links; part of the key | same (`linkCap`) | `SignalTickerCacheTest.linkCap`, `linksNeedTheSameFilterAndCap` |
+| C1 | Fresh: previous state | `RECEIVERS.get` | `RECEIVERS.resume`: identical unless an armed candidate is older than one interval (part 1) | `CellSelectorTest` S4 tests |
+| C2 | Fresh: engine, state store, slow warning | as is | same code; the store also records the tick | code walk |
+| C3 | Meter payload | `toPayload` | **byte-identical** | differential (fixtures + 20,000); `SignalTickerPayloadTest` |
+| C4 | Link rays | `traceLinks` / `chooseLinks` (serving kept in the cut) | same code | differential (5,000); existing tests |
+| C5 | Cache entry | payload, links, filter, cap, eye, epoch, site version | same + the `SignalSample` | code walk |
+| C6 | Send order | sample, then links | same, then dispatch | code walk |
+| D1 | `forget` on logout, dimension change, respawn | cache, handover state, coverage survey | same + evaluation tick + every `DeviceMemory` | `forgetClearsDeviceState`, `storeTracksTheEvaluationTick`, `DeviceMemoryTest` |
+| D2 | Server stop | cache, states, epochs, surveys, registry | same + `DeviceMemory.clearAll` | code walk; `clearAllEmptiesEverything` |
+| E | Block epoch bump, chunk load/unload registration | as is | untouched (no diff) | diff |
+| F | Client: HUD only while a meter is in a hand; NO SERVICE after 5 s | as is | untouched (no diff) | diff; in-game check |
+
+**Result: passed.** Every branch is the same except A2 (deviation 2, the spec's own change) and the
+stale-candidate fix in C1 (part 1, the follow-up this slice was asked to close). The in-game half
+(meter HUD, link rays, handover counter) is listed in `PHASE_3.md` for the user.
+
+Also run: `./gradlew runGameTestServer` boots with the refactor (4 bands loaded, "2 tests are now
+running", "All 2 required tests passed", no error in the log). It has no player, so it checks
+registration and class loading, not the ticker's per-player path.
+
+### Honest-abstraction notes (also at the code sites)
+
+- **A device measures only while carried in a hand or the hotbar** (`SignalTicker.carried`). A real
+  UE measures all the time; here a device in the backpack is "switched off", which is what keeps the
+  server cost bounded. The drive-test log is therefore only as complete as the evaluations (as
+  recorded in slice 0).
+- **Dropping a stale candidate is not a 3GPP mechanism.** A real UE never stops measuring, so the
+  situation does not arise. The closest analogue is a phone switched off and on: after resuming,
+  time-to-trigger restarts from what is observed now (`CellSelector.expireStaleCandidate`).
+- **A replayed sample is the old measurement, not a new one.** Devices see the same sample again
+  while the player stands still, as a real UE reports an unchanged measurement; `DeviceContext.tick`
+  moves, `sample.timestampTick()` does not.
+
+### Measured
+
+| | |
+|---|---|
+| Evaluations | unchanged for every player evaluated before; +1 per interval for a player whose only reason is a device in the hotbar (deviation 2). `EvaluationStats` times the engine only and is untouched. |
+| Scan | 11 slot reads and `instanceof` checks per due player per interval; not timed (next to an evaluation marching up to 12 rays it is noise). |
+| Differential | 20,000 payloads byte-identical, 5,000 link cuts identical, 49 lens states (numbers above) |
+| Tests | 259 (slice 3) → 265 (part 1) → **299** (part 2), 1 skipped (`utilIsPure`) |
+
+### Tests
+
+| | |
+|---|---|
+| `CellSelectorTest` (+5, part 1) | Stale candidate: continuous, pause, pause with the neighbour gone, threshold boundary, store tick bookkeeping. |
+| `SignalTickerTest` (6 → 21) | `sendsSample` with carried devices (hand, hotbar only, none, every preset, band filter, hand-edited flags); the stale threshold; the stagger's spacing and spread and the live-change bound; `scanCarried` (main hand not counted twice, order and `held`, two meters are two devices, hotbar only, nothing / null / air); `dispatch` (one sample, own verdict incl. LOW_TIER on the serving band, `held`, order; NO_SERVICE still dispatched; nobody); replay idempotency through a guarded device; `forget` clears device state for that player only. |
+| `SignalTickerCacheTest` (10, new) | Every `canReplay` condition, `linkLensOf`, `linkCap`. |
+| `SignalTickerPayloadTest` (3, new) | The meter payload byte for byte against `bd996d6`: served (serving at rank 5, PCI collision beating mod-3), no service, unknown band. |
+| `DeviceMemoryTest` (7, new) | Per-player store, `forget` across stores, `clearAll`, `ReplayGuard` replay / fresh / after forget / `/tick freeze` / independent guards. |
+
+### APIs verified against sources (new to this codebase)
+
+`Player.getInventory()`, `Inventory.items` (public `NonNullList`, hotbar = slots 0-8),
+`Inventory.getSelectionSize()` (9), `Inventory.getSelected()` = `items.get(selected)` and
+`Player.getItemBySlot(MAINHAND)` = `inventory.getSelected()` (so the main-hand stack **is** a hotbar
+slot's object; `ServerPlayer` overrides none of these); `ItemStack.getItem()` is `AIR` for an empty
+stack; `TickRateManager.runsNormally` / `isEntityFrozen` and `ServerLevel.tick` → `tickTime`;
+`NetworkRegistry.checkPacket` (NeoForge sources jar).
+
+### Verification
+
+| Check | Result |
+|---|---|
+| `./gradlew build` | succeeds |
+| Unit tests | **299: 298 passed, 0 failed, 1 skipped** |
+| `rf` purity | `PackagePurityTest` (part 1 touched `CellSelector`, `ReceiverStateStore`: `java.util` only); `device` is game code, not in the pure set |
+| `./gradlew runGameTestServer` | boots, 2 of 2 passed |
+| Differential against `bd996d6` | passed (above); throwaway files deleted |
