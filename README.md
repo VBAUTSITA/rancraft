@@ -42,6 +42,11 @@ To run a headless dedicated server instead: `.\gradlew.bat runServer`
   with `/rancraftc drivetest export` (written to `<game dir>/rancraft/drivetests/`; the chat link
   opens that folder), reset it with `/rancraftc drivetest clear`. The trail lasts one session:
   leaving the world clears it, so export first.
+- **Phase 3A** — device framework and the **Network Locator** (cellular positioning, not GPS): held,
+  it shows the position the network works out from timing ranges to the cells you hear (FIX with a
+  ± and HDOP, or RANGE ONLY / AMBIGUOUS / POOR GEOMETRY / NO SIGNAL), draws the range rings in the
+  world, saves waypoints of the *estimate* (sneak + use; use cycles them) and keeps a "last fix
+  before death". Creative tab only for now (recipes come in Phase 3C).
 
 See `VISION.md` for the full design of the vision feature, `VISION_STEP3.md` for Step 3 (the
 drive-test log, and the planned automatic problem diagnosis), and `NOTES.md` for the full build log,

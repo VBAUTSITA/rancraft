@@ -1670,3 +1670,200 @@ stack; `TickRateManager.runsNormally` / `isEntityFrozen` and `ServerLevel.tick` 
 | `rf` purity | `PackagePurityTest` (part 1 touched `CellSelector`, `ReceiverStateStore`: `java.util` only); `device` is game code, not in the pure set |
 | `./gradlew runGameTestServer` | boots, 2 of 2 passed |
 | Differential against `bd996d6` | passed (above); throwaway files deleted |
+
+---
+
+## Slice 5 — the Network Locator (§3A.6)
+
+Commits: part 1 `bf5eb47` (pure and headless pieces), part 2 `e0fcfcd` (item, registration, HUD),
+part 3 `610a79c` (world render, lang, model, tests, game tests), and the slice commit with these
+notes. **3A ships here** (its in-game checks are listed in `PHASE_3.md`).
+
+### What was built
+
+| Piece | Where | Notes |
+|---|---|---|
+| Item `rancraft:network_locator`, "Network Locator" | `item/NetworkLocatorItem`, `registry/ModItems`, creative tab | A `SignalDevice`, requirement `NONE` (it degrades by fix type instead of switching off). Stack size 1. The javadoc says why it is **not GPS**: E-CID, OTDOA and NR multi-RTT, and which of them the model is (absolute ranging, like multi-RTT). No recipe (§3C.6). Placeholder model: the still vanilla compass face `compass_16`, no PNG shipped. |
+| Server step | `device/LocatorTracker` (pure), `device/NetworkLocator` (glue) | Every dispatch, hand or hotbar: `Ranging.measure(sample.cells(), ...)` on the evaluation's **full** cell list (up to `maxCellsEvaluated`, not the payload's 4), `LocatorSolver.solve` with the previous fix, best resolution among the cells used. The reading is kept per player in a `DeviceMemory` (cleared by `SignalTicker.forget` on logout, dimension change and respawn, and at server stop). |
+| Ground for altitude aiding | `world/LevelSurfaceProbe` | `CoverageSurveyor`'s loaded-chunks-only probe, **moved unchanged** so both share it (`getChunkNow`, never a chunk load; an empty column is `UNLOADED`). `forLocator(level)`: under a ceiling (the Nether) every column is `UNLOADED` (see honest notes). |
+| `LocatorSolver.cellsUsed` | `rf/` (appended method) | Exactly the selection `solve` fits, so the rings are the cells that went in, in order. |
+| `LocatorFixPayload` | `net/` (S2C, v1) | Version first; fix type; the estimate or candidates, HDOP, "±", cells used as the fix has them; up to 8 rings `(cx, cy, cz, radius, bandId)`; plus the fields the HUD needs (below). Band ids capped at `CellParams.MAX_BAND_ID_LENGTH`; every count checked before allocation; unknown version or type, over-cap counts, non-finite numbers, negative ranges/HDOP/±, a `likely` outside -1..1 all rejected. Sent **only while held**, by one Locator per evaluation. |
+| Protocol | `ModPayloads` | `PROTOCOL_VERSION` "4" → "5" (new payload, new synced component). |
+| HUD | `client/LocatorHudOverlay`, `LocatorHudText` (pure), `ClientLocatorState`, `HudStack` | Top-left while held, the §3A.6 layout; states NO SIGNAL / RANGE ONLY / AMBIGUOUS / POOR GEOMETRY (HDOP x) / FIX. |
+| World render | `client/LocatorRenderer`, `LocatorStyle` (pure) | While held, from the payload only: rings in `BandColours`, the FIX marker with an error circle, two AMBIGUOUS markers (likely brighter). |
+| Waypoints | `item/LocatorWaypoints` (data component `rancraft:locator_waypoints`, persistent + synced), `NetworkLocator.saveWaypoint / cycleWaypoint` | Up to 8. Sneak + use saves the current **estimate** (server side, from the Locator's own last FIX); use cycles; HUD distance and bearing from the estimate (`util/Navigation`). |
+| Emergency record | `device/EmergencyRecord`, `registry/ModAttachments.LOCATOR_EMERGENCY` | NeoForge attachment on the player, `copyOnDeath()`, codec-serialised (an empty record is not written). Every FIX stamps `(dimension, x, y, z, errorBlocks, gameTime)`; at death a fix younger than `locatorEmergencyMaxAgeTicks` is frozen as "last fix before death" and shown on the Locator HUD after respawn until the next death. |
+| `util` package | `util/Navigation` | The first `util` class (horizontal distance, compass bearing). `PackagePurityTest.utilIsPure` now runs instead of skipping. |
+| Game tests | `gametest/LocatorGameTests` | The emergency record through the real death and clone events; the live-level ground lookup and solve cost. |
+
+### HUD: layout and the rule next to the meter
+
+```
+Network Locator                                   FIX
+Est  x 1204   z -3391   y ~87   ±9.0 m   HDOP 1.4
+Cells 4   best res 15 m (band_1800)
+WP 2/3 (saved ±9.0 m)   312 m   bearing 047°
+Last fix before death: x 500  z -21  y ~70  ±12 m, 30 s before (minecraft:overworld)
+```
+
+Pinned line for line by `LocatorHudTextTest`. Coordinates are the block the estimate falls in
+(floor, as F3's "Block" line); `y ~87` is the **assumed** surface (the fix's eye height minus
+1.62); metres use the server's `metersPerBlock`, one decimal below 10 m so a band_3500 "±" does
+not read 0; the ceiling HDOP reads "99.9+"; no bearing without a FIX, none to a waypoint in
+another dimension. The last line appears only while the player has a frozen record.
+
+**Collision rule with the meter (`HudStack`).** Only the meter's *detailed* readout is top-left
+(its compact one is top-right). The meter keeps the corner and the Locator stacks directly under
+whatever the meter drew this frame, 4 px below its last line. Both layers are registered in one
+handler, meter first and the Locator `registerAbove` it (the only order `RegisterGuiLayersEvent`
+guarantees; checked in the NeoForge sources), so each frame the meter renders first and claims its
+rows, and the Locator takes the next free row and resets the claim. The meter's drawing is
+unchanged (`renderDetailed` now also returns the y past its last line). With the meter compact or
+not held, the Locator starts at the corner.
+
+### Deviations and decisions
+
+1. **Replays are recognised by the whole sample, not by `timestampTick` alone** (`LocatorTracker.isReplay`).
+   §3A.3 says devices must be idempotent on `sample.timestampTick()`. A cached replay is the very
+   same `SignalSample` (same object, same tick), and the Locator then **reuses the stored fix**
+   (nothing solved, the ground not read; only the confirmation tick moves), rather than solving it
+   again with its own answer as "previous". Keying on the whole sample instead of the tick also
+   fixes the `/tick freeze` case recorded in slice 4: game time stops, so fresh evaluations of a
+   walking player share a tick but not their cells, and the Locator still follows the player. Every
+   replay the tick key would catch is caught too. No `ReplayGuard` is needed (the slice 4
+   follow-up's suggestion); the state changes it would have guarded (previous fix, emergency stamp)
+   are idempotent under this rule. Pinned by `LocatorTrackerTest`.
+2. **One payload per evaluation.** Two held Locators (one per hand) send once, the main hand's,
+   which is also the one the HUD reads waypoints from (`NetworkLocator.sendsPayload`, pinned). A
+   Locator in the hotbar runs (emergency record) but sends nothing.
+3. **The payload carries more than §3A.6 lists**, all server values the HUD needs: the evaluation
+   tick, `metersPerBlock` (metres on the HUD), the best resolution in metres and its band ("best
+   res 15 m (band_1800)"), `locatorMaxHdop` (the POOR GEOMETRY line names its limit),
+   `locatorMinRsrpDbm` (NO SIGNAL says what was missing), and the frozen emergency record (so the
+   HUD can show it after respawn). About 430 bytes for a FIX with 8 rings, about 490 with an
+   emergency record (from the wire layout), once per interval while held.
+4. **Waypoints have no names.** The mock-up's `"base"` needs a text input this slice does not add;
+   the HUD shows the number and the "±" the waypoint was saved with instead. When all 8 are used, a
+   save **overwrites the selected entry** (the player chooses what to lose by cycling to it first);
+   nothing is dropped silently.
+5. **Saving needs a current FIX.** The reading must be at most two evaluation intervals old
+   (`LocatorTracker.freshForTicks`: a carried Locator is dispatched every interval; the second is
+   slack for a live interval change) and must be a FIX. Otherwise the save is refused with a
+   message naming the fix type. A waypoint saved from a stale reading would not even be the estimate
+   of where the player stands.
+6. **Only a FIX stamps the emergency record**, with the game time the Locator last *reported* it
+   (a replay confirms it, so a player standing still keeps a young fix). RANGE ONLY, AMBIGUOUS,
+   POOR GEOMETRY and NO SIGNAL say nothing new about where you are, so the last known position
+   stays the last FIX, as a location server's would. "Younger than" is strict: at the default 1200,
+   1199 ticks freezes and 1200 does not; 0 disables it. Death also clears the last fix, so the next
+   life starts with no known position.
+7. **The death hook** is `LivingDeathEvent` at `EventPriority.LOWEST`, not delivered when
+   cancelled (a cancelled death is no death: `ServerPlayer.die` returns). A totem of undying never
+   reaches it. NeoForge's own `PlayerEvent.Clone` subscriber (`AttachmentInternals.onPlayerClone`)
+   copies exactly the `copyOnDeath` attachments on respawn (`ServerPlayer.restoreFrom` fires it with
+   `wasDeath = !keepEverything`); returning from the End copies every serialisable attachment.
+8. **A dead player's Locator does nothing** (found while writing the death path). The ticker
+   evaluates every player on the list, including one on the death screen, and with
+   `keepInventory` the dead entity still carries the Locator. Without the guard it would stamp a new
+   last fix into the record death had just cleared, and the clone would carry it into the next life.
+9. **Rings: where they are sliced, and where they are drawn.** A measured range is a slant distance,
+   a sphere round the cell. The ring is its horizontal cross-section `sqrt(r^2 - dy^2)`, taken at
+   the FIX's own assumed eye height (so the rings cross at the marker: the picture of what the
+   solver did), or, without a FIX, at the viewer's eye height (so the rings pass through or near
+   the player, off by quantisation and NLOS bias). The shapes are then **drawn on the ground
+   1.62 below** with that radius: at eye height every ring, error circle and cross lies in the
+   camera's plane and, in first person, collapses onto the horizon as one line. On a slope a ring
+   dips into the hillside; the faint see-through pass (the lens's) keeps it traceable. RANGE ONLY's
+   ring is its cell's ring (the slant radius sliced like the others); the HUD prints the measured
+   slant range.
+10. **AMBIGUOUS markers stand at the viewer's feet height:** the payload carries each candidate's
+    (x, z), not the height the solver assumed there. They are vertical strokes, so the height reads
+    as "somewhere on this column". With no preference (`likely` = -1) both are drawn alike.
+11. **Follow-up (g) from slice 3 closed:** `locatorMaxCells`'s upper bound is now
+    `LocatorFixPayload.MAX_RINGS` (8), so every cell in a fix gets its ring.
+12. **The client does map arithmetic only.** Distance and bearing from the estimate to a waypoint
+    (`util/Navigation`) are computed on the client between two server-supplied estimates; slicing a
+    ring and placing the markers is drawing. No range, position, HDOP or "±" is computed there.
+13. **Spec vs tree: "assert via the existing EvaluationStats log".** `EvaluationStats` is only
+    logged by `SignalTicker.warnSlow`, for an evaluation over 2 ms, at most once per 30 s, and it
+    counts nothing, so it cannot show how many evaluations ran. The "no extra evaluation" claim is
+    verified structurally instead (the ticker evaluates each due player once whatever they carry,
+    pinned since slice 4; the Locator's API takes no `WorldProbe`; a replay costs no solve) and the
+    Locator's own cost is measured (below). Recorded in `PHASE_3.md` follow-ups.
+
+### Honest-abstraction notes (also at the code sites)
+
+- **Not GPS** (`NetworkLocatorItem`): cellular positioning, the family of E-CID, OTDOA and NR
+  multi-RTT; modelled as absolute ranging like multi-RTT, with no positioning reference signals and
+  no clock error (slice 3).
+- **The emergency record is network-derived emergency caller location** (`EmergencyRecord`,
+  `NetworkLocator.onLivingDeath`): on a 112/911 call a location server (E-SMLC in LTE, LMF in NR)
+  can run E-CID, OTDOA or multi-RTT and hand the estimate, with its uncertainty, to the emergency
+  service. The record stores that **estimate**, never the true position: a fix taken behind a hill
+  sends you back to the wrong place, as a bad network fix sends responders to the wrong door.
+- **Waypoints store estimates** (`LocatorWaypoints`): navigation error inherits fix error, and a
+  waypoint saved under a bad fix is pointed at faithfully and wrongly. That is the lesson.
+- **The "±" is quantisation only and is not a bound** (`LocatorHudText`). The game test's live
+  solve shows it: a band_1800 FIX 6.51 blocks from the truth reports ± 3.13 (HDOP 0.72): the error
+  is the deterministic rounding of those particular ranges, so a player standing still sees a fixed
+  error, not noise that averages out. The NLOS bias is not in it either.
+- **`y` is assumed** (`~` on the HUD): altitude aiding stands the receiver on the top surface. In
+  the Nether (a ceiling) no column is trusted, because the heightmap finds the bedrock roof; the
+  solver then falls back to its last known height (the previous fix's `y`, else the lowest
+  radiating point among the cells heard). That is a guess, labelled as one, in a dimension where
+  cells are rarely built.
+- **A Locator measures only while carried** in a hand or the hotbar (slice 4's rule for every
+  device): in a chest it is switched off, and its emergency record stops updating.
+
+### Measured
+
+| | |
+|---|---|
+| Ground lookup in a live level | **77.9 ns** per `LevelSurfaceProbe.surfaceY` (105/105 columns within 24 blocks loaded; JIT-warm, 2,000 x 105 lookups; `runGameTestServer`, flat world, this PC) |
+| Worst-case fix | 105 lookups (7 runs x 15 iterations) = **8.2 µs** of ground reads |
+| One 8-cell band_1800 solve on live ground | **22.2 µs**, 37 lookups (FIX 6.51 blocks from the truth, ± 3.13, HDOP 0.72) |
+| Replay (player standing still) | no solve, no ground read (`LocatorTrackerTest`) |
+| Evaluations | none added: the Locator is handed the one sample the ticker produced; its API has no `WorldProbe`, so it cannot march a ray. A Locator is a device, so a player carrying only a Locator (hand or hotbar) is evaluated once per interval, like a meter carrier (slice 4). |
+| Payload | about 430 bytes (FIX, 8 rings) once per interval while held |
+| Tests | 299 (slice 4) → 345 (part 1, `utilIsPure` no longer skipped) → **367** (part 3), 0 skipped |
+
+### Tests
+
+| | |
+|---|---|
+| `LocatorTrackerTest` (11) | Full cell list, not the payload's 4; `maxCells` strongest with a ring each; below-threshold cells unranged; NO SIGNAL; best resolution; a replay reuses the fix with no solve and no ground read; confirmation never runs backwards; `/tick freeze` still follows the player; previous fix marks the likely candidate; freshness window; lookups per fix bounded. |
+| `EmergencyRecordTest` (8) | Empty until a FIX; newer FIX replaces; death freezes a young fix and clears the last; 1199 freezes, 1200 does not; survives until the next death; bad numbers dropped; dimension clamped; codec round-trip. |
+| `LocatorWaypointsTest` (10) | Empty; save appends and selects; a ninth save overwrites the selected; cycle wraps; invalid never saved; hand-edited data sanitised; dimension clamped; codec and stream codec round-trips; more than 8 rejected before reading. |
+| `LocatorFixPayloadTest` (9) | Every fix type round-trips; version first; cells used; building (8 rings, non-finite dropped); band ids clamped; unknown version/type; ring count over the cap rejected before allocation; malformed numbers; bad scale. |
+| `NavigationTest` (7) | Compass bearings, diagonals, the mock-up's 047°, never NaN or 360, whole degrees, horizontal distance. |
+| `LocatorSolverTest` (+1) | `cellsUsed` is exactly what `solve` fits. |
+| `LocatorHudTextTest` (10) | The mock-up line for line; scale; each state's text; waypoint guards; the emergency line; metres; coordinates. |
+| `LocatorStyleTest` (5) | State colours; slice radius; slice height; candidate brightness incl. no preference; circle segments. |
+| `HudStackTest` (4) | Corner when unclaimed; under the meter; a claim lasts one frame; the lowest claim wins. |
+| `NetworkLocatorTest` (3) | Which Locator sends: never from the hotbar; main hand; offhand unless the main hand has one. |
+| `LocatorGameTests` (2, `runGameTestServer`) | The attachment is registered as `rancraft:locator_emergency` and written with the player; a `LivingDeathEvent` on the real bus freezes the estimate (not the mock's position) at the death tick and clears the last fix; `PlayerEvent.Clone(wasDeath)` copies it to the new player; a fix exactly `maxAge` old freezes nothing, is removed, not written and not copied. The live cost above; fails only above 1 ms per solve. |
+
+### APIs verified against sources (new to this codebase)
+
+NeoForge 21.1.251 sources jar: `AttachmentType.builder(Supplier)`, `Builder.serialize(Codec,
+Predicate)` (the predicate skips writing), `Builder.copyOnDeath()` (throws without a serializer),
+`NeoForgeRegistries.Keys.ATTACHMENT_TYPES` / `ATTACHMENT_TYPES`, `IAttachmentHolder.getExistingData /
+setData / removeData / hasData` (Supplier overloads), `AttachmentHolder.serializeAttachments` (keys
+by registry id, `null` when nothing to write), `AttachmentInternals.onPlayerClone` →
+`copyAttachmentsFrom(old, wasDeath)` (only `copyOnDeath` types on death), `EventHooks.onPlayerClone`
+from `ServerPlayer.restoreFrom(old, keepEverything)` with `wasDeath = !keepEverything`,
+`LivingDeathEvent(LivingEntity, DamageSource)` (cancellable), `RegisterGuiLayersEvent.registerAbove
+/ registerAboveAll` and `GuiLayerManager`'s render order. Decompiled 1.21.1:
+`LivingEntity.isAlive` (`!isRemoved() && health > 0`), `Player.isSecondaryUseActive`,
+`GameTestHelper.makeMockPlayer` (not added to the level or player list), `GameTestServer` (flat
+world preset), the vanilla `compass_16` texture in the client assets.
+
+### Verification
+
+| Check | Result |
+|---|---|
+| `./gradlew build` | succeeds |
+| Unit tests | **367: 367 passed, 0 failed, 0 skipped** |
+| `rf` / `util` purity | `PackagePurityTest` (both run now) |
+| `./gradlew runGameTestServer` | "4 tests are now running", "All 4 required tests passed" (2 harvest + 2 locator); the cost line above is from this run |
+| In game | not run by the agent (no `runClient`); the checks are listed in `PHASE_3.md`, slice 5 |

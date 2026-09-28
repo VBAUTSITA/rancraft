@@ -43,7 +43,7 @@ Legend: `[x]` done and verified · `[~]` partly done / needs a manual in-game ch
 | 2 | DeviceRequirement + tests | 3A | [x] `rf/DeviceRequirement` per §3A.1, verdict order NO_SERVICE → LOW_QUALITY → LOW_TIER on the serving cell; test 1 green (7 tests, 231 total, 1 skipped) | 4ab5967 |
 | 3 | Ranging + LocatorSolver + tests 2–12 | 3A | [x] `Band.bandwidthMhz` + JSON 10/10/20/100, `Ranging`, `RangeMeasurement`, `LocatorFix`, `LocatorParams`, `LocatorSolver`; 5 locator tunables in `RanCraftConfig`, 4 of them in `RfConfig`; tests 2–12 green (259 total, 1 skipped). Two recorded deviations (floor not round; extra solver starts) and one spec conflict (test 10 vs `errorBlocks`), see follow-ups | 0837945 |
 | 4 | SignalDevice + ticker refactor + meter port (regression gate) | 3A | [~] `device/` (`SignalDevice`, `DeviceContext` per §3A.2, `DeviceMemory`, `ReplayGuard`); ticker scans carried devices, dispatches every sample (replays too), keeps "evaluated ⇒ sent"; meter ported (payload byte-identical to bd996d6, checked against the old code); stale armed candidate dropped after a gap of more than one interval. Regression gate passed headless (299 tests, 1 skipped; `runGameTestServer` 2/2); in-game checks below | a51e13a; 85bd051; 6558460 |
-| 5 | Locator item, payload, HUD, rings, waypoints, emergency record | 3A | [ ] | |
+| 5 | Locator item, payload, HUD, rings, waypoints, emergency record | 3A | [~] `rancraft:network_locator` ("Network Locator", a `SignalDevice`, requirement NONE); fix from the full cell list every dispatch, replays reuse it; `LocatorFixPayload` v1 only while held; HUD top-left stacked under the meter's detailed readout; rings, FIX marker + error circle, AMBIGUOUS markers; 8 waypoints of the estimate; `copyOnDeath` emergency record; `PROTOCOL_VERSION` 5. Headless green (367 tests, 0 skipped; `runGameTestServer` 4/4, incl. death/clone of the record and the live-level cost: 22 µs per 8-cell solve); in-game checks below. **3A ships here** | bf5eb47; e0fcfcd; 610a79c |
 | 6 | ColumnScan + mast columns + lens column/on-air | 3B | [ ] | |
 | 7 | BinTraversal + region epochs + cache rework | 3B | [ ] | |
 | 8 | Fixed receiver registry + ticker | 3B | [ ] | |
@@ -212,20 +212,96 @@ Needs a human in game (the regression gate's in-game half):
       boundary, the white HANDOVER pillar lands where the handover fired, not at the point where you
       later take the meter out.
 
+## Slice 5 (Network Locator) checks
+
+Headless (verified by `./gradlew build`, 367 tests, 0 skipped, and `./gradlew runGameTestServer`,
+4 of 4; details in NOTES.md, slice 5):
+
+- [x] The fix is computed from the evaluation's **full** cell list (not the payload's 4), at most
+      `locatorMaxCells` strongest, each with a ring; below `locatorMinRsrpDbm` not ranged
+      (`LocatorTrackerTest`).
+- [x] A cached replay reuses the stored fix (no solve, no ground read); under `/tick freeze` a fresh
+      evaluation with other cells is still solved; the previous fix marks the likely candidate
+      (`LocatorTrackerTest`).
+- [x] Per-player reading in a `DeviceMemory` (cleared by `forget()`); a dead player's Locator does
+      nothing.
+- [x] `LocatorFixPayload`: version first, every fix type round-trips, at most 8 rings, band ids
+      clamped to `MAX_BAND_ID_LENGTH`, counts checked before allocation, malformed input rejected
+      (`LocatorFixPayloadTest`); one payload per evaluation, only from a held Locator, main hand
+      first (`NetworkLocatorTest`). `PROTOCOL_VERSION` 4 → 5.
+- [x] HUD text is the §3A.6 layout line for line, all five states, metres at the server's scale,
+      "99.9+" at the HDOP ceiling, no bearing without a FIX or across dimensions
+      (`LocatorHudTextTest`); the top-left rule with the meter (`HudStackTest`).
+- [x] Waypoints: at most 8, save selects, a full list overwrites the selected entry, cycle wraps,
+      hostile data sanitised, codecs round-trip (`LocatorWaypointsTest`); bearing and distance
+      (`NavigationTest`).
+- [x] Emergency record: freezes a fix younger than the limit (1199 yes, 1200 no), clears the last
+      fix, survives until the next death (`EmergencyRecordTest`); **at runtime**, a
+      `LivingDeathEvent` on the real bus freezes the estimate (not the player's position), NeoForge's
+      clone copies it (`copyOnDeath`), a too-old fix freezes nothing and is not written
+      (`LocatorGameTests.emergency_record_survives_death`).
+- [x] Live-level cost (`LocatorGameTests.surface_probe_cost`): 77.9 ns per ground lookup, worst-case
+      fix 105 lookups = 8.2 µs, one 8-cell solve 22.2 µs; no chunk is ever loaded (`getChunkNow`).
+- [x] Drawing rules: ring = cross-section of the range sphere at the slice height, likely candidate
+      brighter and alike with no preference, circle segmentation (`LocatorStyleTest`).
+
+Needs a human in game (`runClient`, creative tab "RANCraft"):
+
+- [~] The item is "Network Locator" with the compass-face placeholder icon and a three-line tooltip
+      (what it is, not GPS; use / sneak + use; waypoints n/8). Holding it shows the HUD top-left;
+      in the hotbar (not selected) it shows nothing.
+- [~] Meter (detailed mode, right-click) in one hand and Locator in the other: the Locator HUD sits
+      under the meter's readout with no overlap; meter compact: the Locator starts at the corner.
+      The meter's own HUD looks exactly as before.
+- [~] Far from any mast: NO SIGNAL ("No cell at or above -100 dBm to range to"). Near one mast:
+      RANGE ONLY and one ring round that mast passing near you. Two masts: AMBIGUOUS, two yellow
+      markers (one on your side), the likely one brighter once you had a FIX before.
+- [~] Triangle of three masts round you: FIX with a sensible ± (all band_900: about ± 10 m at 1 m
+      per block) and HDOP near 1.2; the three rings cross at the green marker, the green error circle round it, all on
+      the ground near your feet. Then three masts in a line (you off the line): POOR GEOMETRY
+      (HDOP x).
+- [~] Add a band_3500 sector nearby: "best res 3.0 m (band_3500)" and the ± shrinks (most at the edge
+      of the network; about 1.3x only inside a good triangle, see the test 10 follow-up).
+- [~] Walk behind a hill from a mast: the fix moves away from that mast (NLOS bias) and the rings no
+      longer meet at your feet. The ± does **not** grow with the bias (it is quantisation only); it
+      grows only if a cell drops below -100 dBm and the geometry gets worse.
+- [~] Sneak + right-click with a FIX: "Waypoint 1/1 saved ..." and the HUD shows "WP 1/1 (saved ±...)
+      0 m bearing ...". Walk away: distance and bearing follow the estimate. Right-click cycles
+      between several. Without a FIX: the save is refused with the fix type named. Survives relog.
+- [~] Die with the Locator carried (FIX within the last minute): after respawn, holding a Locator
+      shows "Last fix before death: x .. z .. ±.. m, N s before" at the **estimate**, not your death
+      spot (F3 on death screenshot to compare). Die again with no FIX in the last minute: the line is
+      gone. Survives relog.
+- [~] In the Nether with masts: the fix works (height falls back, labelled in NOTES.md); through a
+      portal the rings and HUD of the old dimension are not drawn.
+- [~] Carrying the Locator costs no extra evaluation: with the meter out, adding the Locator to the
+      other hand or the hotbar changes nothing in the meter's update rate or the server's tick time
+      (`/tick query`). See the follow-up on the EvaluationStats log.
+
 ## 3A done-when
 
 - [~] Meter and lens behave exactly as before the ticker refactor. *(Headless half verified in slice
       4: payload bytes, who is evaluated, cache decision, link cut; in-game half listed above. One
       intended difference: a meter only in the hotbar keeps its carrier evaluated, §3A.3.)*
-- [ ] Carrying the Locator costs no extra evaluation (EvaluationStats). *(Structure in place since
-      slice 4: devices only receive the one sample; the check itself needs the Locator, slice 5.)*
-- [ ] Triangle of three masts → FIX with a sensible ±; three in a line → POOR GEOMETRY. *(Solver
-      side verified headless in slice 3, tests 6 and 7; the item is slice 5.)*
-- [ ] Adding a band_3500 site visibly shrinks ±. *(Headless: 1.29× in a good triangle, 4.17× at the
-      edge of a network; see the test 10 follow-up.)*
-- [ ] Walking behind a hill visibly increases fix error.
-- [ ] Rings render at measured ranges and pass through (or near) the player.
-- [ ] Emergency record survives death and shows the estimate, not the true position.
+- [~] Carrying the Locator costs no extra evaluation (EvaluationStats). *(Slice 5, headless: the
+      Locator is handed the one sample the ticker already produced, one evaluation per due player
+      whatever they carry (`dispatchHandsTheOneSampleToEveryDevice`); its API takes no `WorldProbe`,
+      so it cannot march a ray; a replay costs no solve. The EvaluationStats log only prints
+      evaluations over 2 ms and counts nothing, so it cannot show this literally; see follow-ups.)*
+- [~] Triangle of three masts → FIX with a sensible ±; three in a line → POOR GEOMETRY. *(Solver
+      side verified headless in slice 3, tests 6 and 7; the item, payload and HUD in slice 5; in-game
+      check above.)*
+- [~] Adding a band_3500 site visibly shrinks ±. *(Headless: 1.29× in a good triangle, 4.17× at the
+      edge of a network; see the test 10 follow-up. In-game check above.)*
+- [~] Walking behind a hill visibly increases fix error. *(Headless: test 11, the NLOS bias pushes the
+      fix away from the hidden cell. The **±** does not grow, by design: it is quantisation only. In
+      game the error shows as the marker moving off you and the rings not meeting at your feet.)*
+- [~] Rings render at measured ranges and pass through (or near) the player. *(Radius rule pinned
+      headless (`LocatorStyleTest`); drawn on the ground under the slice height, see NOTES.md slice 5
+      decision 9. In-game check above.)*
+- [~] Emergency record survives death and shows the estimate, not the true position. *(Verified at
+      runtime by `LocatorGameTests` through the real death and clone events; the HUD line is pinned by
+      `LocatorHudTextTest`. In-game check above.)*
 
 ## 3B done-when
 
@@ -365,7 +441,7 @@ came from.
   cells, taking a run that ends elsewhere with a smaller weighted residual: perfect ranges 0 %,
   band_900 1.3–5.2 % (the rest is genuine mirror ambiguity). When the centroid's run is the best fit,
   results are identical to the spec's. Cost about 19 µs per 8-cell fix plus the in-game surface
-  lookups. To revert, delete the alternative-start loop in `LocatorSolver.leastSquares` and
+  lookups (slice 5 measured the whole solve on live ground: 22.2 µs, 37 lookups). To revert, delete the alternative-start loop in `LocatorSolver.leastSquares` and
   `notTrappedOutsideTheFootprint`. Details and the table in NOTES.md, slice 3.
 - **[ ] Open, spec conflict, decision needed (slice 3): test 10 vs `errorBlocks = HDOP × rms(σ)`.**
   Implemented to the letter. With that formula one band_3500 cell cannot cut the ± 3× on bandwidth
@@ -375,7 +451,15 @@ came from.
   `sqrt(trace((HᵀWH)⁻¹))`, identical for single-band fixes (test 7 unchanged) but crediting the
   weighting: edge 7.0× (band_900 3.6×), triangle 1.40×. Even that cannot give 3× from one cell at
   fixed good geometry: one range constrains one direction. HDOP would stay unweighted either way.
-- **[ ] Open, for slice 5 (from slice 3).** (a) `RangeOnly.radius` is the measured *slant* range;
+- **[x] Done in slice 5.** *(a) every ring, RANGE ONLY's included, is the range sphere's horizontal
+  cross-section at the slice height (the FIX's assumed eye height, else the viewer's), drawn on the
+  ground under it; the HUD prints the measured slant range. (b) both AMBIGUOUS markers alike at -1
+  (`LocatorStyle.candidateAlpha`). (c) "HDOP 99.9+". (d) the HUD shows `y ~87`, the assumed surface.
+  (e) full `cells()` on every dispatch, replays reuse the fix, previous fix per player in a
+  `DeviceMemory`. (f) `LevelSurfaceProbe` (moved unchanged from `CoverageSurveyor`), measured in a
+  live level: 77.9 ns per lookup, worst case 8.2 µs per fix, a whole 8-cell solve 22.2 µs. (g) the cap
+  is `LocatorFixPayload.MAX_RINGS`. (h) in the `LocatorHudText` javadoc and NOTES.md slice 5.* (from
+  slice 3) (a) `RangeOnly.radius` is the measured *slant* range;
   decide how the ring is drawn (at the cell's height it is the widest circle of the range sphere).
   (b) `Ambiguous.likely` can be `NO_PREFERENCE` (-1): draw both markers alike then. (c)
   `PoorGeometry.hdop` is capped at 99.9 ("99.9 or worse", also for a singular geometry). (d) `Fix.y`
@@ -386,7 +470,12 @@ came from.
   `locatorMaxCells` is capped at 8 in the config because the payload carries 8 rings; point the cap
   at the payload's constant once it exists. (h) Quantisation is deterministic: a player standing
   still sees a fixed error, not noise; say so where the ± is explained.
-- **[ ] Open, for slice 5 (from slice 4).** How the Locator should use the device framework:
+- **[x] Done in slice 5, with one refinement.** *(b), (d), (e) as proposed. (a) and (c) differently:
+  the Locator recognises a replay by the **whole sample** (a replay is the same object, tick and all)
+  and reuses the stored fix instead of solving again; state changes are idempotent under that rule,
+  so no `ReplayGuard` is used. Under `/tick freeze` fresh evaluations share a tick but not their
+  cells, so they are solved and the Locator follows the player. NOTES.md slice 5, decision 1.* (from
+  slice 4) How the Locator should use the device framework:
   (a) compute the fix from `ctx.sample()` on **every** dispatch (it is pure and deterministic, so a
   replay gives the same fix) and guard only state changes (the per-player previous fix for
   `likely`, the emergency record stamp) with a `ReplayGuard`; (b) keep per-player state in a
@@ -402,7 +491,9 @@ came from.
   channels, so the first `SignalSamplePayload` throws `UnsupportedOperationException` in
   `NetworkRegistry.checkPacket` (NeoForge 21.1.251 sources). A runtime test needs a fake connection
   with the `rancraft` channels negotiated. Never leave a mock `ServerPlayer` carrying a device on the
-  list in a game test.
+  list in a game test. *Slice 5 sidestepped it: `LocatorGameTests` uses vanilla's mock `Player`
+  (`makeMockPlayer`, never on the list) and posts the death and clone events itself; the per-player
+  ticker path with a Locator is still only checked in game. Still open for slice 8.*
 - **[ ] Open, for slice 8 (from slice 4).** `staleCandidateGapTicks` is derived from the player
   ticker's cadence (exactly one interval, guaranteed by the stagger). `FixedReceiverTicker` is
   round-robin under a time budget, "at most once per `evaluationIntervalTicks`", so its gaps can be
@@ -417,3 +508,23 @@ came from.
   the first gap after it can reach `old + new - gcd(old, new)` ticks, so an armed candidate may be
   dropped once and re-armed (a handover delayed by at most one TTT, never early). Pinned by
   `SignalTickerTest.liveIntervalChangeStretchesOneGap`.
+- **[ ] Open, spec vs tree (from slice 5).** The 3A done-when says "Carrying the Locator costs no
+  extra evaluation (assert via the existing EvaluationStats log)". `EvaluationStats` is only logged
+  by `SignalTicker.warnSlow`, for an evaluation over 2 ms, at most once per 30 s, and it counts
+  nothing, so it cannot show the number of evaluations. Slice 5 verified the claim structurally
+  (one evaluation per due player whatever they carry, pinned since slice 4; the Locator's API has no
+  `WorldProbe`; a replay costs no solve) and measured the Locator's own cost (22 µs per fresh solve).
+  If a runtime assertion is wanted: a per-dimension evaluation counter behind a debug command, or a
+  game test once the fake-connection follow-up above is solved.
+- **[ ] Open, minor (from slice 5, deviation from the §3A.6 mock-up).** Waypoints have no names (the
+  mock-up's `"base"`): naming needs a text input (an anvil-style screen or a command). The HUD shows
+  the number and the "±" it was saved with. A name would be an appended, optional field of
+  `LocatorWaypoints.Waypoint` (codec `optionalFieldOf`, stream codec needs a protocol bump).
+- **[ ] Open, minor (from slice 5).** The payload carries each AMBIGUOUS candidate's (x, z) but not
+  the height the solver assumed there, so the renderer stands both markers at the viewer's feet
+  height. Appending `ay, by` to `LocatorFix.Ambiguous` (an `rf` record: append only) and the payload
+  (a version bump) would place them exactly.
+- **[ ] Open, for slice 17 (from slice 5).** The optional `fix_x, fix_z, fix_err` CSV columns can now
+  read the client's `ClientLocatorState.latest()`, but only while the Locator is held (the payload is
+  not sent from the hotbar). Either document that the columns are blank then, or send the payload
+  whenever a lens shows the trail.
