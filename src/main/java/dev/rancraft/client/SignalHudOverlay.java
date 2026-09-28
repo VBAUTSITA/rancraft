@@ -57,11 +57,17 @@ public final class SignalHudOverlay {
      */
     private static final int[] COLOR_BY_BARS = LensStyle.levelArgbByBars();
 
+    /**
+     * The meter's layer, then (Phase 3 slice 5) the Network Locator's directly above it. Both here,
+     * in this order, because {@code registerAbove} needs its anchor registered already and two
+     * handlers of one event have no guaranteed order. The Locator renders after the meter each frame
+     * and stacks under its detailed readout ({@link HudStack}).
+     */
     @SubscribeEvent
     public static void registerLayers(RegisterGuiLayersEvent event) {
-        event.registerAboveAll(
-                ResourceLocation.fromNamespaceAndPath(RanCraft.MOD_ID, "signal_hud"),
-                SignalHudOverlay::render);
+        ResourceLocation signalHud = ResourceLocation.fromNamespaceAndPath(RanCraft.MOD_ID, "signal_hud");
+        event.registerAboveAll(signalHud, SignalHudOverlay::render);
+        event.registerAbove(signalHud, LocatorHudOverlay.ID, LocatorHudOverlay::render);
     }
 
     private static void render(GuiGraphics graphics, DeltaTracker deltaTracker) {
@@ -83,7 +89,9 @@ public final class SignalHudOverlay {
         boolean noService = ClientSignalState.isStale() || !sample.hasServing();
 
         if (FieldTestMeterItem.isDetailed(meter)) {
-            renderDetailed(graphics, minecraft.font, sample, noService);
+            // Phase 3 slice 5: the detailed readout owns the top-left rows it drew; a held Network
+            // Locator stacks under them. Nothing the meter draws changes.
+            HudStack.claimTopLeft(renderDetailed(graphics, minecraft.font, sample, noService));
         } else {
             renderCompact(graphics, minecraft.font, sample, noService);
         }
@@ -129,7 +137,8 @@ public final class SignalHudOverlay {
 
     // ---- detailed -----------------------------------------------------------
 
-    private static void renderDetailed(
+    /** @return the y just past the last line drawn (slice 5, for {@link HudStack}; the drawing is unchanged). */
+    private static int renderDetailed(
             GuiGraphics graphics, Font font, SignalSamplePayload sample, boolean noService) {
 
         int x = MARGIN;
@@ -140,7 +149,7 @@ public final class SignalHudOverlay {
 
         if (noService) {
             graphics.drawString(font, "NO SERVICE", x, y, COLOR_BY_BARS[0], false);
-            return;
+            return y + LINE_HEIGHT;
         }
 
         CellSample serving = sample.serving();
@@ -179,7 +188,9 @@ public final class SignalHudOverlay {
 
         if (!sample.servingConflictNote().isEmpty()) {
             graphics.drawString(font, WARN_MARK + " " + sample.servingConflictNote(), x, y, COLOR_WARN, false);
+            y += LINE_HEIGHT;
         }
+        return y;
     }
 
     /** The RSRP row: label, coloured value, dim-then-lit bar glyphs, then the bar count. */

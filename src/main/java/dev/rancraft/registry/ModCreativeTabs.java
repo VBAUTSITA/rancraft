@@ -27,6 +27,7 @@ public final class ModCreativeTabs {
                         output.accept(ModItems.SECTOR_ANTENNA.get());
                         output.accept(ModItems.FIELD_TEST_METER.get());
                         output.accept(ModItems.RF_LENS.get());
+                        output.accept(ModItems.NETWORK_LOCATOR.get());
                     })
                     .build());
 

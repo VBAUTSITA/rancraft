@@ -2,6 +2,7 @@ package dev.rancraft;
 
 import com.mojang.logging.LogUtils;
 import dev.rancraft.data.RfDataLoader;
+import dev.rancraft.registry.ModAttachments;
 import dev.rancraft.registry.ModBlockEntities;
 import dev.rancraft.registry.ModBlocks;
 import dev.rancraft.registry.ModCreativeTabs;
@@ -28,6 +29,7 @@ public final class RanCraft {
         ModItems.register(modBus);
         ModBlockEntities.register(modBus);
         ModDataComponents.register(modBus);
+        ModAttachments.register(modBus);
         ModCreativeTabs.register(modBus);
 
         container.registerConfig(ModConfig.Type.COMMON, RanCraftConfig.SPEC);

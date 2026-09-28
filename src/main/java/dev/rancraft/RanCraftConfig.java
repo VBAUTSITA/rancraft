@@ -2,6 +2,7 @@ package dev.rancraft;
 
 import dev.rancraft.net.CoverageSurveyPayload;
 import dev.rancraft.net.LensLinksPayload;
+import dev.rancraft.net.LocatorFixPayload;
 import dev.rancraft.rf.DriveTestLog;
 import dev.rancraft.rf.LocatorParams;
 import dev.rancraft.rf.RfConfig;
@@ -151,7 +152,7 @@ public final class RanCraftConfig {
     public static final ModConfigSpec.IntValue LOCATOR_MAX_CELLS = BUILDER
             .comment("Network Locator: most cells (strongest first) that go into one position fix.",
                     "At least 3 are needed for a fix. Capped at 8, the rings the Locator can draw.")
-            .defineInRange("locatorMaxCells", LocatorParams.DEFAULT_MAX_CELLS, 3, 8);
+            .defineInRange("locatorMaxCells", LocatorParams.DEFAULT_MAX_CELLS, 3, LocatorFixPayload.MAX_RINGS);
 
     public static final ModConfigSpec.DoubleValue LOCATOR_MAX_HDOP = BUILDER
             .comment("Network Locator: above this horizontal dilution of precision the Locator shows",

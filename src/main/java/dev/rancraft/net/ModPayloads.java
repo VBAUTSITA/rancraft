@@ -4,6 +4,7 @@ import dev.rancraft.RanCraft;
 import dev.rancraft.client.ClientAntennaConfig;
 import dev.rancraft.client.ClientDriveTest;
 import dev.rancraft.client.ClientLensState;
+import dev.rancraft.client.ClientLocatorState;
 import dev.rancraft.client.ClientSignalState;
 import net.minecraft.server.level.ServerPlayer;
 import net.neoforged.bus.api.SubscribeEvent;
@@ -28,9 +29,12 @@ public final class ModPayloads {
      *       two and no key bindings to send the third.
      *   <li><b>4</b> -- RF Vision Step 3a: {@link SignalSamplePayload} v3 appends the evaluation
      *       point and the heard-cell count. A Step 2 client would stop reading four fields early.
+     *   <li><b>5</b> -- Phase 3 slice 5: {@link LocatorFixPayload} is new (the Network Locator), and
+     *       the Locator's waypoint data component is synced. A slice 4 client has no handler for the
+     *       payload and does not know the component.
      * </ul>
      */
-    private static final String PROTOCOL_VERSION = "4";
+    private static final String PROTOCOL_VERSION = "5";
 
     @SubscribeEvent
     public static void register(RegisterPayloadHandlersEvent event) {
@@ -63,6 +67,13 @@ public final class ModPayloads {
                 CoverageSurveyPayload.TYPE,
                 CoverageSurveyPayload.STREAM_CODEC,
                 (payload, context) -> context.enqueueWork(() -> ClientLensState.acceptCoverage(payload)));
+
+        // Phase 3 slice 5: the Network Locator's fix, sent only while a Locator is held. Same
+        // pattern: the client state class is named only inside the handler.
+        registrar.playToClient(
+                LocatorFixPayload.TYPE,
+                LocatorFixPayload.STREAM_CODEC,
+                (payload, context) -> context.enqueueWork(() -> ClientLocatorState.accept(payload)));
 
         registrar.playToServer(
                 UpdateCellParamsPayload.TYPE,

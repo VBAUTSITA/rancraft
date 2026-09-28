@@ -3,6 +3,7 @@ package dev.rancraft.registry;
 import com.mojang.serialization.Codec;
 import dev.rancraft.RanCraft;
 import dev.rancraft.item.LensSettings;
+import dev.rancraft.item.LocatorWaypoints;
 import java.util.function.Supplier;
 import net.minecraft.core.component.DataComponentType;
 import net.minecraft.network.codec.ByteBufCodecs;
@@ -37,6 +38,16 @@ public final class ModDataComponents {
             DATA_COMPONENTS.registerComponentType("lens_settings", builder -> builder
                     .persistent(LensSettings.CODEC)
                     .networkSynchronized(LensSettings.STREAM_CODEC));
+
+    /**
+     * The Network Locator's saved waypoints and which one is selected (Phase 3 slice 5, §3A.6).
+     * Each is an estimate the Locator reported, never the true position. Synced so the HUD can show
+     * distance and bearing to the selected one; the stream codec rejects more than 8 entries.
+     */
+    public static final Supplier<DataComponentType<LocatorWaypoints>> LOCATOR_WAYPOINTS =
+            DATA_COMPONENTS.registerComponentType("locator_waypoints", builder -> builder
+                    .persistent(LocatorWaypoints.CODEC)
+                    .networkSynchronized(LocatorWaypoints.STREAM_CODEC));
 
     public static void register(IEventBus modBus) {
         DATA_COMPONENTS.register(modBus);

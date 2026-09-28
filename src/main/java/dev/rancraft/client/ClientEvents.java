@@ -30,6 +30,7 @@ public final class ClientEvents {
     @SubscribeEvent
     public static void onLoggingOut(ClientPlayerNetworkEvent.LoggingOut event) {
         ClientSignalState.clear();
+        ClientLocatorState.clear();
         ClientLensState.clear();
         LensRenderer.clearCache();
         CoverageRenderer.clearCache();
@@ -45,6 +46,7 @@ public final class ClientEvents {
     @SubscribeEvent
     public static void onClone(ClientPlayerNetworkEvent.Clone event) {
         ClientSignalState.clear();
+        ClientLocatorState.clear();
         ClientLensState.clear();
         CoverageRenderer.clearCache();
     }
