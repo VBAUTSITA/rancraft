@@ -129,6 +129,19 @@ public final class LocatorSolver {
         };
     }
 
+    /**
+     * Exactly the measurements {@link #solve} takes from {@code ranges}: the first
+     * {@link LocatorParams#maxCells()} valid ones, in the order given. Phase 3 slice 5 added this so
+     * the Locator can draw a ring for every cell that went into a fix, and only those, without
+     * repeating the selection rule. {@code solve(...).cellsUsed()} equals its size for a
+     * {@link LocatorFix.Fix} and a {@link LocatorFix.PoorGeometry}.
+     */
+    public static List<RangeMeasurement> cellsUsed(List<RangeMeasurement> ranges, LocatorParams params) {
+        Objects.requireNonNull(ranges, "ranges");
+        Objects.requireNonNull(params, "params");
+        return List.copyOf(select(ranges, params.maxCells()));
+    }
+
     // ---- 3+ cells ------------------------------------------------------------------------------
 
     private static LocatorFix leastSquares(List<RangeMeasurement> used, SurfaceProbe ground,

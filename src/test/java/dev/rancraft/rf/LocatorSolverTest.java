@@ -359,6 +359,29 @@ class LocatorSolverTest {
         assertInstanceOf(LocatorFix.Ambiguous.class, solve(cells, FLAT, two));
     }
 
+    @Test
+    @DisplayName("cellsUsed (slice 5, the Locator's rings) is exactly the selection solve() fits: same cells, same order")
+    void cellsUsedMatchesSolve() {
+        Rx rx = Rx.standingOn(FLAT, 0.5, 0.5);
+        List<RangeMeasurement> ranges = new ArrayList<>();
+        for (int i = 0; i < 10; i++) {
+            double bearing = Math.toRadians(36.0 * i);
+            ranges.addAll(measure(List.of(heard(i + 1L, (int) Math.round(120 * Math.cos(bearing)), 80,
+                    (int) Math.round(120 * Math.sin(bearing)), BAND_1800, rx))));
+        }
+        // Invalid measurements are skipped by both, and do not use up a slot.
+        ranges.add(1, new RangeMeasurement(99L, Double.NaN, 80, 0, 40, 4, "band_900", 0));
+        ranges.add(3, new RangeMeasurement(98L, 0, 80, 0, -1, 4, "band_900", 0));
+
+        List<RangeMeasurement> used = LocatorSolver.cellsUsed(ranges, LocatorParams.DEFAULTS);
+        assertEquals(List.of(1L, 2L, 3L, 4L, 5L, 6L, 7L, 8L), used.stream().map(RangeMeasurement::cellId).toList());
+        assertEquals(used.size(), fix(LocatorSolver.solve(ranges, FLAT, null, LocatorParams.DEFAULTS)).cellsUsed());
+
+        LocatorParams three = new LocatorParams(-100.0, 3, 6.0, 0.25);
+        assertEquals(3, LocatorSolver.cellsUsed(ranges, three).size());
+        assertEquals(List.of(), LocatorSolver.cellsUsed(List.of(), LocatorParams.DEFAULTS));
+    }
+
     // ---- Test 10: a wideband cell --------------------------------------------------------------
 
     /**

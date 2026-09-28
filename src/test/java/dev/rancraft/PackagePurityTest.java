@@ -85,12 +85,12 @@ class PackagePurityTest {
     }
 
     @Test
-    @DisplayName("dev.rancraft.util references no net.minecraft, net.neoforged or com.mojang code, nor game-side RANCraft packages (skipped until util exists)")
+    @DisplayName("dev.rancraft.util references no net.minecraft, net.neoforged or com.mojang code, nor game-side RANCraft packages")
     void utilIsPure() throws IOException {
         Path root = projectRoot(Path.of(System.getProperty("user.dir")));
         Path util = root.resolve(UTIL);
-        Assumptions.assumeTrue(Files.isDirectory(util),
-                "dev.rancraft.util does not exist yet; PHASE_3_PROMPT.md §3B.1 creates it for ColumnScan");
+        // Phase 3 slice 5 created util (Navigation, the Locator's waypoint bearing); §3B.1 adds ColumnScan.
+        Assumptions.assumeTrue(Files.isDirectory(util), "dev.rancraft.util does not exist");
         assertPure(root, util);
     }
 

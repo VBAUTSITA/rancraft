@@ -20,13 +20,10 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.MinecraftServer;
-import net.minecraft.server.level.ServerChunkCache;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.Level;
-import net.minecraft.world.level.chunk.LevelChunk;
-import net.minecraft.world.level.levelgen.Heightmap;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.event.tick.ServerTickEvent;
@@ -385,32 +382,13 @@ public final class CoverageSurveyor {
     }
 
     /**
-     * Feet level on the top surface: the first free block above the motion-blocking, non-leaf
-     * ground, which is what {@code Level.getHeight} returns for a loaded chunk.
-     *
-     * <p>Reads the chunk through {@link ServerChunkCache#getChunkNow}, which returns only a chunk
-     * that has finished loading and never waits. {@code hasChunk} alone is not enough: it checks the
-     * chunk's ticket, and {@code getHeight} would then block the server thread until a chunk that is
-     * still generating is done. A column that is not ready is {@link SurfaceProbe#UNLOADED} and is
-     * left as a hole in the plot; the next survey fills it.
-     *
-     * <p>{@link SurfaceProbe#UNLOADED} also covers "no ground in this column". An empty column (the
-     * End's void, a void world) has a heightmap at the bottom of the world, which would put a
-     * receiver -- and a painted tile -- on a floor that is not there. It is left as a hole too.
+     * Feet level on the top surface, from loaded chunks only ({@link LevelSurfaceProbe}; the body
+     * that used to be here, moved unchanged in Phase 3 slice 5 so the Network Locator shares it).
+     * A column that is not ready, or has no ground, is {@link SurfaceProbe#UNLOADED} and is left as
+     * a hole in the plot; the next survey fills it.
      */
     private static SurfaceProbe surfaceOf(ServerLevel level) {
-        ServerChunkCache chunks = level.getChunkSource();
-        int minY = level.getMinBuildHeight();
-        return (x, z) -> {
-            LevelChunk chunk = chunks.getChunkNow(x >> 4, z >> 4);
-            if (chunk == null) {
-                return SurfaceProbe.UNLOADED;
-            }
-            int feet = chunk.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, x & 15, z & 15) + 1;
-            // The heightmap of an empty column is the bottom of the world: no ground to stand a
-            // receiver on, so leave a hole rather than a fake floor.
-            return feet <= minY ? SurfaceProbe.UNLOADED : feet;
-        };
+        return new LevelSurfaceProbe(level);
     }
 
     /** Drops a player's survey. Called on logout, dimension change and respawn. */
