@@ -2,6 +2,7 @@ package dev.rancraft;
 
 import dev.rancraft.net.CoverageSurveyPayload;
 import dev.rancraft.net.LensLinksPayload;
+import dev.rancraft.rf.DriveTestLog;
 import dev.rancraft.rf.RfConfig;
 import dev.rancraft.rf.RayMarcher;
 import net.neoforged.neoforge.common.ModConfigSpec;
@@ -136,6 +137,38 @@ public final class RanCraftConfig {
             .defineInRange("coverageMinIntervalTicks", 100, 0, 6000);
 
     public static final ModConfigSpec SPEC = BUILDER.build();
+
+    // ---- RF Vision Step 3a: the drive-test trail (CLIENT) --------------------------------------
+    // The drive-test log lives on the client and costs the server nothing extra, so its knobs are a
+    // separate CLIENT spec (config/rancraft-client.toml) that each player sets for themselves, rather
+    // than COMMON entries a server admin would see and could not affect. Registered in RanCraft;
+    // FML only ever loads it on a physical client.
+
+    private static final ModConfigSpec.Builder CLIENT_BUILDER = new ModConfigSpec.Builder();
+
+    public static final ModConfigSpec.IntValue DRIVE_TEST_CAPACITY = CLIENT_BUILDER
+            .comment("Drive-test log: most samples kept per dimension before the oldest are dropped.",
+                    "At the default 1 Hz sample rate 3600 is one hour. Standing still does not use",
+                    "this up (a stationary sample replaces the previous one). A change applies to a",
+                    "dimension's log the next time it starts, e.g. after /rancraftc drivetest clear.")
+            .defineInRange("driveTestCapacity", DriveTestLog.DEFAULT_CAPACITY, 60, 36_000);
+
+    public static final ModConfigSpec.DoubleValue TRAIL_RENDER_DISTANCE = CLIENT_BUILDER
+            .comment("Drive-test trail: markers further than this from the camera, in blocks, are not",
+                    "drawn. They stay in the log and in the CSV export either way.")
+            .defineInRange("trailRenderDistance", 128.0, 16.0, 512.0);
+
+    public static final ModConfigSpec CLIENT_SPEC = CLIENT_BUILDER.build();
+
+    /** Falls back to the default if read before the client config has loaded, rather than throwing. */
+    public static int driveTestCapacity() {
+        return CLIENT_SPEC.isLoaded() ? DRIVE_TEST_CAPACITY.get() : DRIVE_TEST_CAPACITY.getDefault();
+    }
+
+    /** Read every frame by the trail renderer; same fallback as {@link #driveTestCapacity()}. */
+    public static double trailRenderDistance() {
+        return CLIENT_SPEC.isLoaded() ? TRAIL_RENDER_DISTANCE.get() : TRAIL_RENDER_DISTANCE.getDefault();
+    }
 
     public static int lensMaxLinks() {
         return LENS_MAX_LINKS.get();

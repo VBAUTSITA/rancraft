@@ -34,7 +34,7 @@ public record LensControlPayload(int action) implements CustomPacketPayload {
     /** All bands, then each loaded band by ascending frequency, then back to all. */
     public static final int CYCLE_BAND = 0;
 
-    /** {@link LensLayers#ALL} -> ANTENNAS -> LINKS -> COVERAGE -> ALL. */
+    /** {@link LensLayers#ALL} -> ANTENNAS -> LINKS -> COVERAGE -> TRAIL -> ALL. */
     public static final int CYCLE_LAYERS = 1;
 
     public static final CustomPacketPayload.Type<LensControlPayload> TYPE =

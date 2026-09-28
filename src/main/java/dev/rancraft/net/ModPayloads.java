@@ -2,6 +2,7 @@ package dev.rancraft.net;
 
 import dev.rancraft.RanCraft;
 import dev.rancraft.client.ClientAntennaConfig;
+import dev.rancraft.client.ClientDriveTest;
 import dev.rancraft.client.ClientLensState;
 import dev.rancraft.client.ClientSignalState;
 import net.minecraft.server.level.ServerPlayer;
@@ -25,18 +26,25 @@ public final class ModPayloads {
      *   <li><b>3</b> -- RF Lens Step 2: {@link LensLinksPayload}, {@link CoverageSurveyPayload} and
      *       {@link LensControlPayload} are new. A Step 1 client would have no handler for the first
      *       two and no key bindings to send the third.
+     *   <li><b>4</b> -- RF Vision Step 3a: {@link SignalSamplePayload} v3 appends the evaluation
+     *       point and the heard-cell count. A Step 2 client would stop reading four fields early.
      * </ul>
      */
-    private static final String PROTOCOL_VERSION = "3";
+    private static final String PROTOCOL_VERSION = "4";
 
     @SubscribeEvent
     public static void register(RegisterPayloadHandlersEvent event) {
         PayloadRegistrar registrar = event.registrar(PROTOCOL_VERSION);
 
+        // One sample feeds two views: the meter HUD's latest reading, and the drive-test log behind
+        // the lens trail. Both classes are named only inside the handler, as below.
         registrar.playToClient(
                 SignalSamplePayload.TYPE,
                 SignalSamplePayload.STREAM_CODEC,
-                (payload, context) -> context.enqueueWork(() -> ClientSignalState.accept(payload)));
+                (payload, context) -> context.enqueueWork(() -> {
+                    ClientSignalState.accept(payload);
+                    ClientDriveTest.accept(payload);
+                }));
 
         // The lambda body is the only reference to the client-only class, and a dedicated server
         // never receives an S2C packet, so this never resolves ClientAntennaConfig server-side.

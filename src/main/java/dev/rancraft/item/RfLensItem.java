@@ -23,17 +23,21 @@ import net.minecraft.world.level.Level;
  * {@link LensLayers} presets. The keys ask the server, which edits the stack; the lens has no
  * client-side state of its own.
  *
- * <p>Three layers:
+ * <p>Four layers:
  * <ul>
  *   <li><b>Lobes (Step 1).</b> Each antenna's declared radiation pattern. Public configuration,
  *       already synced to the client, drawn with the same pattern maths the server evaluates with.
  *   <li><b>Link rays (Step 2a).</b> A line to every cell the server heard at the wearer's head,
  *       coloured by where along it the terrain took its dB.
  *   <li><b>Coverage (Step 2b).</b> A best-server plot painted on the ground around the wearer.
+ *   <li><b>Drive-test trail (Step 3a).</b> A marker at every point the server measured the wearer,
+ *       coloured by the service level there, with pillars where handovers happened. Exported as CSV
+ *       with {@code /rancraftc drivetest export}.
  * </ul>
  *
- * <p><b>It measures nothing.</b> Link rays and coverage are server measurements shipped as values
- * ({@code net.LensLinksPayload}, {@code net.CoverageSurveyPayload}); the client only draws them.
+ * <p><b>It measures nothing.</b> Link rays, coverage and the trail are server measurements shipped
+ * as values ({@code net.LensLinksPayload}, {@code net.CoverageSurveyPayload},
+ * {@code net.SignalSamplePayload}); the client only draws them.
  * RSRP, SINR, obstruction, serving-cell choice and coverage all stay server-authoritative. See
  * VISION.md for where that line sits and why.
  */
@@ -73,5 +77,6 @@ public class RfLensItem extends Item implements Equipable {
         super.appendHoverText(stack, context, tooltip, flag);
         tooltip.add(Component.translatable("item.rancraft.rf_lens.tooltip.wear").withStyle(ChatFormatting.GRAY));
         tooltip.add(Component.translatable("item.rancraft.rf_lens.tooltip.keys").withStyle(ChatFormatting.GRAY));
+        tooltip.add(Component.translatable("item.rancraft.rf_lens.tooltip.drivetest").withStyle(ChatFormatting.GRAY));
     }
 }

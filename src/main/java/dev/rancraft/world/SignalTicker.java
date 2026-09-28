@@ -54,12 +54,16 @@ import net.neoforged.neoforge.network.PacketDistributor;
  * Drives evaluation from the receiver side at 1 Hz.
  *
  * <p>Antennas are passive; only players who asked to see the signal cost anything: those holding a
- * Field Test Meter, and those wearing an RF Lens with link rays on. Work is staggered across the
- * interval by player id so every player does not land on the same tick.
+ * Field Test Meter, and those wearing an RF Lens with link rays or the drive-test trail on. Work is
+ * staggered across the interval by player id so every player does not land on the same tick.
  *
- * <p>A lens wearer's link rays come from the <em>same</em> evaluation as the meter reading, so the
- * rays and the HUD can never disagree about which cells are heard or which one serves. Each drawn
- * link costs one extra traced ray ({@link LinkTracer}), and only while links are on.
+ * <p><b>One evaluation per player per interval, however many views want it.</b> A lens wearer's
+ * link rays come from the <em>same</em> evaluation as the meter reading, so the rays and the HUD can
+ * never disagree about which cells are heard or which one serves. Each drawn link costs one extra
+ * traced ray ({@link LinkTracer}), and only while links are on. The drive-test trail (RF Vision
+ * Step 3a) costs nothing extra either: it is the same {@link SignalSamplePayload} the meter gets,
+ * which now carries the point it was evaluated at, sent whenever the meter is held <em>or</em> the
+ * worn lens shows the trail. The client logs it; the HUD still draws only while the meter is held.
  *
  * <p>Coverage painting is not driven from here -- it is a much larger, time-sliced job. See
  * {@link CoverageSurveyor}.
@@ -136,11 +140,16 @@ public final class SignalTicker {
                 continue;
             }
             boolean meter = holdsMeter(player);
-            LensSettings linkLens = linkLensOf(player);
-            if (!meter && linkLens == null) {
+            LensSettings lens = wornLensOf(player);
+            LensSettings linkLens = lens != null && lens.showLinks() ? lens : null;
+            boolean trail = lens != null && lens.showTrail();
+            // The sample feeds the meter HUD and the lens's drive-test trail alike; either is reason
+            // enough to send it. Still one evaluation: evaluate() builds one sample for both.
+            boolean sendSample = meter || trail;
+            if (!sendSample && linkLens == null) {
                 continue;
             }
-            evaluate(player, config, meter, linkLens);
+            evaluate(player, config, sendSample, linkLens);
         }
     }
 
@@ -149,19 +158,16 @@ public final class SignalTicker {
                 || player.getOffhandItem().getItem() instanceof FieldTestMeterItem;
     }
 
-    /** The worn lens's settings when it is showing link rays, otherwise {@code null}. */
-    private static LensSettings linkLensOf(ServerPlayer player) {
+    /** The worn lens's settings, or {@code null} when no lens is worn. */
+    private static LensSettings wornLensOf(ServerPlayer player) {
         ItemStack lens = RfLensItem.wornBy(player);
-        if (lens == null) {
-            return null;
-        }
-        LensSettings settings = RfLensItem.settingsOf(lens);
-        return settings.showLinks() ? settings : null;
+        return lens == null ? null : RfLensItem.settingsOf(lens);
     }
 
     /**
-     * @param sendSample true when the player holds a meter and so has a HUD to feed. The sample is
-     *                   built and cached either way, so pulling the meter out replays it at once.
+     * @param sendSample true when the player holds a meter (a HUD to feed) or wears a lens showing
+     *                   the drive-test trail (a log to feed). The sample is built and cached either
+     *                   way, so pulling the meter out replays it at once.
      * @param linkLens   the lens settings when link rays are wanted, otherwise {@code null}.
      */
     private static void evaluate(ServerPlayer player, RfConfig config, boolean sendSample, LensSettings linkLens) {
@@ -211,8 +217,12 @@ public final class SignalTicker {
             warnSlow(candidates.size(), probe.probes(), elapsedNanos, evaluation.stats());
         }
 
+        // The eye position this evaluation ran at travels with the sample, so the drive-test trail
+        // marks the point measured rather than wherever the client is when the packet lands. A
+        // cached replay below carries its original point, which isCurrent() keeps within
+        // MOVE_EPSILON_BLOCKS of the player.
         SignalSamplePayload payload =
-                toPayload(sample, candidates, gameTime, config, evaluation.stats());
+                toPayload(sample, candidates, gameTime, config, evaluation.stats(), eyeX, eyeY, eyeZ);
         LensLinksPayload links = linkLens == null
                 ? null
                 : traceLinks(level, sample, candidates, eyeX, eyeY, eyeZ, linkLens, linkCap, bands, config, gameTime);
@@ -317,24 +327,27 @@ public final class SignalTicker {
 
     /**
      * Adds the display-only extras the engine has no business carrying: the serving band frequency,
-     * and the worst outstanding PCI conflict on the serving cell, pre-rendered as one line.
+     * the worst outstanding PCI conflict on the serving cell, pre-rendered as one line, and the
+     * point the evaluation ran at (for the drive-test trail).
      */
     private static SignalSamplePayload toPayload(
             SignalSample sample,
             Collection<CellParams> candidates,
             long tick,
             RfConfig config,
-            RfEngine.EvaluationStats stats) {
+            RfEngine.EvaluationStats stats,
+            double rxX, double rxY, double rxZ) {
 
         Optional<CellSample> serving = sample.serving();
         if (serving.isEmpty()) {
-            return SignalSamplePayload.empty(tick, sample.handoverCount());
+            return SignalSamplePayload.empty(tick, sample.handoverCount(), rxX, rxY, rxZ);
         }
 
         Band band = RfDataLoader.bands().getOrFallback(serving.get().bandId());
         return SignalSamplePayload.of(
                 sample, band.id(), band.frequencyMhz(), config.metersPerBlock(),
-                conflictNote(serving.get().cellId(), candidates, config));
+                conflictNote(serving.get().cellId(), candidates, config),
+                rxX, rxY, rxZ);
     }
 
     /**

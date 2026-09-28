@@ -1,8 +1,10 @@
 package dev.rancraft.client;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import dev.rancraft.rf.DriveTestLog;
 import dev.rancraft.rf.ServiceLevel;
 import java.util.List;
 import java.util.Locale;
@@ -304,5 +306,50 @@ class LensStyleTest {
     @DisplayName("no links, no labels")
     void stackEmpty() {
         assertEquals(0, LensStyle.stack(new double[0], new double[0], new double[0], 2.5, 0.75).length);
+    }
+
+    // ---- service level colours and the drive-test trail (Step 3a) ---------------------------
+
+    @Test
+    @DisplayName("level colours are the meter HUD's: grey, red, orange, yellow, green")
+    void levelColoursMatchTheHud() {
+        // These are the exact values SignalHudOverlay drew before Step 3a moved them here.
+        assertEquals(0xAAAAAA, LensStyle.levelRgb(ServiceLevel.NONE));
+        assertEquals(0xFF5555, LensStyle.levelRgb(ServiceLevel.POOR));
+        assertEquals(0xFFAA00, LensStyle.levelRgb(ServiceLevel.FAIR));
+        assertEquals(0xFFFF55, LensStyle.levelRgb(ServiceLevel.GOOD));
+        assertEquals(0x55FF55, LensStyle.levelRgb(ServiceLevel.EXCELLENT));
+        assertEquals(0xAAAAAA, LensStyle.levelRgb(null), "a missing level is drawn as no service");
+
+        int[] hud = LensStyle.levelArgbByBars();
+        assertEquals(List.of(0xFFAAAAAA, 0xFFFF5555, 0xFFFFAA00, 0xFFFFFF55, 0xFF55FF55),
+                List.of(hud[0], hud[1], hud[2], hud[3], hud[4]));
+        hud[0] = 0;
+        assertEquals(0xFFAAAAAA, LensStyle.levelArgbByBars()[0], "each call hands out a fresh copy");
+    }
+
+    @Test
+    @DisplayName("handovers get a white pillar, reselections a yellow one, nothing else a pillar")
+    void pillarsOnlyForMobilityEvents() {
+        assertEquals(0xFFFFFF, LensStyle.pillarRgb(DriveTestLog.Event.HANDOVER));
+        assertEquals(0xFFFF55, LensStyle.pillarRgb(DriveTestLog.Event.RESELECTION));
+        assertEquals(LensStyle.NO_PILLAR, LensStyle.pillarRgb(DriveTestLog.Event.NONE));
+        assertEquals(LensStyle.NO_PILLAR, LensStyle.pillarRgb(DriveTestLog.Event.OUTAGE));
+        assertEquals(LensStyle.NO_PILLAR, LensStyle.pillarRgb(null));
+    }
+
+    @Test
+    @DisplayName("consecutive samples are joined only across a plausible walking gap")
+    void joinsOnlyNearbySamples() {
+        DriveTestLog.Sample origin = trailSample(0.0);
+        assertTrue(LensStyle.joins(origin, trailSample(5.6), 24.0), "a 1 Hz sprint step joins");
+        assertTrue(LensStyle.joins(origin, trailSample(24.0), 24.0), "the limit itself joins");
+        assertFalse(LensStyle.joins(origin, trailSample(24.5), 24.0), "a teleport does not");
+        assertFalse(LensStyle.joins(null, origin, 24.0), "the first sample has nothing to join");
+    }
+
+    private static DriveTestLog.Sample trailSample(double x) {
+        return new DriveTestLog.Sample(0L, x, 64.0, 0.0, 1L, 0, "band_900",
+                -80.0, 20.0, ServiceLevel.EXCELLENT, 0, 1);
     }
 }

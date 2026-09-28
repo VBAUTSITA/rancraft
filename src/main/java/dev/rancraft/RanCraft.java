@@ -31,6 +31,8 @@ public final class RanCraft {
         ModCreativeTabs.register(modBus);
 
         container.registerConfig(ModConfig.Type.COMMON, RanCraftConfig.SPEC);
+        // RF Vision Step 3a: the drive-test trail's own knobs. Only loaded on a physical client.
+        container.registerConfig(ModConfig.Type.CLIENT, RanCraftConfig.CLIENT_SPEC);
 
         LOGGER.info("RANCraft initialised");
     }

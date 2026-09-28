@@ -21,6 +21,7 @@
   "item.rancraft.rf_lens": "RF Lens",
   "item.rancraft.rf_lens.tooltip.wear": "Wear it to see radio",
   "item.rancraft.rf_lens.tooltip.keys": "[B] cycle band  [V] cycle layers",
+  "item.rancraft.rf_lens.tooltip.drivetest": "Trail layer: /rancraftc drivetest export saves it as CSV",
   "key.categories.rancraft": "RANCraft",
   "key.rancraft.lens_band": "RF Lens: cycle band",
   "key.rancraft.lens_layers": "RF Lens: cycle layers",
@@ -29,5 +30,11 @@
   "rancraft.lens.layers.antennas": "Antennas",
   "rancraft.lens.layers.links": "Links",
   "rancraft.lens.layers.coverage": "Coverage",
-  "rancraft.lens.band.all": "All bands"
+  "rancraft.lens.layers.trail": "Drive-test trail",
+  "rancraft.lens.band.all": "All bands",
+  "commands.rancraftc.drivetest.exported": "Drive test: %s sample(s) from %s written to %s",
+  "commands.rancraftc.drivetest.excel_hint": "Excel on a comma-decimal locale: open it with Data > From Text/CSV (comma delimiter, '.' decimal), not by double-click.",
+  "commands.rancraftc.drivetest.empty": "Drive test: nothing recorded yet. Wear the RF Lens with the trail layer on, or hold a Field Test Meter, and walk.",
+  "commands.rancraftc.drivetest.failed": "Drive test: could not write the log: %s",
+  "commands.rancraftc.drivetest.cleared": "Drive test: cleared %s sample(s)."
 }

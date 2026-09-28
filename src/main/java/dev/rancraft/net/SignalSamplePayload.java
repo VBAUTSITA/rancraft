@@ -3,6 +3,7 @@ package dev.rancraft.net;
 import dev.rancraft.RanCraft;
 import dev.rancraft.rf.CellParams;
 import dev.rancraft.rf.CellSample;
+import dev.rancraft.rf.DriveTestLog;
 import dev.rancraft.rf.ReceiverState;
 import dev.rancraft.rf.ServiceLevel;
 import dev.rancraft.rf.SignalSample;
@@ -18,13 +19,27 @@ import net.minecraft.resources.ResourceLocation;
  * Server to client signal readout.
  *
  * <p>Only the top {@value #MAX_CELLS} cells are serialized; the HUD never needs more and the packet
- * goes out at 1 Hz per player.
+ * goes out at 1 Hz per player. The serving cell is always among them, even when hysteresis holds it
+ * below the fourth strongest (see {@link #topCells}).
  *
  * <p><b>The client computes nothing.</b> Gain, SINR, service level and the choice of serving cell
  * are all decided server-side and shipped as values. Everything here is a number to render.
  *
- * @param version               protocol version, {@value #VERSION} in Phase 2.
+ * <p>Sent to a player holding a Field Test Meter (the HUD), and since RF Vision Step 3a also to one
+ * wearing an RF Lens with the drive-test trail on. Both come from the same single evaluation per
+ * interval; see {@code world.SignalTicker}.
+ *
+ * @param version               wire version, {@value #VERSION} since RF Vision Step 3a.
  * @param servingConflictNote   one pre-rendered PCI warning line for the serving cell, or empty.
+ * @param rxX                   <b>Step 3a.</b> Where the server evaluated: the receiver's eye
+ *                              position at the moment of measurement. The drive-test trail is drawn
+ *                              here rather than where the client happens to be when the packet
+ *                              lands, which lags by latency times walking speed. NaN on the client's
+ *                              "nothing received yet" placeholder ({@link #empty(long, int)}).
+ * @param cellsHeard            <b>Step 3a.</b> How many cells the evaluation heard in total, which
+ *                              can exceed the {@value #MAX_CELLS} carried in {@link #cells()}. The
+ *                              drive-test log's {@code cells} column needs the real count: capped at
+ *                              four it would hide exactly the pilot-pollution case it exists for.
  */
 public record SignalSamplePayload(
         int version,
@@ -40,13 +55,26 @@ public record SignalSamplePayload(
         String servingBandId,
         double servingFrequencyMhz,
         double metersPerBlock,
-        String servingConflictNote
+        String servingConflictNote,
+        // ---- RF Vision Step 3a (VERSION 3) ----
+        double rxX,
+        double rxY,
+        double rxZ,
+        int cellsHeard
 ) implements CustomPacketPayload {
 
     public static final int MAX_CELLS = 4;
 
-    /** Bumped from 1 when Phase 2 added SINR, the serving cell id and the pattern figures. */
-    public static final int VERSION = 2;
+    /**
+     * Wire version, written as the first field.
+     *
+     * <ul>
+     *   <li><b>2</b> -- Phase 2 added SINR, the serving cell id and the pattern figures.
+     *   <li><b>3</b> -- RF Vision Step 3a appended the evaluation point ({@code rxX, rxY, rxZ}) and
+     *       {@code cellsHeard}, for the drive-test trail.
+     * </ul>
+     */
+    public static final int VERSION = 3;
 
     private static final int MAX_NOTE_LENGTH = 160;
 
@@ -63,17 +91,22 @@ public record SignalSamplePayload(
     public static final StreamCodec<FriendlyByteBuf, SignalSamplePayload> STREAM_CODEC =
             StreamCodec.of(SignalSamplePayload::write, SignalSamplePayload::read);
 
+    /**
+     * @param rxX the receiver position the sample was evaluated at (the eye), so the drive-test
+     *            trail can mark the exact point measured.
+     */
     public static SignalSamplePayload of(
             SignalSample sample,
             String bandId,
             double frequencyMhz,
             double metersPerBlock,
-            String conflictNote) {
+            String conflictNote,
+            double rxX, double rxY, double rxZ) {
 
         List<CellSample> cells = sample.cells();
         return new SignalSamplePayload(
                 VERSION,
-                cells.size() <= MAX_CELLS ? cells : List.copyOf(cells.subList(0, MAX_CELLS)),
+                topCells(cells, sample.servingCellId(), MAX_CELLS),
                 sample.timestampTick(),
                 sample.servingCellId(),
                 sample.sinrDb(),
@@ -85,14 +118,80 @@ public record SignalSamplePayload(
                 bandId,
                 frequencyMhz,
                 metersPerBlock,
-                conflictNote == null ? "" : conflictNote);
+                conflictNote == null ? "" : conflictNote,
+                rxX, rxY, rxZ,
+                cells.size());
     }
 
-    public static SignalSamplePayload empty(long tick, int handoverCount) {
+    /** An out-of-service sample evaluated at this point. */
+    public static SignalSamplePayload empty(long tick, int handoverCount, double rxX, double rxY, double rxZ) {
         return new SignalSamplePayload(
                 VERSION, List.of(), tick, ReceiverState.NO_CELL,
                 Double.NEGATIVE_INFINITY, Double.NEGATIVE_INFINITY, 0.0,
-                ServiceLevel.NONE, handoverCount, 0, "", 0.0, 1.0, "");
+                ServiceLevel.NONE, handoverCount, 0, "", 0.0, 1.0, "",
+                rxX, rxY, rxZ, 0);
+    }
+
+    /**
+     * The client's "nothing received yet" placeholder. It has no evaluation point (NaN), so it is
+     * never mistaken for a measurement; see {@link #hasReceiverPosition()}.
+     */
+    public static SignalSamplePayload empty(long tick, int handoverCount) {
+        return empty(tick, handoverCount, Double.NaN, Double.NaN, Double.NaN);
+    }
+
+    /**
+     * The strongest {@code max} cells, strongest first, with one exception: when hysteresis holds the
+     * serving cell below the cut, it takes the last kept slot.
+     *
+     * <p>Before RF Vision Step 3a this was a plain cut, so a receiver camped on its fifth-strongest
+     * cell -- easy beside a column of stacked co-channel masts, all within the handover hysteresis of
+     * each other -- got a payload whose serving cell was missing. The HUD then drew NO SERVICE over a
+     * perfectly real (if interference-drowned) serving link, hiding the very diagnosis it exists for,
+     * and the drive-test log would have recorded an outage that never happened. The lens's link rays
+     * already used this rule ({@code SignalTicker.chooseLinks}); the HUD now agrees with them.
+     *
+     * <p>The list stays strongest-first, because the serving cell is weaker than everything it now
+     * follows.
+     */
+    static List<CellSample> topCells(List<CellSample> cells, long servingCellId, int max) {
+        if (cells.size() <= max) {
+            return cells;
+        }
+        List<CellSample> top = new ArrayList<>(cells.subList(0, max));
+        for (int i = max; i < cells.size(); i++) {
+            if (cells.get(i).cellId() == servingCellId) {
+                top.set(max - 1, cells.get(i));
+                break;
+            }
+        }
+        return List.copyOf(top);
+    }
+
+    /** False only on the client's placeholder: every server sample carries its evaluation point. */
+    public boolean hasReceiverPosition() {
+        return Double.isFinite(rxX) && Double.isFinite(rxY) && Double.isFinite(rxZ);
+    }
+
+    /**
+     * This sample as one drive-test log entry: every field copied from what the server sent, nothing
+     * derived. RSRP and PCI are the serving cell's; with no serving cell the sample is logged as
+     * NO SERVICE with no RSRP, exactly as the HUD would draw it.
+     */
+    public DriveTestLog.Sample toDriveTestSample() {
+        CellSample serving = serving();
+        boolean hasServing = serving != null;
+        return new DriveTestLog.Sample(
+                timestampTick,
+                rxX, rxY, rxZ,
+                hasServing ? servingCellId : ReceiverState.NO_CELL,
+                hasServing ? serving.pci() : 0,
+                hasServing ? servingBandId : "",
+                hasServing ? serving.rsrpDbm() : Double.NaN,
+                sinrDb,
+                serviceLevel,
+                handoverCount,
+                cellsHeard);
     }
 
     /** The cell the server chose, which hysteresis may hold below the strongest. */
@@ -144,6 +243,11 @@ public record SignalSamplePayload(
         buf.writeDouble(payload.servingFrequencyMhz);
         buf.writeDouble(payload.metersPerBlock);
         buf.writeUtf(payload.servingConflictNote, MAX_NOTE_LENGTH);
+        // ---- VERSION 3 ----
+        buf.writeDouble(payload.rxX);
+        buf.writeDouble(payload.rxY);
+        buf.writeDouble(payload.rxZ);
+        buf.writeVarInt(payload.cellsHeard);
     }
 
     private static SignalSamplePayload read(FriendlyByteBuf buf) {
@@ -170,10 +274,15 @@ public record SignalSamplePayload(
         double frequencyMhz = buf.readDouble();
         double metersPerBlock = buf.readDouble();
         String note = buf.readUtf(MAX_NOTE_LENGTH);
+        double rxX = buf.readDouble();
+        double rxY = buf.readDouble();
+        double rxZ = buf.readDouble();
+        int cellsHeard = buf.readVarInt();
 
         return new SignalSamplePayload(
                 version, cells, tick, servingCellId, sinrDb, interferenceDbm, noiseDbm,
-                serviceLevel, handoverCount, coChannelCount, bandId, frequencyMhz, metersPerBlock, note);
+                serviceLevel, handoverCount, coChannelCount, bandId, frequencyMhz, metersPerBlock, note,
+                rxX, rxY, rxZ, cellsHeard);
     }
 
     private static ServiceLevel serviceLevelOf(byte ordinal) {

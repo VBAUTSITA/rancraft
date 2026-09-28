@@ -682,3 +682,158 @@ by checking out the Phase 1 code, and that is worth doing before claiming the cr
 
 Client-side rendering in particular is completely unexercised: the HUD layout, the polar plot, the
 `[!]` marker and the degree-sign width probe have all been compiled but never drawn.
+
+---
+
+# RANCraft Phase 3 — implementation notes
+
+Spec: `PHASE_3_PROMPT.md`. Tracker and follow-ups: `PHASE_3.md`. One section per slice.
+
+---
+
+## Slice 0 — RF Vision Step 3a: drive-test trail and CSV export
+
+The precondition `PHASE_3_PROMPT.md` recommends: Step 3a edits `SignalTicker` and
+`SignalSamplePayload`, and so does §3A.3, so 3a lands first rather than interleaving the two.
+Design: `VISION_STEP3.md` Part 3a.
+
+### What was built
+
+| Piece | Where | Notes |
+|---|---|---|
+| `DriveTestLog` | `rf/` (pure) | Ring buffer, event classification, stationary de-dup, RFC 4180 CSV. Copied from the session scratchpad after review; two changes, below. |
+| Evaluation point on the wire | `net/SignalSamplePayload` | Appended `rxX, rxY, rxZ` (the eye position the server evaluated at) and `cellsHeard`. `VERSION` 2 → 3. |
+| Protocol | `net/ModPayloads` | `PROTOCOL_VERSION` "3" → "4". |
+| Server send rule | `world/SignalTicker` | The sample now goes to a player holding a meter **or** wearing a lens whose settings show the trail. Still one evaluation per player per interval. |
+| Client log | `client/ClientDriveTest` | Every received sample, one `DriveTestLog` per dimension. |
+| Trail | `client/TrailRenderer` | Camera-facing squares in the HUD's level colours; white pillar = handover, yellow = reselection; a faint neutral line joins consecutive samples. |
+| Export / clear | `client/DriveTestCommands` | `/rancraftc drivetest export` and `/rancraftc drivetest clear` via `RegisterClientCommandsEvent`. |
+| Layer | `item/LensLayers`, `item/LensSettings` | `TRAIL` preset; `ALL` includes it. `showTrail` appended as the 5th `LensSettings` field. |
+| Client config | `RanCraftConfig.CLIENT_SPEC` | New `config/rancraft-client.toml`: `driveTestCapacity` (3600), `trailRenderDistance` (128). |
+| Shared colours | `client/LensStyle` | The HUD's five level colours moved here so the trail and the meter can never drift. Values unchanged, pinned by a test. |
+
+### Review changes to the scratchpad `DriveTestLog`
+
+1. **An exact replay of the previous sample is ignored.** The server replays its cached payload
+   (same tick, same everything) while the player stands still. Normally the stationary rule
+   collapses that, but right after a handover the previous entry is an event, which the stationary
+   rule must never replace. So standing still on a handover spot logged the handover sample twice:
+   once as the event, once as a plain row with the same tick. Now an identical sample is a no-op.
+   Record equality compares doubles with `Double.compare`, so NaN RSRP on no-service rows still
+   matches.
+2. **`forEach(Consumer)`** was added: the renderer walks up to 3,600 entries every frame, and
+   `entries()` copies.
+
+Tests: 19 → 22 (`exactReplayIsIgnored`, `exactReplayWithNaNIsIgnored`, `forEachMatchesEntries`).
+The 19 originals are unchanged.
+
+### Deviations from VISION_STEP3.md and the slice brief
+
+| Design text | What was done | Why |
+|---|---|---|
+| Payload gains `rxX, rxY, rxZ` | also `cellsHeard` (append, same v3 bump) | The payload carries at most 4 cells. The CSV `cells` column would silently cap at 4, which hides exactly the pilot-pollution/stacked-mast case a drive test exists to find. Same precedent as `coChannelCount`, which is also counted over the full list. |
+| (not mentioned) | **The 4-cell cut now always keeps the serving cell** (`SignalSamplePayload.topCells`) | **Bug found and fixed.** A plain top-4 cut dropped a serving cell that hysteresis held at rank 5 or lower, which is easy next to a column of stacked co-channel masts, all within 3 dB of each other. The HUD then drew NO SERVICE over a real (interference-drowned) serving link, hiding the diagnosis; the trail would have logged a false outage. The lens's `chooseLinks` already used this rule. **This changes the meter HUD in that one edge case**, so slice 4's "byte-identical meter" gate compares against this slice, not Phase 2. |
+| `drivetest-<timestamp>.csv` | one file per dimension: `drivetest-<yyyyMMdd-HHmmss>-<dimension>.csv`, e.g. `...-minecraft_overworld.csv` | Overworld and Nether coordinates are different places. One table mixing them would place rows next to each other that describe unrelated ground. The column header is exactly as designed. |
+| one log | one `DriveTestLog` per dimension, keyed by the client's level at receipt | Same reason, for drawing: an Overworld trail must not be drawn in the Nether. The dimension at receipt is the dimension measured in: samples and the respawn packet travel one ordered connection, and both are queued FIFO on the client thread (checked in NeoForge's `MainThreadPayloadHandler` / `ClientPayloadContext.enqueueWork` and vanilla `PacketUtils.ensureRunningOnSameThread`). |
+| default 3,600 samples | `driveTestCapacity` in a new **CLIENT** config spec, plus `trailRenderDistance` | "Everything tunable goes in RanCraftConfig." These are client-only knobs, so they sit in a CLIENT spec (FML loads it only on a physical client) rather than COMMON, where a server admin would see settings they cannot affect. A capacity change applies to a dimension's log when it next starts (after `clear`). |
+| trail samples | every received sample is logged, from the meter or the lens | A Field Test Meter is what a real drive-test scanner is, so a walk with the meter out is a drive test too. The trail layer only decides whether the log is drawn. |
+| (not mentioned) | the lens band filter does not apply to the trail | The trail records what the receiver got; the serving band is part of that result, not a view choice. |
+| (not mentioned) | pre-3a lens saves: a missing `show_trail` is derived as `lobes && links && coverage` | A lens saved on ALL gains the trail (ALL now includes it). A lens narrowed to one layer (say LINKS) stays on it, rather than waking up with the trail on and reading as an unnamed combination. `show_trail` is always written from now on, so the rule only touches pre-3a data. Pinned by `LensSettingsTest`. |
+
+### Clearing: kept until `/rancraftc drivetest clear`
+
+The brief said to clear the log on disconnect and dimension change only if `VISION_STEP3.md` says
+so. It does not (it only says `/rancraftc drivetest clear` resets it). So **the log survives
+disconnect, respawn and dimension change**, unlike the meter and lens readouts that `ClientEvents`
+clears. Per-dimension logs keep a portal trip from smearing trails together.
+
+Consequence, stated plainly: the client cannot reliably tell which world it joined, so **joining a
+different world keeps the old trail under the same dimension names** (drawn in the new world at the
+old coordinates, and exported together). Run `/rancraftc drivetest clear` when switching worlds.
+Logged as a follow-up in `PHASE_3.md`.
+
+### Server cost
+
+- **No new evaluation for anyone who was already evaluated.** The default lens (ALL) already had
+  link rays on, so it was already evaluated each interval; it now also receives the sample packet
+  it already had built and cached.
+- **One new case costs an evaluation:** a wearer on the TRAIL-only preset, who is otherwise idle.
+  It is the same single evaluation the meter and link rays share, with the same cache and the same
+  stagger. ANTENNAS and COVERAGE presets still cost the ticker nothing.
+- **Wire:** +25 bytes per sample (three 8-byte doubles and a one-byte varint while fewer than 128
+  cells are heard), 1 Hz per player who wants it.
+- The ticker's subtleties are untouched: the cache skip while a handover candidate is armed, the
+  lens link cap and band-filter check on replays, the stagger by `player.getId()`, `forget()` on
+  logout, dimension change and respawn. A cached replay carries the point of the evaluation it
+  replays, which `isCurrent()` keeps within 0.5 blocks of the player.
+
+### Honest-abstraction notes (also at the code sites)
+
+- **Nothing on the trail is computed client-side.** `SignalSamplePayload.toDriveTestSample()` is a
+  field-for-field copy (tested). The only derived thing is the event, read off consecutive server
+  values; a handover is the server's own counter going up, never guessed from a cell change.
+- **`y` is eye height.** The server evaluates at the eye, so markers hang at eye height and the CSV's
+  `y` is feet + 1.62 when standing (lower when sneaking or swimming).
+- **The trail is a record, not a map.** The joining line is a faint neutral white on purpose: nothing
+  was measured along it, and colouring it would claim otherwise. Gaps over 24 blocks (teleport,
+  respawn, relog) are not joined at all.
+- **RESELECTION covers two things:** recovery from outage, and the first cell after the server reset
+  the handover counter (respawn, dimension change, relog). Both are "serving cell changed without an
+  A3 handover"; the CSV cannot tell them apart.
+- **OUTAGE gets no pillar.** It shows as the marker turning grey; a pillar per outage sample would
+  bury the handovers.
+- **1 Hz sampling** (the configured `evaluationIntervalTicks`). A sprinting player skips ground
+  between markers, as a real scanner does at its own rate.
+- **`tick`** is the server game time of the evaluation. Exact replays are dropped (above), so a
+  cached replay never adds a second row for the same evaluation.
+
+### StreamCodec ceiling
+
+`LensSettings.STREAM_CODEC` is a `StreamCodec.composite`, which in 1.21.1 takes at most **6**
+fields (verified in the decompiled `StreamCodec`: overloads stop at `Function6`). `LensSettings` is
+now at **5**. Step 3b's metric would make 6; a seventh must switch to a hand-written
+`StreamCodec.of(...)`. Noted in the `LensSettings` javadoc. Phase 3 §3C.2 already says not to add a
+field for backhaul links.
+
+### Spec vs tree, for later slices
+
+`PHASE_3_PROMPT.md` §3A.3 says "a player is evaluated if they carry any device or wear a link
+lens", and §3A.2 says the meter "sends SignalSamplePayload only when held". It was written before
+Step 3a landed. The tree now also sends the sample to a lens wearer showing the trail, whether or
+not they carry any device. The trail is a lens path like the link rays (which §3A.2 says "is not a
+device and does not move"), so it stays in `SignalTicker`. Slice 4 must keep
+`sendSample = meterHeld || lensShowsTrail`. Recorded in `PHASE_3.md` follow-ups.
+
+### Versions after this slice
+
+| Thing | Before | After |
+|---|---|---|
+| `ModPayloads.PROTOCOL_VERSION` | "3" | **"4"** (so Phase 3A's bump goes to "5") |
+| `SignalSamplePayload.VERSION` | 2 | **3** |
+| `LensSettings` fields | 4 | **5** (of 6) |
+| `AntennaBlockEntity.DATA_VERSION` | 2 | 2 (untouched) |
+
+### APIs verified against sources (new to this codebase)
+
+`RegisterClientCommandsEvent` (game bus, client only) and `ClientCommandSourceStack`
+(`sendSuccess` and `sendFailure` reach the local chat); `StreamCodec.composite` 5-field overload;
+DFU `optionalFieldOf(name, default)` omits default values on encode (why `show_trail` uses the
+`Optional` form); `ModConfig.Type.CLIENT` loaded only on a physical client; `ModConfigSpec.isLoaded`
+and `getDefault`; `Camera.getLeftVector`/`getUpVector`; `ClickEvent.Action.OPEN_FILE` as vanilla
+`Screenshot` uses it; `Minecraft.gameDirectory`; `RenderType.debugQuads` (translucent, no cull,
+sorted on upload).
+
+### Verification
+
+| Check | Result |
+|---|---|
+| `./gradlew build` | succeeds |
+| Unit tests | **203 passed, 0 failed** (161 before; +22 `DriveTestLogTest`, +7 `SignalSamplePayloadTest`, +7 `LensSettingsTest`, +3 `DriveTestCommandsTest`, +3 `LensStyleTest`; `LensLayersTest` updated in place) |
+| `rf` Minecraft/NeoForge/Mojang imports | **0** (grep) |
+| Headless coverage | CSV shape and comma-decimal locale safety, stationary de-dup, exact-replay drop, event classification, payload v3 round trip (reader and writer agree to the byte), serving cell kept in the cut, drive-test sample is a straight copy, pre-3a lens migration, lens network codec round trip, export file naming |
+
+Not run: `runServer` / `runClient` (the brief forbids `runClient`, and nothing here needs a
+headless server to prove). **Needs a human in game:** the trail drawing itself, pillars at a real
+handover, the export command writing and opening the file, the portal behaviour, and the
+regression check that meter HUD, link rays and the handover counter behave as before. The list is
+in `PHASE_3.md`.

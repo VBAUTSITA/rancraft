@@ -1,5 +1,6 @@
 package dev.rancraft.client;
 
+import dev.rancraft.rf.DriveTestLog;
 import dev.rancraft.rf.ServiceLevel;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -7,7 +8,7 @@ import java.util.List;
 import java.util.Locale;
 
 /**
- * How the RF Lens's Step 2 layers look: colours, label text and where labels sit.
+ * How the RF Lens's Step 2 and Step 3a layers look: colours, label text and where labels sit.
  *
  * <p><b>Every input here is a value the server sent</b> -- a cumulative loss, a cell id, a service
  * level, an RSRP. This class only decides how that value is drawn; it computes no propagation,
@@ -184,6 +185,74 @@ public final class LensStyle {
     /** {@code PCI <pci> · <band>}: the legend tag floated over a cell's painted area. */
     public static String cellLabel(int pci, String bandId) {
         return String.format(Locale.ROOT, "PCI %d · %s", pci, bandId);
+    }
+
+    // ---- service level colours (HUD and drive-test trail) -----------------------------------
+
+    /**
+     * Service-level colours indexed by {@link ServiceLevel#bars()}: grey (NO SERVICE), red (POOR),
+     * orange (FAIR), yellow (GOOD), green (EXCELLENT). 0xRRGGBB. The meter HUD's bar colours
+     * ({@link SignalHudOverlay} reads them from here) and the drive-test trail's marker colours, so a
+     * marker on the trail reads exactly as the meter did at that spot.
+     */
+    private static final int[] LEVEL_RGB = {0xAAAAAA, 0xFF5555, 0xFFAA00, 0xFFFF55, 0x55FF55};
+
+    /** A service level's colour. 0xRRGGBB. */
+    public static int levelRgb(ServiceLevel level) {
+        return LEVEL_RGB[(level == null ? ServiceLevel.NONE : level).bars()];
+    }
+
+    /** The five level colours, opaque, indexed by bar count. A fresh copy: 0xAARRGGBB. */
+    public static int[] levelArgbByBars() {
+        int[] argb = new int[LEVEL_RGB.length];
+        for (int bars = 0; bars < argb.length; bars++) {
+            argb[bars] = argb(255, LEVEL_RGB[bars]);
+        }
+        return argb;
+    }
+
+    // ---- drive-test trail ---------------------------------------------------------------------
+
+    /** Returned by {@link #pillarRgb} for an entry that gets no pillar. Not a colour. */
+    public static final int NO_PILLAR = -1;
+
+    /** A tall white pillar: the server's handover counter went up here. */
+    public static final int HANDOVER_PILLAR_RGB = 0xFFFFFF;
+
+    /** A tall yellow pillar: the serving cell changed without a handover (e.g. outage recovery). */
+    public static final int RESELECTION_PILLAR_RGB = 0xFFFF55;
+
+    /**
+     * The pillar colour for a drive-test event, or {@link #NO_PILLAR}. Only the two mobility events
+     * get one; an outage already shows as the marker turning grey, and a pillar per outage sample
+     * would bury the handovers the trail is for.
+     */
+    public static int pillarRgb(DriveTestLog.Event event) {
+        if (event == null) {
+            return NO_PILLAR;
+        }
+        return switch (event) {
+            case HANDOVER -> HANDOVER_PILLAR_RGB;
+            case RESELECTION -> RESELECTION_PILLAR_RGB;
+            case NONE, OUTAGE -> NO_PILLAR;
+        };
+    }
+
+    /**
+     * Whether two consecutive trail samples are joined by a line. Only samples close enough to
+     * plausibly be one walk: a sample further than {@code maxGapBlocks} from the one before it
+     * followed a teleport, a respawn or a relog, and a line across that gap would claim a path
+     * nobody walked. The line never says anything about signal in between -- nothing was measured
+     * there -- so the renderer draws it in a neutral colour.
+     */
+    public static boolean joins(DriveTestLog.Sample previous, DriveTestLog.Sample next, double maxGapBlocks) {
+        if (previous == null || next == null) {
+            return false;
+        }
+        double dx = next.x() - previous.x();
+        double dy = next.y() - previous.y();
+        double dz = next.z() - previous.z();
+        return dx * dx + dy * dy + dz * dz <= maxGapBlocks * maxGapBlocks;
     }
 
     // ---- label placement --------------------------------------------------------------------

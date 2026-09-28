@@ -111,16 +111,40 @@ cell, level or event always appends, so nothing a diagnosis needs is lost.
 - **Sampling is 1 Hz.** A sprinting player skips ground between markers. A real scanner does too, at
   its own sample rate.
 
+### As built (Phase 3 slice 0)
+
+Implemented as designed above, with these differences (full reasoning in `NOTES.md`, Phase 3,
+slice 0):
+
+- The payload also carries **`cellsHeard`**, the full count of cells heard. The `cells` column would
+  otherwise cap at the four cells the payload carries.
+- The payload's four-cell cut now **always keeps the serving cell** (a bug fix that also affects the
+  meter HUD when hysteresis holds the serving cell at rank 5 or lower).
+- **One log per dimension**, and the export writes one file per dimension:
+  `drivetest-<yyyyMMdd-HHmmss>-<dimension>.csv`. The header is exactly as above.
+- The log is **kept across disconnect, respawn and dimension change** until
+  `/rancraftc drivetest clear`.
+- Every received sample is logged, from the meter or the lens; the trail layer only decides
+  whether it is drawn. The lens band filter does not apply to the trail.
+- Capacity and trail render distance are client config (`config/rancraft-client.toml`).
+
 ### Done when
 
-- [ ] Wearing the lens leaves a coloured trail of server-measured samples at the measured positions
-- [ ] Handovers and reselections are visibly marked where they happened
-- [ ] Standing still does not pile up duplicate markers
-- [ ] `/rancraftc drivetest export` writes well-formed RFC 4180 CSV whose numbers stay correct on a
-      comma-decimal default locale
-- [x] `DriveTestLog` is pure and unit-tested — **19 tests green**, built in isolation while the
-      Step 2 workflow held the build; not yet copied into `src/`
-- [ ] Nothing on the trail is computed client-side
+`[~]` = built and unit-tested where possible, needs an in-game check.
+
+- [~] Wearing the lens leaves a coloured trail of server-measured samples at the measured positions
+- [~] Handovers and reselections are visibly marked where they happened *(classification is
+      unit-tested; the pillars need an in-game look)*
+- [x] Standing still does not pile up duplicate markers *(the log keeps one entry, and exact
+      replays of a cached sample are dropped, `DriveTestLogTest`; the renderer draws one marker
+      per entry)*
+- [~] `/rancraftc drivetest export` writes well-formed RFC 4180 CSV whose numbers stay correct on a
+      comma-decimal default locale *(the CSV text is unit-tested under `es-PE`; the command writing
+      the file needs an in-game run)*
+- [x] `DriveTestLog` is pure and unit-tested — **22 tests green**, in `src/` since Phase 3 slice 0
+- [x] Nothing on the trail is computed client-side *(`SignalSamplePayload.toDriveTestSample()` is a
+      field-for-field copy, pinned by `SignalSamplePayloadTest`; the renderer only picks colours for
+      server-named levels and events)*
 
 ---
 
@@ -171,7 +195,8 @@ Every threshold is `ModConfigSpec` config, with commonly used planning defaults
 
 ### Scalability ceiling to know about
 
-`LensSettings` reaches **6 fields** in this step (band filter, lobes, links, coverage, trail, metric).
+`LensSettings` reaches **6 fields** in this step (band filter, lobes, links, coverage, trail, metric);
+3a took it to 5.
 `StreamCodec.composite` in 1.21.1 supports at most 6. Any further lens setting has to switch that
 codec to a hand-written `StreamCodec.of(...)`, as `SignalSamplePayload` already does. It is not hard;
 it just must not be discovered by a compile error.
@@ -200,7 +225,7 @@ it just must not be discovered by a compile error.
 
 ## Build order
 
-1. **3a pure logic** — `DriveTestLog` + tests. *Collision-free; started while Step 2 finishes.*
+1. **3a pure logic** — `DriveTestLog` + tests. *Done.*
 2. **3a wiring** — payload position, client log, trail renderer, client command, `TRAIL` preset.
-   *Waits for the Step 2 workflow to release the build: it edits the same files.*
+   *Done in Phase 3 slice 0; in-game checks pending.*
 3. **3b** — survey KPI fields, metric layer, problem finder + tests, diagnose command.

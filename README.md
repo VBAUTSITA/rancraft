@@ -37,9 +37,13 @@ To run a headless dedicated server instead: `.\gradlew.bat runServer`
 - **RF Vision, Step 2** — link rays (see exactly which cells are hitting you and where the signal is
   lost to terrain) and best-server coverage painting on the ground, with band and layer cycling
   (default keys `B` / `V`).
+- **RF Vision, Step 3a** — drive-test trail: with the lens on, every server measurement leaves a
+  marker where it was taken, coloured by service level, with pillars at handovers. Export it as CSV
+  with `/rancraftc drivetest export` (written to `<game dir>/rancraft/drivetests/`), reset it with
+  `/rancraftc drivetest clear`.
 
-See `VISION.md` for the full design of the vision feature, `VISION_STEP3.md` for what's planned
-next (drive-test logging and automatic problem diagnosis), and `NOTES.md` for the full build log,
+See `VISION.md` for the full design of the vision feature, `VISION_STEP3.md` for Step 3 (the
+drive-test log, and the planned automatic problem diagnosis), and `NOTES.md` for the full build log,
 every tuning decision, every deviation from spec, and what's honestly modeled vs. simplified.
 
 ## Tests

@@ -50,10 +50,12 @@ public final class SignalHudOverlay {
     private static final int COLOR_TITLE = 0xFFFFFFFF;
     private static final int COLOR_WARN = 0xFFFFAA00;
 
-    /** Indexed by bar count: 0 grey, 1 red, 2 orange, 3 yellow, 4 green. */
-    private static final int[] COLOR_BY_BARS = {
-            0xFFAAAAAA, 0xFFFF5555, 0xFFFFAA00, 0xFFFFFF55, 0xFF55FF55
-    };
+    /**
+     * Indexed by bar count: 0 grey, 1 red, 2 orange, 3 yellow, 4 green. The values live in
+     * {@link LensStyle} since RF Vision Step 3a, so the drive-test trail's markers can never drift
+     * from the meter's colours; they are unchanged (pinned by {@code LensStyleTest}).
+     */
+    private static final int[] COLOR_BY_BARS = LensStyle.levelArgbByBars();
 
     @SubscribeEvent
     public static void registerLayers(RegisterGuiLayersEvent event) {
