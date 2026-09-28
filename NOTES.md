@@ -1441,6 +1441,7 @@ did not: an estimate lands bit-exactly on a tower only by symmetry, which that t
 | Unit tests | **259: 258 passed, 0 failed, 1 skipped** (231 + 9 `RangingTest` + 19 `LocatorSolverTest`; the skip is still `utilIsPure`) |
 | `rf` purity | asserted by `PackagePurityTest` (5 new `rf` files, `java.util` only) |
 | `./gradlew runGameTestServer` | 2 of 2 passed; the log shows "RANCraft loaded 4 band(s)" and no parse error with the new `bandwidth_mhz` |
+| Existing config file | that run's `run/gameTestServer/config/rancraft-common.toml` predates slice 3; NeoForge corrected it in place with the five new entries at their defaults (-100.0, 8, 6.0, 0.25, 1200) and kept the old file as `rancraft-common-1.toml.bak`. An upgraded server gets the same, with nothing to edit by hand. |
 
 Nothing to check in game yet: the Locator item, payload and HUD are slice 5, which is where the
 3A done-when items get their manual checks.
