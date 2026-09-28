@@ -40,7 +40,7 @@ Legend: `[x]` done and verified · `[~]` partly done / needs a manual in-game ch
 | 0 | Land Vision Step 3a (drive-test trail) | pre | [~] landed + gate fixes, build green (210 tests); in-game checks below | af20bb4; gate fixes 3906418 |
 | 0a | Vision Step 3a follow-ups: trail cleared on logout, export link opens the folder | pre | [~] both fixed, build green (224 tests, 1 skipped); two in-game checks below | 0afda73; docs f2f8453 |
 | 1 | Datapack folder fix + runtime check + purity test | pre | [x] folders fixed, harvest game test red before / green after, purity test in `build` (219 tests, 1 skipped until `util` exists); one quick in-game look below | 212f86c; 1471bf3 |
-| 2 | DeviceRequirement + tests | 3A | [ ] | |
+| 2 | DeviceRequirement + tests | 3A | [x] `rf/DeviceRequirement` per §3A.1, verdict order NO_SERVICE → LOW_QUALITY → LOW_TIER on the serving cell; test 1 green (7 tests, 231 total, 1 skipped) | see git log (slice 2 commit) |
 | 3 | Ranging + LocatorSolver + tests 2–12 | 3A | [ ] | |
 | 4 | SignalDevice + ticker refactor + meter port (regression gate) | 3A | [ ] | |
 | 5 | Locator item, payload, HUD, rings, waypoints, emergency record | 3A | [ ] | |

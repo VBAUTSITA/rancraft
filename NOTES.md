@@ -1209,3 +1209,52 @@ dimension keys, built the way `Level.OVERWORLD` is).
 **Needs a human in game** (in `PHASE_3.md`): export, click the file name, and check that Explorer
 opens the `drivetests` folder rather than Excel opening the CSV. Walk in world A, quit to the title
 screen, join world B with the lens on TRAIL: no markers from A, and an export holds only B's rows.
+
+---
+
+## Slice 2 — `DeviceRequirement` (§3A.1)
+
+### What was built
+
+`rf/DeviceRequirement` exactly as the spec's signature: `record DeviceRequirement(ServiceLevel
+minServiceLevel, int minCapacityTier)`, `NONE = (ServiceLevel.NONE, 0)`,
+`Verdict check(SignalSample, BandTable)`, `enum Verdict { OK, NO_SERVICE, LOW_QUALITY, LOW_TIER }`.
+It is the first reader of `Band.capacityTier`. Pure `rf`, no new imports beyond `java.util.Objects`.
+
+Check order, first failing reason wins:
+
+1. `NO_SERVICE` if `sample.isNoService()` (empty list, serving id not in the list, or level NONE).
+2. `LOW_QUALITY` if `!sample.serviceLevel().atLeast(minServiceLevel)`.
+3. `LOW_TIER` if the **serving** cell's band (`sample.serving()`, never `cells.get(0)`) has
+   `capacityTier < minCapacityTier`.
+
+### Decisions, stated plainly
+
+- **`NONE` still reports `NO_SERVICE`.** The spec lists `NO_SERVICE: sample.isNoService()` with no
+  condition, so it is checked first for every requirement. The verdict describes the link; a device
+  with no requirement (the meter, the Network Locator) keeps working and shows its own degraded
+  state. A device that wants "always works" ignores the verdict rather than getting `OK`.
+- **Unknown band id → fallback band's tier** (`BandTable.getOrFallback`), which is what the engine
+  already propagated that cell with. Removing a band from the datapack therefore judges its cells as
+  `band_900` (tier 1), not as tier 0 or an error.
+- The compact constructor rejects a null level. A negative `minCapacityTier` is allowed and means
+  the same as 0 (every band passes).
+
+### Tests (`DeviceRequirementTest`, 7) — spec test 1
+
+Every verdict on hand-built samples (three kinds of no-service sample; quality before tier; tier at
+and below the minimum; OK at exactly the minimum level and tier). **Serving vs strongest:** a sample
+whose strongest cell is `band_3500` but whose serving cell (held by hysteresis) is `band_900` gives
+`LOW_TIER` for `(GOOD, 3)`; the mirror case (strongest `band_900`, serving `band_3500`) gives `OK`.
+Reading index 0 would have inverted both. The fixture asserts which cell is strongest and which is
+serving, so the test cannot pass by accident.
+
+### Verification
+
+| Check | Result |
+|---|---|
+| `./gradlew build` | succeeds |
+| Unit tests | **231: 230 passed, 0 failed, 1 skipped** (224 + 7 `DeviceRequirementTest`; the skip is still `utilIsPure`) |
+| `rf` purity | asserted by `PackagePurityTest` (passes with the new file) |
+
+Nothing to check in game: nothing calls `check` until slice 4 (SignalDevice) and later devices.
