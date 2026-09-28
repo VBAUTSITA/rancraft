@@ -35,7 +35,7 @@ Legend: `[x]` done and verified · `[~]` partly done / needs a manual in-game ch
 
 | # | Slice | Part | Status | Commit |
 |---|---|---|---|---|
-| 0 | Land Vision Step 3a (drive-test trail) | pre | [~] landed + gate fixes, build green (210 tests); in-game checks below | af20bb4; gate fixes S0_GATE_COMMIT |
+| 0 | Land Vision Step 3a (drive-test trail) | pre | [~] landed + gate fixes, build green (210 tests); in-game checks below | af20bb4; gate fixes 3906418 |
 | 1 | Datapack folder fix + runtime check + purity test | pre | [ ] | |
 | 2 | DeviceRequirement + tests | 3A | [ ] | |
 | 3 | Ranging + LocatorSolver + tests 2–12 | 3A | [ ] | |
