@@ -36,5 +36,15 @@
   "commands.rancraftc.drivetest.excel_hint": "Excel on a comma-decimal locale: open it with Data > From Text/CSV (comma delimiter, '.' decimal), not by double-click.",
   "commands.rancraftc.drivetest.empty": "Drive test: nothing recorded yet. Wear the RF Lens with the trail layer on, or hold a Field Test Meter, and walk.",
   "commands.rancraftc.drivetest.failed": "Drive test: could not write the log: %s",
-  "commands.rancraftc.drivetest.cleared": "Drive test: cleared %s sample(s)."
+  "commands.rancraftc.drivetest.cleared": "Drive test: cleared %s sample(s).",
+  "item.rancraft.network_locator": "Network Locator",
+  "item.rancraft.network_locator.tooltip.what": "Locates you from the cell towers you hear (not GPS)",
+  "item.rancraft.network_locator.tooltip.use": "Use: next waypoint  Sneak + use: save the estimate",
+  "item.rancraft.network_locator.tooltip.waypoints": "Waypoints: %s/%s",
+  "rancraft.locator.waypoint.no_reading": "Network Locator: no current reading. Hold it a moment first.",
+  "rancraft.locator.waypoint.no_fix": "Network Locator: nothing to save, the Locator has no FIX (%s)",
+  "rancraft.locator.waypoint.none": "Network Locator: no waypoints yet. Sneak + use saves the estimate.",
+  "rancraft.locator.waypoint.saved": "Waypoint %s/%s saved: x %s z %s, ±%s m (the estimate, not where you stand)",
+  "rancraft.locator.waypoint.replaced": "Waypoint %s/%s replaced: x %s z %s, ±%s m (the estimate, not where you stand)",
+  "rancraft.locator.waypoint.selected": "Waypoint %s/%s selected"
 }

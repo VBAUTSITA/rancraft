@@ -41,6 +41,29 @@ public final class LocatorStyle {
     /** Below this a ring is not drawn: it would be a dot. */
     public static final double MIN_RING_RADIUS = 0.25;
 
+    /** Fewest straight segments a circle is drawn with, however small. */
+    public static final int MIN_SEGMENTS = 24;
+
+    /** Most segments per circle, so eight 500-block rings stay a few thousand vertices. */
+    public static final int MAX_SEGMENTS = 360;
+
+    /** Target length of one segment, in blocks: a 100-block ring gets about 314 segments. */
+    public static final double SEGMENT_BLOCKS = 2.0;
+
+    /**
+     * How many straight segments to draw a circle of {@code radius} blocks with: about one every
+     * {@value #SEGMENT_BLOCKS} blocks of circumference, clamped to [{@value #MIN_SEGMENTS},
+     * {@value #MAX_SEGMENTS}]. At the cap a 500-block ring's chord sits within 0.2 blocks of the
+     * true circle, well inside any ranging resolution. 0 for a radius not worth drawing.
+     */
+    public static int segments(double radius) {
+        if (!(radius >= MIN_RING_RADIUS) || !Double.isFinite(radius)) {
+            return 0;
+        }
+        double wanted = Math.ceil(2.0 * Math.PI * radius / SEGMENT_BLOCKS);
+        return (int) Math.max(MIN_SEGMENTS, Math.min(MAX_SEGMENTS, wanted));
+    }
+
     /**
      * The horizontal radius of a range ring where it is drawn.
      *

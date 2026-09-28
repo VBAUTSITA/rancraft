@@ -89,9 +89,10 @@ public final class LinkRenderer {
      * both passes land in the same place under Fabulous graphics.
      *
      * <p>In a holder so it is built on the first frame that draws a ray, not when this subscriber
-     * class is loaded during mod construction.
+     * class is loaded during mod construction. Package-private since Phase 3 slice 5: the Network
+     * Locator's rings ({@link LocatorRenderer}) use the same faint pass.
      */
-    private static final class SeeThroughLines {
+    static final class SeeThroughLines {
 
         private SeeThroughLines() {
         }

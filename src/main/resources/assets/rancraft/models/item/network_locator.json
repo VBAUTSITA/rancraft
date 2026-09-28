@@ -1,0 +1,7 @@
+{
+  "_comment": "Placeholder art: a still vanilla compass face, no PNG shipped. The needle does not move: this is not a compass and not GPS. Swap when real art exists.",
+  "parent": "minecraft:item/generated",
+  "textures": {
+    "layer0": "minecraft:item/compass_16"
+  }
+}

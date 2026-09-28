@@ -57,8 +57,19 @@ public final class NetworkLocator {
     /** What each player's Locator last worked out. Forgotten with the rest of the player's device state. */
     static final DeviceMemory<Reading> READINGS = DeviceMemory.create("network_locator.reading");
 
-    /** Server side, once per dispatch; see the class comment. */
+    /**
+     * Server side, once per dispatch; see the class comment.
+     *
+     * <p>Nothing happens while the player is dead. The ticker keeps evaluating a player on the death
+     * screen (it looks at every player on the list), and with {@code keepInventory} the dead entity
+     * still carries the Locator. Stamping a FIX then would put a "last fix" back into the record
+     * that {@link #freezeOnDeath} just cleared, and NeoForge copies it to the respawned player: the
+     * next life would start with a known position it never measured.
+     */
     public static void onSample(ServerPlayer player, ItemStack stack, boolean held, DeviceContext ctx) {
+        if (!player.isAlive()) {
+            return;
+        }
         UUID id = player.getUUID();
         Reading reading = LocatorTracker.update(READINGS.get(id), ctx.sample(), ctx.bands(), ctx.config(),
                 LevelSurfaceProbe.forLocator(ctx.level()), ctx.tick());
