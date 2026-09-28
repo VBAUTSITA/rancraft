@@ -21,9 +21,12 @@ import net.minecraft.world.level.Level;
  * the server sends as the exact point it evaluated. The only thing derived is the <em>event</em>
  * (handover, reselection, outage), read off consecutive server values by {@link DriveTestLog}.
  *
- * <p>Every sample received is logged, whether it arrived because the lens shows the trail or
- * because a Field Test Meter is held. A meter is what a real drive-test scanner is, so a walk with
- * the meter out is a drive test too; the trail only decides whether the log is drawn.
+ * <p>Every sample received is logged, whether it arrived because the lens shows the trail or the
+ * link rays, or because a Field Test Meter is held. A meter is what a real drive-test scanner is, so
+ * a walk with the meter out is a drive test too; the trail only decides whether the log is drawn.
+ * The server sends a sample with every evaluation it runs for this player, so the log sees every
+ * step of the handover counter and marks each handover where it fired (see
+ * {@code DriveTestLog.classify}).
  *
  * <p><b>One log per dimension.</b> The same coordinates mean a different place in the Nether, and a
  * trail recorded in the Overworld drawn there would put markers where nothing was measured. Each

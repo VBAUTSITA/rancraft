@@ -183,6 +183,14 @@ public final class DriveTestLog {
      * condition held for the whole time-to-trigger, while a cell change can also be recovery from an
      * outage. A counter that goes <em>down</em> was reset (respawn, dimension change, relog) and is
      * not a handover.
+     *
+     * <p><b>The log must see every evaluation.</b> It compares a sample only with the one before it,
+     * so it cannot place a handover it never saw. Two handovers across evaluations that were never
+     * sent read as a single HANDOVER on the next sample that arrives, wherever that is. The server
+     * therefore sends the sample with every evaluation that can move the counter
+     * ({@code world.SignalTicker.sendsSample}). A tick gap cannot be used to detect a missed
+     * evaluation here: a cached replay carries the tick of the evaluation it replays, so a genuine
+     * sample after a long stationary replay would look like a gap.
      */
     static Event classify(Sample previous, Sample current) {
         if (previous == null) {

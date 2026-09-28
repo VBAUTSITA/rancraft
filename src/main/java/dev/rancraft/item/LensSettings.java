@@ -33,7 +33,9 @@ import net.minecraft.network.codec.StreamCodec;
  *                     the serving band is part of that result rather than a view choice.
  * @param showLobes    draw antenna radiation patterns. <b>Step 1.</b>
  * @param showLinks    draw rays to the cells currently serving and interfering. <b>Step 2a.</b>
- *                     Costs the server one extra traced ray per drawn link per sample.
+ *                     Costs the server one extra traced ray per drawn link per sample. The wearer
+ *                     is evaluated for the rays, so is also sent the sample and keeps feeding the
+ *                     drive-test log even with the trail hidden (see {@code SignalTicker.sendsSample}).
  * @param showCoverage paint best-server colours onto the terrain. <b>Step 2b.</b> Costs the server
  *                     a time-sliced survey around the wearer.
  * @param showTrail    draw the drive-test trail. <b>Step 3a.</b> Makes the server evaluate the

@@ -88,10 +88,35 @@ class DriveTestLogTest {
     @Test
     @DisplayName("A handover to the same cell id still counts: the counter is authoritative")
     void counterWinsEvenWithoutCellChange() {
-        // Cannot happen in normal play, but if the server ever says it handed over, believe it.
+        // Cannot happen while the log sees every evaluation (a handover always changes the cell),
+        // but if the server ever says it handed over, believe it.
         DriveTestLog log = new DriveTestLog(10);
         log.record(at(0, 0, CELL_A, 0));
         assertEquals(Event.HANDOVER, log.record(at(20, 5, CELL_A, 1)).event());
+    }
+
+    @Test
+    @DisplayName("Handovers the log never saw land as one HANDOVER on the next sample, so the server sends every evaluation")
+    void unseenHandoversLandOnTheNextSample() {
+        // A walk A -> B -> A with handovers at x = 100 and x = 200, and the wearer switching views
+        // at x = 300. Before the slice 0 gate fix a LINKS-only lens was evaluated but not sent the
+        // sample, so the log got only the two ends of the walk.
+        DriveTestLog gap = new DriveTestLog(10);
+        gap.record(at(0, 0, CELL_A, 0));
+        Entry resumed = gap.record(at(6_000, 300, CELL_A, 2));
+        assertEquals(Event.HANDOVER, resumed.event(), "a false pillar at the switch point");
+        assertEquals(1, gap.events(Event.HANDOVER).size(), "and neither real handover is marked");
+
+        // Every evaluation sent: each handover is marked where it fired, and nothing at the switch.
+        DriveTestLog full = new DriveTestLog(10);
+        full.record(at(0, 0, CELL_A, 0));
+        full.record(at(2_000, 100, CELL_B, 1));
+        full.record(at(4_000, 200, CELL_A, 2));
+        assertEquals(Event.NONE, full.record(at(6_000, 300, CELL_A, 2)).event());
+        List<Entry> handovers = full.events(Event.HANDOVER);
+        assertEquals(2, handovers.size());
+        assertEquals(100.0, handovers.get(0).sample().x());
+        assertEquals(200.0, handovers.get(1).sample().x());
     }
 
     // ---- stationary de-duplication ----------------------------------------------------------

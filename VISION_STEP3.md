@@ -126,6 +126,12 @@ slice 0):
   `/rancraftc drivetest clear`.
 - Every received sample is logged, from the meter or the lens; the trail layer only decides
   whether it is drawn. The lens band filter does not apply to the trail.
+- **Every evaluation is sent** (slice 0 gate fix). The server evaluates a player who holds the
+  meter, or whose lens shows the trail or the link rays, and every one of those evaluations now
+  reaches the client. Before, a lens on the LINKS preset was evaluated without being sent the
+  sample. Its handovers then showed up as one false pillar wherever the trail or the meter came
+  back. The log reads handovers off the server's counter between consecutive samples, so it must
+  not miss one.
 - Capacity and trail render distance are client config (`config/rancraft-client.toml`).
 
 ### Done when

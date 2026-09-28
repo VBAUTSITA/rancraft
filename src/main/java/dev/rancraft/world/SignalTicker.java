@@ -62,8 +62,13 @@ import net.neoforged.neoforge.network.PacketDistributor;
  * never disagree about which cells are heard or which one serves. Each drawn link costs one extra
  * traced ray ({@link LinkTracer}), and only while links are on. The drive-test trail (RF Vision
  * Step 3a) costs nothing extra either: it is the same {@link SignalSamplePayload} the meter gets,
- * which now carries the point it was evaluated at, sent whenever the meter is held <em>or</em> the
- * worn lens shows the trail. The client logs it; the HUD still draws only while the meter is held.
+ * which now carries the point it was evaluated at.
+ *
+ * <p><b>Every evaluation is sent.</b> Whoever is evaluated gets the {@link SignalSamplePayload},
+ * whichever view asked for the evaluation (see {@link #sendsSample}). The client's drive-test log
+ * reads handovers off the server's counter, so an evaluation it never saw would hide a handover and
+ * then mark it at the wrong place. The client logs every sample; the HUD still draws only while the
+ * meter is held, and the trail only while the lens shows it.
  *
  * <p>Coverage painting is not driven from here -- it is a much larger, time-sliced job. See
  * {@link CoverageSurveyor}.
@@ -139,18 +144,47 @@ public final class SignalTicker {
             if (Math.floorMod(player.getId(), interval) != phase) {
                 continue;
             }
-            boolean meter = holdsMeter(player);
             LensSettings lens = wornLensOf(player);
-            LensSettings linkLens = lens != null && lens.showLinks() ? lens : null;
-            boolean trail = lens != null && lens.showTrail();
-            // The sample feeds the meter HUD and the lens's drive-test trail alike; either is reason
-            // enough to send it. Still one evaluation: evaluate() builds one sample for both.
-            boolean sendSample = meter || trail;
-            if (!sendSample && linkLens == null) {
+            // One question, not two: whoever is evaluated is sent the sample. See sendsSample.
+            if (!sendsSample(holdsMeter(player), lens)) {
                 continue;
             }
-            evaluate(player, config, sendSample, linkLens);
+            evaluate(player, config, lens != null && lens.showLinks() ? lens : null);
         }
+    }
+
+    /**
+     * Whether this player is evaluated this interval, which is the same as whether they are sent the
+     * sample: {@link #evaluate} always sends it. Three views ask for an evaluation: a held meter (the
+     * HUD), a worn lens showing the drive-test trail (the log), and a worn lens showing link rays
+     * (the rays are built from the same evaluation).
+     *
+     * <p><b>Why the link rays get the sample too.</b> Until the Phase 3 slice 0 gate review, a lens
+     * on the LINKS preset was evaluated but not sent the sample. Its handover state machine kept
+     * running while the client's drive-test log saw nothing. The log reads a handover off the
+     * server's counter going up between two consecutive samples it received. So the first sample
+     * after the wearer went back to the trail, or took the meter out, carried every handover of the
+     * LINKS walk at once. The log then drew one false HANDOVER pillar at the switch point (and wrote
+     * {@code event=HANDOVER} on that CSV row), and none where the handovers fired. The rule is
+     * therefore: <em>every evaluation that can move the handover counter reaches the client</em>. A
+     * player who is not evaluated (no meter, and no lens or one on the ANTENNAS or COVERAGE preset)
+     * has a frozen handover state, so the log misses nothing.
+     *
+     * <p>The extra cost is one {@link SignalSamplePayload} per interval for a wearer who shows only
+     * link rays. That wearer already gets a larger {@link LensLinksPayload} every interval. Nothing
+     * changes on screen: the HUD draws only while the meter is held, and the trail only when shown.
+     *
+     * <p>Pure and package-private so the rule is pinned by {@code SignalTickerTest}. Phase 3 slice 4
+     * replaces the meter check with a scan of carried devices. It must keep "evaluated implies sent"
+     * for devices that trigger an evaluation from the hotbar too (see PHASE_3.md follow-ups).
+     *
+     * @param meterHeld a Field Test Meter in the main hand or offhand.
+     * @param lens      the worn lens's settings, or {@code null} when no lens is worn. The band filter
+     *                  does not matter: a filter that hides every heard cell still has the wearer
+     *                  evaluated (the rays come back empty) and so still moves the handover counter.
+     */
+    static boolean sendsSample(boolean meterHeld, LensSettings lens) {
+        return meterHeld || (lens != null && (lens.showTrail() || lens.showLinks()));
     }
 
     private static boolean holdsMeter(ServerPlayer player) {
@@ -165,12 +199,13 @@ public final class SignalTicker {
     }
 
     /**
-     * @param sendSample true when the player holds a meter (a HUD to feed) or wears a lens showing
-     *                   the drive-test trail (a log to feed). The sample is built and cached either
-     *                   way, so pulling the meter out replays it at once.
-     * @param linkLens   the lens settings when link rays are wanted, otherwise {@code null}.
+     * Evaluates one player, or replays their cached evaluation, and sends the result. The sample is
+     * sent on both paths, with no way to skip it, because the drive-test log must see every
+     * evaluation (see {@link #sendsSample}).
+     *
+     * @param linkLens the lens settings when link rays are wanted, otherwise {@code null}.
      */
-    private static void evaluate(ServerPlayer player, RfConfig config, boolean sendSample, LensSettings linkLens) {
+    private static void evaluate(ServerPlayer player, RfConfig config, LensSettings linkLens) {
         ServerLevel level = player.serverLevel();
         SiteRegistry registry = SiteRegistry.of(level);
 
@@ -190,7 +225,7 @@ public final class SignalTicker {
             if (cached != null
                     && cached.isCurrent(eyeX, eyeY, eyeZ, epoch, siteVersion)
                     && (linkLens == null || cached.hasLinksFor(linkLens, linkCap))) {
-                send(player, sendSample ? cached.payload() : null, linkLens == null ? null : cached.links());
+                send(player, cached.payload(), linkLens == null ? null : cached.links());
                 return;
             }
         }
@@ -230,13 +265,12 @@ public final class SignalTicker {
         CACHE.put(player.getUUID(), new Cached(
                 payload, links, linkLens == null ? LensSettings.ALL_BANDS : linkLens.bandFilter(), linkCap,
                 eyeX, eyeY, eyeZ, epoch, siteVersion));
-        send(player, sendSample ? payload : null, links);
+        send(player, payload, links);
     }
 
+    /** The sample always; the link rays when the lens wants them ({@code links} is null otherwise). */
     private static void send(ServerPlayer player, SignalSamplePayload sample, LensLinksPayload links) {
-        if (sample != null) {
-            PacketDistributor.sendToPlayer(player, sample);
-        }
+        PacketDistributor.sendToPlayer(player, sample);
         if (links != null) {
             PacketDistributor.sendToPlayer(player, links);
         }

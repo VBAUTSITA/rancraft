@@ -704,7 +704,7 @@ Design: `VISION_STEP3.md` Part 3a.
 | `DriveTestLog` | `rf/` (pure) | Ring buffer, event classification, stationary de-dup, RFC 4180 CSV. Copied from the session scratchpad after review; two changes, below. |
 | Evaluation point on the wire | `net/SignalSamplePayload` | Appended `rxX, rxY, rxZ` (the eye position the server evaluated at) and `cellsHeard`. `VERSION` 2 → 3. |
 | Protocol | `net/ModPayloads` | `PROTOCOL_VERSION` "3" → "4". |
-| Server send rule | `world/SignalTicker` | The sample now goes to a player holding a meter **or** wearing a lens whose settings show the trail. Still one evaluation per player per interval. |
+| Server send rule | `world/SignalTicker` | The sample now goes to a player holding a meter **or** wearing a lens whose settings show the trail. Still one evaluation per player per interval. **Superseded by the gate fix below:** every evaluation is sent, a LINKS-only lens included. |
 | Client log | `client/ClientDriveTest` | Every received sample, one `DriveTestLog` per dimension. |
 | Trail | `client/TrailRenderer` | Camera-facing squares in the HUD's level colours; white pillar = handover, yellow = reselection; a faint neutral line joins consecutive samples. |
 | Export / clear | `client/DriveTestCommands` | `/rancraftc drivetest export` and `/rancraftc drivetest clear` via `RegisterClientCommandsEvent`. |
@@ -801,8 +801,11 @@ field for backhaul links.
 lens", and §3A.2 says the meter "sends SignalSamplePayload only when held". It was written before
 Step 3a landed. The tree now also sends the sample to a lens wearer showing the trail, whether or
 not they carry any device. The trail is a lens path like the link rays (which §3A.2 says "is not a
-device and does not move"), so it stays in `SignalTicker`. Slice 4 must keep
-`sendSample = meterHeld || lensShowsTrail`. Recorded in `PHASE_3.md` follow-ups.
+device and does not move"), so it stays in `SignalTicker`. ~~Slice 4 must keep
+`sendSample = meterHeld || lensShowsTrail`.~~ **Superseded by the slice 0 gate fix below:** that
+rule left a LINKS-only lens evaluated but not sent, which put false handover pillars on the trail.
+Slice 4 must keep **"every evaluation sends the sample"** (`SignalTicker.sendsSample`). Recorded in
+`PHASE_3.md` follow-ups.
 
 ### Versions after this slice
 
@@ -837,3 +840,125 @@ headless server to prove). **Needs a human in game:** the trail drawing itself, 
 handover, the export command writing and opening the file, the portal behaviour, and the
 regression check that meter HUD, link rays and the handover counter behave as before. The list is
 in `PHASE_3.md`.
+
+---
+
+## Slice 0 gate fixes (s0-vision3a)
+
+A gate review of slice 0 flagged one defect. I confirmed it against the code and fixed it.
+
+### [major] A LINKS-only lens was evaluated but not sent the sample: false handover pillars
+
+**Confirmed.** `SignalTicker.onServerTick` evaluated anyone holding a meter or wearing a lens with
+the trail *or link rays* on. It sent the `SignalSamplePayload` only for the meter or the trail
+(`sendSample = meter || trail`). `evaluate()` always stores the new handover state
+(`RECEIVERS.put`), so on the LINKS preset the A3 state machine and the handover counter kept
+running while the client's drive-test log saw nothing. `DriveTestLog.classify` compares each
+sample only with the last one it logged, and a counter that went up means HANDOVER. So:
+
+- Walk on ALL (the log's last entry has count N), press V to LINKS (the natural layer for watching
+  the serving ray swap), and cross two cell boundaries (count N+2). Then, 300 blocks on, cycle to
+  TRAIL or ALL, or take the meter out. The first logged sample is classified HANDOVER. That puts one
+  white pillar and one `event=HANDOVER` CSV row at the switch point, and nothing at either real
+  handover.
+- An A→B→A pair on LINKS gives the same false HANDOVER, because the counter wins over the unchanged
+  cell.
+- Same class, not in the report: an outage and recovery while on LINKS showed up as a RESELECTION
+  at the switch point.
+
+This broke VISION_STEP3 3a's "Handovers and reselections are visibly marked where they happened".
+
+**Fix. One rule: every evaluation is sent.**
+
+- `SignalTicker.sendsSample(boolean meterHeld, LensSettings lens)` (package-private, pure) is the
+  single gate: meter held, or the lens shows the trail, or the lens shows link rays. The ticker
+  evaluates exactly those players.
+- `evaluate()` no longer has a `sendSample` parameter. Both of its paths (a fresh evaluation and a
+  cached replay) always send the sample, plus the link rays when they are wanted. There is no
+  longer any way to evaluate someone without sending.
+- **The evaluated set is unchanged:** meter, trail or links, as before. The only change is what an
+  already-evaluated LINKS-only wearer receives.
+
+**Deviation from the review's wording, and why.** The review offered `sendSample = meter ||
+lens != null` "or simply always sending the payload built by an evaluation". Dropped into the old
+loop literally, the first form widens the gate: ANTENNAS and COVERAGE wearers would start costing
+an evaluation every interval. §3A.3 does not ask for that, and the invariant does not need it. A
+player who is not evaluated has a frozen handover state: only `evaluate()` writes `RECEIVERS`, and
+`CoverageSurvey` uses a throwaway `ReceiverState.NONE`. So the log has nothing to miss for them. I
+built the second form. As the review also says, there is no client-side tick-gap rule: a cached
+replay carries the tick of the evaluation it replays, so a genuine sample after a long stationary
+replay would look like a gap.
+
+### Cost (measured)
+
+| | |
+|---|---|
+| Evaluations | **unchanged** (same players, same cache, same stagger) |
+| New traffic | one `SignalSamplePayload` per interval (1 Hz by default) for a wearer showing link rays with neither the trail nor a meter |
+| Payload body, encoded with the real codec | **425 bytes** with 4 cells carried, **176** with 1, **83** with no service. Add about 24 bytes of custom-payload framing (packet id plus `rancraft:signal_sample`), before the connection's compression. |
+| For comparison | the same wearer already gets a `LensLinksPayload` every interval, about 2 KB at the default 8 links (per its javadoc) |
+
+The review's "about 200 bytes" holds for one heard cell; four cells is about 0.45 kB. I measured
+this with a throwaway JUnit probe on a realistic sample (negative coordinates, `band_1800` ids, game
+time 1.2 M ticks) and deleted the probe before committing.
+
+### Side effects, stated plainly
+
+- **The log keeps recording while the lens shows only link rays**, and cycling to TRAIL draws those
+  markers too. That matches slice 0's rule: every received sample is logged, and the trail layer
+  only decides whether the log is drawn.
+- **Meter HUD, one edge case.** A LINKS wearer who takes the meter out now sees a current reading
+  at once, because the latest sample is at most one interval old. Before, the HUD showed whatever
+  was last received (NO SERVICE if that was over 5 s old) until the next evaluation arrived. The
+  values drawn are unchanged. Slice 4's "byte-identical meter" reference is therefore slice 0
+  **plus** this fix.
+
+### Honest-abstraction note (also at the code sites)
+
+- **The log is only as complete as the evaluations.** A real UE measures all the time. In RANCraft,
+  a receiver nobody is looking at (no meter, and the lens off or on ANTENNAS/COVERAGE) is not
+  evaluated at all, like a phone that is switched off. When evaluation resumes, the first change of
+  serving cell may be a reselection, or a handover on the first evaluation, at the resumption point.
+  The log marks it there because that is where the server's state machine acted. The contract is now
+  written on `DriveTestLog.classify` and `SignalTicker.sendsSample`.
+
+### Spec vs tree, for slice 4 (recorded in `PHASE_3.md` follow-ups)
+
+§3A.2 says the meter "sends SignalSamplePayload only when held". §3A.3 lets a device in the hotbar
+trigger an evaluation ("so the Locator's emergency record keeps working in a pocket"). Together
+they would bring this bug back. Take a player with a Locator in the pocket, no meter in hand and no
+lens: they are evaluated and their counter moves, but no sample is sent. The false pillars then
+appear once the meter or the trail comes back. Slice 4 must keep "evaluated implies sent": the
+ticker sends the sample once per evaluation, whatever device or lens caused it. The "only when held"
+part is already enforced where it matters, on the client: `SignalHudOverlay` draws only while a
+meter is in hand. The cost is one sample per interval per evaluated player (numbers above).
+
+### Found along the way, not fixed (pre-existing since Phase 2)
+
+A handover candidate armed before evaluation pauses survives the pause. Evaluation pauses when the
+meter is put away, or the lens is taken off or switched to ANTENNAS/COVERAGE. `CellSelector`
+measures time-to-trigger as a tick difference. So if the same neighbour still qualifies when
+evaluation resumes, the handover fires on the first evaluation, although the A3 condition was never
+observed for the whole TTT. The log marks it correctly, where the server's counter moved, but the
+handover itself may be early. I logged it in the `PHASE_3.md` follow-ups for the slice 4 ticker
+refactor and left it alone here, because it is state-machine behaviour outside this fix.
+
+### Tests
+
+| | |
+|---|---|
+| `SignalTickerTest` (new, 6) | The rule for the meter (with no lens and with every preset), ALL, TRAIL, **LINKS**, ANTENNAS, COVERAGE and no lens. The band filter does not gate the sample. Hand-edited flag combinations follow the flags, not the preset name. Loads the ticker class headless; no game starts. |
+| `DriveTestLogTest` (+1) | `unseenHandoversLandOnTheNextSample` shows the failure mode next to the fixed behaviour. Failure: a counter jump across unsent evaluations becomes one HANDOVER at the next sample. Fixed: each handover is marked where it fired, and nothing at the switch point. |
+| `DriveTestLogTest.counterWinsEvenWithoutCellChange` | Comment made precise: a same-cell HANDOVER cannot happen while the log sees every evaluation. |
+
+### Verification
+
+| Check | Result |
+|---|---|
+| `./gradlew build` | succeeds |
+| Unit tests | **210 passed, 0 failed** (203 + 6 `SignalTickerTest` + 1 `DriveTestLogTest`) |
+| `rf` Minecraft/NeoForge/Mojang imports | **0** (grep) |
+
+**Needs a human in game:** on the LINKS preset, walk across two cell boundaries (or A→B→A), then
+cycle to TRAIL. There should be a white pillar at each handover point and none at the switch point,
+and the exported CSV should agree. The check is listed in `PHASE_3.md`.
