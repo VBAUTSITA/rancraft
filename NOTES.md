@@ -1258,3 +1258,189 @@ serving, so the test cannot pass by accident.
 | `rf` purity | asserted by `PackagePurityTest` (passes with the new file) |
 
 Nothing to check in game: nothing calls `check` until slice 4 (SignalDevice) and later devices.
+
+---
+
+## Slice 3 — `Ranging` + `LocatorSolver` (§3A.4, §3A.5)
+
+All pure `rf`, headless. Nothing in game calls it yet; the Locator item is slice 5.
+
+### What was built
+
+| Piece | Where | Notes |
+|---|---|---|
+| `Band.bandwidthMhz` | `rf/Band` (appended 7th component) | Default `DEFAULT_BANDWIDTH_MHZ = 10.0`. The six-argument constructor is kept and defaults it, so every existing call site compiles and means what it did. `DEFAULT_900` is 10 MHz, matching `band_900.json`. |
+| Band JSON | `data/rancraft/rf/bands/*.json` | `"bandwidth_mhz"`: band_700 10, band_900 10, band_1800 20, band_3500 100. |
+| Loader | `data/RfDataLoader.parseBandwidthMhz` | Absent → 10.0. Present but not a positive finite number → 10.0 with a warning, rather than dropping the band. Checked at runtime: `runGameTestServer` logs "loaded 4 band(s)" and no parse error. |
+| `RangeMeasurement` | `rf/` (new record) | cell id, radiating centre x/y/z (voxel + 0.5), measured slant range, sigma, band id, obstruction dB. No true distance and no receiver position: the solver cannot cheat. |
+| `Ranging` | `rf/` (new) | `resolutionMeters = 299.792458 / bandwidthMhz`, `resolutionBlocks = ... / metersPerBlock`, `quantise` (round half up, as `Math.round`), `nlosBiasBlocks = rate * obstructionDb`, `sigmaBlocks = res / sqrt(12)`, `usable = rsrp >= locatorMinRsrpDbm`, and `measure(cells, bands, metersPerBlock \| RfConfig, params)`, which keeps the usable cells in input order. |
+| `LocatorParams` | `rf/` (new record) | `minRsrpDbm, maxCells, maxHdop, nlosBiasBlocksPerDb`, `DEFAULTS` (-100, 8, 6.0, 0.25). |
+| `LocatorFix` | `rf/` (sealed interface) | `NoSignal`, `RangeOnly(cx, cz, radius)`, `Ambiguous(ax, az, bx, bz, likely)`, `PoorGeometry(hdop, cellsUsed)`, `Fix(x, y, z, hdop, errorBlocks, cellsUsed)`: exactly the spec's shapes. |
+| `LocatorSolver.solve(ranges, ground, previous, params)` | `rf/` (new) | §3A.5, with the one deviation below (extra starts). |
+| Config | `RanCraftConfig` + `RfConfig` | See "Where the tunables live". |
+
+### Where the tunables live (§5 decision)
+
+All five are in `RanCraftConfig` (COMMON) with accessors: `locatorMinRsrpDbm` (-100, range -140..-40),
+`locatorMaxCells` (8, range 3..8), `locatorMaxHdop` (6.0, range 1..50), `nlosBiasBlocksPerDb` (0.25,
+range 0..4), `locatorEmergencyMaxAgeTicks` (1200, range 0..72000).
+
+**Four of them are also appended to `RfConfig`** (`locatorMinRsrpDbm, locatorMaxCells,
+locatorMaxHdop, nlosBiasBlocksPerDb`, plus `RfConfig.locatorParams()`, like `sinrParams()`), and
+`RanCraftConfig.snapshot()` fills them. Reasons: `rf` code reads them (`Ranging`, `LocatorSolver`);
+`RfConfig`'s own rule is "exactly one config object crossing the boundary into `rf`"; and §3A.2's
+`DeviceContext` already carries an `RfConfig`, so the Locator reaches them without touching the mod
+config. **`locatorEmergencyMaxAgeTicks` stays out of `RfConfig`**: it is gameplay for the game-side
+emergency record, no `rf` code reads it, and §5 says gameplay values stay out, as the lens settings
+do. The three `new RfConfig(...)` call sites (`DEFAULTS`, `snapshot()`, one test helper) were
+updated; no legacy constructor was added for `RfConfig`, so a copy can never silently reset the
+locator values to defaults.
+
+`locatorMaxCells` is capped at 8 because §3A.6's payload carries at most 8 rings, one per
+contributing cell (the lens precedent: config upper bounds are the wire caps). Slice 5 should point
+the cap at its payload constant. Its minimum is 3, because fewer can never give a FIX.
+
+### Deviations and decisions
+
+1. **Spec vs tree: `floor`, not `round`, for the altitude-aiding column.** §3A.5 writes
+   `ground.surfaceY(round(x), round(z))`. Everywhere else in the tree the column a point is in is
+   `floor` (a player at x = 10.7 stands in column 10; `BlockPos.containing` floors). `round` reads
+   the next column for half of all positions, which on a slope is a wrong height and a wrong
+   horizontal range. The solver uses `floor`. `LocatorSolverTest.perfectRangesOnASlope` (a slope of
+   one block per column, receiver at x = 10.7) passes with `floor` and **fails with `round`**
+   (checked by swapping it in temporarily).
+2. **Deviation from §3A.5's algorithm: extra Gauss-Newton starts.** Measured before the change,
+   with the spec's centroid-only start, over 20,000 seeded scenes per row (3-6 cells within ±40,
+   ±120 or ±300 blocks, receiver anywhere within ±400, flat ground, default params):
+
+   | Ranges | FIX results that were more than 3 x "±" + 2 blocks from the truth, centroid only | after the change |
+   |---|---|---|
+   | perfect (resolution → 0) | **10.5 % – 16.7 %** of fixes, worst 1,966 blocks | **0 %** |
+   | band_900 (30 m) | 10.8 % – 15.9 % | 1.3 % – 5.2 % |
+   | band_1800 (15 m) | 10.5 % – 15.7 % | 0.7 % – 2.1 % |
+   | band_3500 (3 m) | 10.5 % – 15.6 % | 0.1 % – 0.3 % |
+
+   Cause: once the receiver is outside the cells' footprint, Gauss-Newton from the centroid can
+   settle in a wrong local minimum. With perfect ranges it then reports FIX "± 0" hundreds of blocks
+   away (e.g. cells at (-17,-17), (17,-17), (0,17), (40,40), receiver at (-100, 200): FIX at
+   (234, -7), HDOP 4.3). The HDOP gate does not catch it. That teaches the wrong thing about the
+   "±". Change: the centroid stays the first start (§3A.5), and the same fit (same weights, same
+   15-iteration cap, same 0.01 stop, altitude re-derived each iteration) is also started from the
+   two circle crossings of each pair among the 3 strongest cells (at most 6 extra runs; with exact
+   ranges one crossing *is* the answer). A run replaces the centroid's result only if it ends more
+   than 1 block away and has a smaller weighted residual `sum w_i (rho_i - d_i)^2`. **When the
+   centroid's run is the best fit, the result is exactly the spec's.** Exactly collinear cells (the
+   centroid run is singular at its first step) stay PoorGeometry without trying other starts, since
+   the two mirror images fit equally well. All pairs instead of the strongest 3 gave the same rates
+   (checked), so 3 it is. `notTrappedOutsideTheFootprint` pins the example above and **fails with
+   the extra starts switched off** (checked). The remaining band_900 misses are measurement
+   ambiguity (a mirror position that genuinely fits the coarse ranges better), which no start can
+   fix; see honest limits. Reverting is deleting one loop in `leastSquares`. Recorded in
+   `PHASE_3.md` follow-ups for a decision.
+3. **Spec conflict: test 10 vs the `errorBlocks` formula.** `errorBlocks = HDOP x rms(sigma_i)` is
+   implemented to the letter. With it, **one band_3500 cell cannot cut the "±" 3x on bandwidth
+   alone**: in a good 120° triangle it improves 9.99 → 7.77 (1.29x; the same site on band_900 gives
+   8.93, 1.12x). The rms of the sigmas stays dominated by the three 8.66-block band_900 sigmas, and
+   one range constrains only one direction. The weighted covariance `sqrt(trace((H^T W H)^-1))`
+   would not reach 3x either (1.40x, computed). So test 10 uses a geometry where it holds and says
+   so: **the edge of a network**, three band_900 sites clustered to the west (a 20° wedge, HDOP 4.10,
+   ± 35.49) and a band_3500 site added 60 blocks north: ± 8.50 (**4.17x**). Most of that is geometry:
+   the same site on band_900 gives ± 9.81 (3.62x), and the test asserts band_3500 beats it by exactly
+   the rms ratio (1.15x). A second test (`oneWidebandCellInAGoodTriangle`) pins the 1.29x. **Open
+   question for the spec owner** (in `PHASE_3.md` follow-ups): the weighted covariance equals
+   `HDOP x sigma` for a single-band fix (so tests 7 and every single-band number are unchanged) but
+   credits the weighting that makes band_3500 "dominate the fit": edge case 35.7 → 5.1 (7.0x, band_900
+   control 3.6x), triangle 1.40x. It would make "Adding a band_3500 site nearby visibly shrinks the
+   ±" much more visible. Not changed here, because §3A.5 gives the formula explicitly.
+4. **`RangeOnly.radius` is the measured slant (3D) range**, exactly as measured (test 9 says "the
+   measured radius"). A horizontal ring of that radius is the widest circle of the range sphere; a
+   receiver below the radiating point is horizontally a little closer. A single cell gives no
+   position to altitude-aid from. Slice 5 decides how to draw it.
+5. **`Ambiguous.likely` is -1 (`NO_PREFERENCE`) with no previous estimate**, or when the previous
+   one is exactly as far from both. §3A.5 only says "nearer `previous` if there is one"; picking 0
+   would claim a preference the Locator does not have. A previous `Fix` counts by its (x, z), a
+   previous `Ambiguous` by its likely candidate; `RangeOnly`, `PoorGeometry`, `NoSignal` and null do
+   not count. Candidate `a` is on the `(-dz, dx)` side of first → second (standing on the first cell
+   facing the second, `a` is on the right).
+6. **Two cells: each candidate is refined on its own ground.** The circles are first crossed at the
+   height under the midpoint, then each candidate follows the crossing nearest to it while the
+   height is re-derived under it (same 15 / 0.01 rule). The two candidates sit on different ground
+   (`twoCellsRefineAltitudePerCandidate`: a 16-block terrace, the true candidate exact to 0.01).
+7. **`PoorGeometry.hdop` is capped at `HDOP_CEILING = 99.9`**, and a singular geometry reports the
+   ceiling, because test 12 forbids an infinity. Read 99.9 as "99.9 or worse".
+8. **`Fix.y` is the assumed eye height** (ground under the estimate + 1.62), the convention of the
+   drive-test log and the sample payload. **An unloaded column** keeps the last height the solver
+   knew; before any ground is read that is the previous fix's `y`, else the lowest radiating point
+   among the cells. It never loads a chunk. After one step the estimate is normally on loaded
+   ground again (`unloadedColumnsFallBack`: the centroid is unloaded, the result is still exact).
+9. **Which cells:** the first `maxCells` usable ones in the order given. `Ranging` keeps the
+   engine's order, RSRP descending, so the strongest are kept (the weakest are the likeliest to be
+   NLOS-biased), not the ones with the smallest sigma.
+10. **Robustness beyond the spec:** measurements with a non-finite or absurd (> 10^9) coordinate,
+    range or sigma are ignored; a sigma of 0 is floored at 10^-6 (a finite weight); a cell closer
+    than 10^-6 blocks horizontally adds no geometry row (the direction is 0/0);
+    `det(H^T W H)` is computed pairwise (Cauchy-Binet), which stays exact when one weight is orders of
+    magnitude above the rest; singularity is judged on the unweighted `H^T H`, relative to its
+    trace (`det <= 1e-12 trace^2`); an estimate that runs past 10^9 blocks is a failed run.
+11. `Band` is not on the wire (the client never receives the band table), so appending
+    `bandwidthMhz` needs no protocol bump. `ModPayloads.PROTOCOL_VERSION` stays "4".
+
+### Honest-abstraction notes (also at the code sites)
+
+- **"Network Locator", not GPS** (`Ranging` javadoc): cellular positioning, the family of E-CID,
+  OTDOA and NR multi-RTT.
+- **Timing resolution c / BW** is real in kind: a receiver times an arrival to about one sample.
+  Real receivers interpolate below that; this model does not.
+- **Quantisation is deterministic.** The same true distance always rounds the same way, so a player
+  standing still sees a fixed error, not noise that averages out. The reported sigma is the spread
+  of that rounding error over positions, not over time.
+- **NLOS bias is a flat stand-in** (`Ranging.nlosBiasBlocks`): blocks per dB of obstruction instead
+  of a longer reflected first path. Directionally right (ranges read long behind terrain, the fix
+  moves away from the hidden cell: test 11).
+- **Absolute ranging, not time differences** (`Ranging`, `LocatorSolver`): like multi-RTT, with no
+  clock error and no dedicated positioning reference signals.
+- **"±" is a reported uncertainty, not a guarantee** (`LocatorFix.Fix.errorBlocks`): quantisation
+  only. The NLOS bias is systematic and not in it (test 11 asserts the ± does not move when the
+  bias does). Nor does it cover a mirror ambiguity (above).
+- **Altitude aiding assumes the top surface** (`LocatorSolver`, `SurfaceProbe`): wrong in caves,
+  under overhangs, while flying or on a tower. The reported `y` is that assumption.
+- **Towers in a line** (`LocatorSolver`): exactly collinear towers are PoorGeometry (singular at the
+  centroid; the mirror images fit equally). *Nearly* collinear towers can converge on either side
+  of the line; the HDOP there describes local precision, not that ambiguity.
+
+### Measured
+
+| | |
+|---|---|
+| Resolution | band_700/900 29.98 m, band_1800 14.99 m, band_3500 2.998 m (table: 30 / 30 / 15 / 3) |
+| Sigma | 8.654 / 8.654 / 4.327 / 0.865 blocks at 1 m per block |
+| Test 7 | HDOP 1.1547 at the true point (exact geometry); 1.1547 with band_1800 quantisation on the grid, ± 4.997 |
+| Test 10 | 35.49 → 8.50 (4.17x) adding band_3500; 9.81 (3.62x) adding band_900 in the same spot |
+| Good triangle + one band_3500 | 9.99 → 7.77 (1.29x); + band_900 8.93 (1.12x) |
+| Narrow 6° wedge at 300 blocks | HDOP 13.29 → PoorGeometry at the default limit 6.0 |
+| Cost | 18.8 µs per 8-cell mixed-band solve (7 Gauss-Newton runs, synthetic hilly `SurfaceProbe`), 0.38 µs to range 8 cells; JIT-warm, 200,000 repetitions, this PC. The in-game `SurfaceProbe` cost is not in this; slice 5 must measure it (up to 7 x 15 lookups per fix in the worst case). |
+
+### Tests
+
+| | |
+|---|---|
+| `RangingTest` (9) | Test 2 (reads `bandwidth_mhz` from the four shipped JSON files and checks c / BW against the table), test 3 (44 → 30, 46 → 60, also through `measure` on an exact 30-block band), test 4 (0 at 0 dB, exactly 0.25 x dB, bias not in sigma), `Band` six-argument default, bad bandwidth/scale rejected, usable threshold at exactly -100, order kept, unknown band ranged as the fallback, the `RfConfig` form, non-finite inputs dropped. |
+| `LocatorSolverTest` (19) | Tests 5 (flat, on a slope, unloaded centroid), 6 (three layouts x three receiver positions, off and on the line), HDOP threshold both ways, 7 (exact and quantised), 8 (likely from a Fix, from an Ambiguous, none, tie; refined per candidate on terraced ground; no crossing / nested / co-sited → RangeOnly on the nearer), 9 (+ NoSignal), `maxCells`, 10 (+ control) and its limit, 11, 12 (under a tower on four bands with 4/3/2/1 cells; estimate bit-exactly on a tower; degenerate inputs x 4 previous states x 2 grounds; 5,000 seeded random scenes), and the local-minimum case. |
+
+**The tests bite** (each checked by breaking the code temporarily, then restoring it):
+`round` instead of `floor` fails `perfectRangesOnASlope`; switching the extra starts off fails
+`notTrappedOutsideTheFootprint` (and nothing else: tests 5-12 pass on the spec's centroid-only
+algorithm too); removing the zero-row guard fails `estimateExactlyOnATower` (the random sweep alone
+did not: an estimate lands bit-exactly on a tower only by symmetry, which that test builds).
+
+### Verification
+
+| Check | Result |
+|---|---|
+| `./gradlew build` | succeeds |
+| Unit tests | **259: 258 passed, 0 failed, 1 skipped** (231 + 9 `RangingTest` + 19 `LocatorSolverTest`; the skip is still `utilIsPure`) |
+| `rf` purity | asserted by `PackagePurityTest` (5 new `rf` files, `java.util` only) |
+| `./gradlew runGameTestServer` | 2 of 2 passed; the log shows "RANCraft loaded 4 band(s)" and no parse error with the new `bandwidth_mhz` |
+
+Nothing to check in game yet: the Locator item, payload and HUD are slice 5, which is where the
+3A done-when items get their manual checks.

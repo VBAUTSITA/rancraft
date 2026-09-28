@@ -3,6 +3,7 @@ package dev.rancraft;
 import dev.rancraft.net.CoverageSurveyPayload;
 import dev.rancraft.net.LensLinksPayload;
 import dev.rancraft.rf.DriveTestLog;
+import dev.rancraft.rf.LocatorParams;
 import dev.rancraft.rf.RfConfig;
 import dev.rancraft.rf.RayMarcher;
 import net.neoforged.neoforge.common.ModConfigSpec;
@@ -136,6 +137,39 @@ public final class RanCraftConfig {
                     "restarts at once regardless. 100 = 5 s.")
             .defineInRange("coverageMinIntervalTicks", 100, 0, 6000);
 
+    // ---- Phase 3: Network Locator ------------------------------------------------------------
+    // The first four are read by rf code (Ranging, LocatorSolver), so they cross into RfConfig in
+    // snapshot(). The emergency-record age is gameplay for the game-side record only and stays out
+    // of RfConfig, as the lens settings do. See NOTES.md, Phase 3 slice 3.
+
+    public static final ModConfigSpec.DoubleValue LOCATOR_MIN_RSRP_DBM = BUILDER
+            .comment("Network Locator: a cell is used for ranging only at or above this RSRP.",
+                    "Weak cells are usually heard through obstruction, so their ranges are the most",
+                    "biased. The engine's own floor is -105 dBm; cells below it are never heard.")
+            .defineInRange("locatorMinRsrpDbm", LocatorParams.DEFAULT_MIN_RSRP_DBM, -140.0, -40.0);
+
+    public static final ModConfigSpec.IntValue LOCATOR_MAX_CELLS = BUILDER
+            .comment("Network Locator: most cells (strongest first) that go into one position fix.",
+                    "At least 3 are needed for a fix. Capped at 8, the rings the Locator can draw.")
+            .defineInRange("locatorMaxCells", LocatorParams.DEFAULT_MAX_CELLS, 3, 8);
+
+    public static final ModConfigSpec.DoubleValue LOCATOR_MAX_HDOP = BUILDER
+            .comment("Network Locator: above this horizontal dilution of precision the Locator shows",
+                    "POOR GEOMETRY instead of a position. Towers in a line push HDOP towards infinity.")
+            .defineInRange("locatorMaxHdop", LocatorParams.DEFAULT_MAX_HDOP, 1.0, 50.0);
+
+    public static final ModConfigSpec.DoubleValue NLOS_BIAS_BLOCKS_PER_DB = BUILDER
+            .comment("Network Locator: blocks added to a measured range per dB of obstruction.",
+                    "GAME ABSTRACTION: a flat stand-in for non-line-of-sight bias. Real ranges read",
+                    "long behind terrain because a longer reflected path arrives first; RANCraft has",
+                    "no reflections. 0 turns the bias off.")
+            .defineInRange("nlosBiasBlocksPerDb", LocatorParams.DEFAULT_NLOS_BIAS_BLOCKS_PER_DB, 0.0, 4.0);
+
+    public static final ModConfigSpec.IntValue LOCATOR_EMERGENCY_MAX_AGE_TICKS = BUILDER
+            .comment("Network Locator: on death, the last fix is kept as the emergency record only if",
+                    "it is younger than this. 1200 = 60 s.")
+            .defineInRange("locatorEmergencyMaxAgeTicks", 1200, 0, 72_000);
+
     public static final ModConfigSpec SPEC = BUILDER.build();
 
     // ---- RF Vision Step 3a: the drive-test trail (CLIENT) --------------------------------------
@@ -190,6 +224,29 @@ public final class RanCraftConfig {
         return COVERAGE_MIN_INTERVAL_TICKS.get();
     }
 
+    // Phase 3, Network Locator. The first four also reach rf through snapshot().locatorParams().
+
+    public static double locatorMinRsrpDbm() {
+        return LOCATOR_MIN_RSRP_DBM.get();
+    }
+
+    public static int locatorMaxCells() {
+        return LOCATOR_MAX_CELLS.get();
+    }
+
+    public static double locatorMaxHdop() {
+        return LOCATOR_MAX_HDOP.get();
+    }
+
+    public static double nlosBiasBlocksPerDb() {
+        return NLOS_BIAS_BLOCKS_PER_DB.get();
+    }
+
+    /** Gameplay only (the emergency record); deliberately not in {@link RfConfig}. */
+    public static int locatorEmergencyMaxAgeTicks() {
+        return LOCATOR_EMERGENCY_MAX_AGE_TICKS.get();
+    }
+
     /** Immutable snapshot handed to the engine, so the engine never touches a config API. */
     public static RfConfig snapshot() {
         return new RfConfig(
@@ -209,6 +266,10 @@ public final class RanCraftConfig {
                 HANDOVER_HYSTERESIS_DB.get(),
                 TIME_TO_TRIGGER_TICKS.get(),
                 PCI_PLANNING_RADIUS.get(),
-                PCI_MOD3_RADIUS.get());
+                PCI_MOD3_RADIUS.get(),
+                LOCATOR_MIN_RSRP_DBM.get(),
+                LOCATOR_MAX_CELLS.get(),
+                LOCATOR_MAX_HDOP.get(),
+                NLOS_BIAS_BLOCKS_PER_DB.get());
     }
 }

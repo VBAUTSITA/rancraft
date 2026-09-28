@@ -311,6 +311,8 @@ class RfEnginePhase2Test {
                 base.antennaFrontToBackDb(), base.antennaSidelobeFloorDb(),
                 base.adjacentChannelRejectionDb(), base.pciMod3PenaltyFactor(),
                 base.enablePciMod3Penalty(), base.handoverHysteresisDb(), base.timeToTriggerTicks(),
-                base.pciPlanningRadius(), base.pciMod3Radius());
+                base.pciPlanningRadius(), base.pciMod3Radius(),
+                base.locatorMinRsrpDbm(), base.locatorMaxCells(), base.locatorMaxHdop(),
+                base.nlosBiasBlocksPerDb());
     }
 }

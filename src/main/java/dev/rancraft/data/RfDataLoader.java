@@ -136,7 +136,27 @@ public final class RfDataLoader extends SimpleJsonResourceReloadListener {
                 json.has("noise_floor_dbm")
                         ? json.get("noise_floor_dbm").getAsDouble() : Band.DEFAULT_NOISE_FLOOR_DBM,
                 json.has("capacity_tier")
-                        ? json.get("capacity_tier").getAsInt() : Band.DEFAULT_CAPACITY_TIER);
+                        ? json.get("capacity_tier").getAsInt() : Band.DEFAULT_CAPACITY_TIER,
+                parseBandwidthMhz(bandId, json));
+    }
+
+    /**
+     * Phase 3: {@code bandwidth_mhz}, defaulting to {@link Band#DEFAULT_BANDWIDTH_MHZ} when absent,
+     * so pre-Phase-3 band JSON keeps loading. A value that is not a positive finite number would make
+     * the ranging resolution (c / bandwidth) meaningless, so it is replaced by the default with a
+     * warning rather than dropping the whole band.
+     */
+    private static double parseBandwidthMhz(String bandId, JsonObject json) {
+        if (!json.has("bandwidth_mhz")) {
+            return Band.DEFAULT_BANDWIDTH_MHZ;
+        }
+        double bandwidthMhz = json.get("bandwidth_mhz").getAsDouble();
+        if (!Double.isFinite(bandwidthMhz) || bandwidthMhz <= 0.0) {
+            RanCraft.LOGGER.warn("RANCraft band {}: bandwidth_mhz {} is not a positive number; using {}",
+                    bandId, bandwidthMhz, Band.DEFAULT_BANDWIDTH_MHZ);
+            return Band.DEFAULT_BANDWIDTH_MHZ;
+        }
+        return bandwidthMhz;
     }
 
     private static void readAttenuationMap(JsonObject json, String member, Map<ResourceLocation, Double> into) {

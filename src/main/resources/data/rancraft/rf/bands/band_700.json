@@ -4,5 +4,6 @@
   "path_loss_exponent": 3.2,
   "penetration_factor": 0.7,
   "noise_floor_dbm": -112.0,
-  "capacity_tier": 1
+  "capacity_tier": 1,
+  "bandwidth_mhz": 10.0
 }

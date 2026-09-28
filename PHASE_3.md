@@ -40,8 +40,8 @@ Legend: `[x]` done and verified · `[~]` partly done / needs a manual in-game ch
 | 0 | Land Vision Step 3a (drive-test trail) | pre | [~] landed + gate fixes, build green (210 tests); in-game checks below | af20bb4; gate fixes 3906418 |
 | 0a | Vision Step 3a follow-ups: trail cleared on logout, export link opens the folder | pre | [~] both fixed, build green (224 tests, 1 skipped); two in-game checks below | 0afda73; docs f2f8453 |
 | 1 | Datapack folder fix + runtime check + purity test | pre | [x] folders fixed, harvest game test red before / green after, purity test in `build` (219 tests, 1 skipped until `util` exists); one quick in-game look below | 212f86c; 1471bf3 |
-| 2 | DeviceRequirement + tests | 3A | [x] `rf/DeviceRequirement` per §3A.1, verdict order NO_SERVICE → LOW_QUALITY → LOW_TIER on the serving cell; test 1 green (7 tests, 231 total, 1 skipped) | see git log (slice 2 commit) |
-| 3 | Ranging + LocatorSolver + tests 2–12 | 3A | [ ] | |
+| 2 | DeviceRequirement + tests | 3A | [x] `rf/DeviceRequirement` per §3A.1, verdict order NO_SERVICE → LOW_QUALITY → LOW_TIER on the serving cell; test 1 green (7 tests, 231 total, 1 skipped) | 4ab5967 |
+| 3 | Ranging + LocatorSolver + tests 2–12 | 3A | [x] `Band.bandwidthMhz` + JSON 10/10/20/100, `Ranging`, `RangeMeasurement`, `LocatorFix`, `LocatorParams`, `LocatorSolver`; 5 locator tunables in `RanCraftConfig`, 4 of them in `RfConfig`; tests 2–12 green (259 total, 1 skipped). Two recorded deviations (floor not round; extra solver starts) and one spec conflict (test 10 vs `errorBlocks`), see follow-ups | see git log (slice 3 commit) |
 | 4 | SignalDevice + ticker refactor + meter port (regression gate) | 3A | [ ] | |
 | 5 | Locator item, payload, HUD, rings, waypoints, emergency record | 3A | [ ] | |
 | 6 | ColumnScan + mast columns + lens column/on-air | 3B | [ ] | |
@@ -144,12 +144,34 @@ Needs a human in game:
       (with the crack animation) and pop out as an item. The game test covers the server's
       decisions, not the client side.
 
+## Slice 2 (DeviceRequirement) and slice 3 (Ranging, LocatorSolver) checks
+
+Headless (verified by `./gradlew build`, 259 tests, 1 skipped):
+
+- [x] Test 1: every verdict fires; the tier is read off the serving cell, not the strongest
+      (`DeviceRequirementTest`, both directions).
+- [x] Tests 2–4: resolution from the shipped JSON matches the table; 44 → 30 and 46 → 60; NLOS bias
+      0 at 0 dB and exactly 0.25 × dB, and not in sigma (`RangingTest`).
+- [x] Tests 5–12 (`LocatorSolverTest`): perfect ranges within 0.01 (flat, slope, unloaded centroid);
+      collinear → POOR GEOMETRY; HDOP 2/√3 within 0.05 (in fact 1e-6); two cells → AMBIGUOUS with
+      the right `likely`; one cell → RANGE ONLY with the measured radius; test 10 at ≥ 3× (in an
+      edge-of-network geometry, see follow-ups); NLOS pushes the fix away; never NaN/Infinity
+      (under a tower, bit-exactly on a tower, degenerate inputs, 5,000 random scenes).
+- [x] Each deviation's test fails with the spec's version put back temporarily (`round`; no extra
+      starts) and the zero-row guard's test fails without the guard.
+- [x] `runGameTestServer`: bands load with `bandwidth_mhz` (4 bands, no parse error), 2 of 2 game
+      tests pass.
+
+Nothing in game yet: slices 2 and 3 have no caller until slices 4 and 5.
+
 ## 3A done-when
 
 - [ ] Meter and lens behave exactly as before the ticker refactor.
 - [ ] Carrying the Locator costs no extra evaluation (EvaluationStats).
-- [ ] Triangle of three masts → FIX with a sensible ±; three in a line → POOR GEOMETRY.
-- [ ] Adding a band_3500 site visibly shrinks ±.
+- [ ] Triangle of three masts → FIX with a sensible ±; three in a line → POOR GEOMETRY. *(Solver
+      side verified headless in slice 3, tests 6 and 7; the item is slice 5.)*
+- [ ] Adding a band_3500 site visibly shrinks ±. *(Headless: 1.29× in a good triangle, 4.17× at the
+      edge of a network; see the test 10 follow-up.)*
 - [ ] Walking behind a hill visibly increases fix error.
 - [ ] Rings render at measured ranges and pass through (or near) the player.
 - [ ] Emergency record survives death and shows the estimate, not the true position.
@@ -270,3 +292,36 @@ came from.
   Not reachable on vanilla or NeoForge alone. Possible fix: also clear on
   `ClientPlayerNetworkEvent.LoggingIn`, which `handleLogin` fires again after a reconfiguration
   (checked in the patched sources); the respawn-packet case would remain. Details in NOTES.md.
+- **[x] Worked around in slice 3, spec vs tree.** §3A.5 reads the altitude-aiding column as
+  `surfaceY(round(x), round(z))`. The tree's convention for "the column a point is in" is `floor`
+  (`BlockPos.containing`); `round` reads the neighbouring column for half of all positions, a wrong
+  height on any slope. `LocatorSolver` uses `floor`; `perfectRangesOnASlope` fails with `round`.
+- **[ ] Open, decision needed (slice 3 deviation from §3A.5's algorithm).** Gauss-Newton from the
+  centroid alone lands in a wrong local minimum for 10.5–16.7 % of FIX results once the receiver is
+  outside the cells' footprint, **even with perfect ranges**, and reports it with a small ± (measured
+  over 20,000 seeded scenes per case; e.g. FIX 390 blocks from the truth, "± 0", HDOP 4.3). Slice 3
+  keeps the centroid as the first start and also starts from the circle crossings of the 3 strongest
+  cells, taking a run that ends elsewhere with a smaller weighted residual: perfect ranges 0 %,
+  band_900 1.3–5.2 % (the rest is genuine mirror ambiguity). When the centroid's run is the best fit,
+  results are identical to the spec's. Cost about 19 µs per 8-cell fix plus the in-game surface
+  lookups. To revert, delete the alternative-start loop in `LocatorSolver.leastSquares` and
+  `notTrappedOutsideTheFootprint`. Details and the table in NOTES.md, slice 3.
+- **[ ] Open, spec conflict, decision needed (slice 3): test 10 vs `errorBlocks = HDOP × rms(σ)`.**
+  Implemented to the letter. With that formula one band_3500 cell cannot cut the ± 3× on bandwidth
+  alone: 1.29× in a good 120° triangle (band_900 in the same spot 1.12×). Test 10 passes (4.17×) in
+  an edge-of-network geometry where most of the gain is HDOP (band_900 in the same spot 3.62×); a
+  second test pins the 1.29×. Option for the spec owner: report the weighted covariance
+  `sqrt(trace((HᵀWH)⁻¹))`, identical for single-band fixes (test 7 unchanged) but crediting the
+  weighting: edge 7.0× (band_900 3.6×), triangle 1.40×. Even that cannot give 3× from one cell at
+  fixed good geometry: one range constrains one direction. HDOP would stay unweighted either way.
+- **[ ] Open, for slice 5 (from slice 3).** (a) `RangeOnly.radius` is the measured *slant* range;
+  decide how the ring is drawn (at the cell's height it is the widest circle of the range sphere).
+  (b) `Ambiguous.likely` can be `NO_PREFERENCE` (-1): draw both markers alike then. (c)
+  `PoorGeometry.hdop` is capped at 99.9 ("99.9 or worse", also for a singular geometry). (d) `Fix.y`
+  is the assumed eye height (ground + 1.62), not a measurement. (e) Feed `Ranging.measure` the
+  sample's **full** `cells()` (not the payload's 4), also on cached replays, and keep the per-player
+  previous fix for `likely`. (f) The game-side `SurfaceProbe` must never load a chunk (reuse
+  `CoverageSurveyor`'s), and its cost per fix must be measured: up to 7 runs × 15 lookups. (g)
+  `locatorMaxCells` is capped at 8 in the config because the payload carries 8 rings; point the cap
+  at the payload's constant once it exists. (h) Quantisation is deterministic: a player standing
+  still sees a fixed error, not noise; say so where the ± is explained.

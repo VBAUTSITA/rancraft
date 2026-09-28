@@ -9,6 +9,13 @@ package dev.rancraft.rf;
  *
  * <p>Phase 2 appends the antenna, interference, handover and PCI tunables. Components are appended,
  * never reordered.
+ *
+ * <p>Phase 3 appends the four Network Locator tunables that {@code rf} code reads ({@link Ranging}
+ * and {@link LocatorSolver}, via {@link #locatorParams()}). They cross the boundary here, like
+ * every other tunable, so there stays exactly one config object, and a device reaches them through
+ * the {@code RfConfig} its context already carries. {@code locatorEmergencyMaxAgeTicks} is <em>not</em>
+ * here: it is gameplay for the game-side emergency record and no {@code rf} code reads it, so it
+ * stays in the mod config only, as the lens settings do.
  */
 public record RfConfig(
         double metersPerBlock,
@@ -28,7 +35,12 @@ public record RfConfig(
         double handoverHysteresisDb,
         int timeToTriggerTicks,
         double pciPlanningRadius,
-        double pciMod3Radius
+        double pciMod3Radius,
+        // ---- Phase 3: Network Locator ----
+        double locatorMinRsrpDbm,
+        int locatorMaxCells,
+        double locatorMaxHdop,
+        double nlosBiasBlocksPerDb
 ) {
     public static final RfConfig DEFAULTS = new RfConfig(
             1.0,
@@ -53,7 +65,11 @@ public record RfConfig(
             3.0,
             40,
             500.0,
-            250.0);
+            250.0,
+            LocatorParams.DEFAULT_MIN_RSRP_DBM,
+            LocatorParams.DEFAULT_MAX_CELLS,
+            LocatorParams.DEFAULT_MAX_HDOP,
+            LocatorParams.DEFAULT_NLOS_BIAS_BLOCKS_PER_DB);
 
     public SinrCalculator.SinrParams sinrParams() {
         return new SinrCalculator.SinrParams(
@@ -66,5 +82,9 @@ public record RfConfig(
 
     public PciPlanner.PciParams pciParams() {
         return new PciPlanner.PciParams(pciPlanningRadius, pciMod3Radius);
+    }
+
+    public LocatorParams locatorParams() {
+        return new LocatorParams(locatorMinRsrpDbm, locatorMaxCells, locatorMaxHdop, nlosBiasBlocksPerDb);
     }
 }
