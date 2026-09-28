@@ -37,7 +37,10 @@ import net.neoforged.neoforge.client.event.RegisterClientCommandsEvent;
  * dimension because Overworld and Nether coordinates are different places; mixing them in one table
  * would put rows side by side that describe unrelated ground. Numbers are always written with a
  * full stop ({@link DriveTestLog#csvRow}); the chat hint after an export says how to open that in
- * Excel on a comma-decimal locale without it being misread.
+ * Excel on a comma-decimal locale without it being misread. For the same reason the chat link opens
+ * the folder, not the file ({@link #fileLink}).
+ *
+ * <p>The log is kept for one session only ({@link ClientDriveTest}): export before leaving a world.
  */
 @EventBusSubscriber(modid = RanCraft.MOD_ID, value = Dist.CLIENT)
 public final class DriveTestCommands {
@@ -103,12 +106,21 @@ public final class DriveTestCommands {
         return dropped;
     }
 
-    /** The file name, underlined and clickable to open, as vanilla does for screenshots. */
-    private static Component fileLink(Path file) {
-        String absolute = file.toAbsolutePath().toString();
+    /**
+     * The file name, underlined; clicking it opens the <em>folder</em> that holds the file, as vanilla
+     * does for profiler results ({@code Minecraft.debugClientMetricsStart}), not the file itself.
+     * Opening the CSV directly hands it to the default app, which on Windows is usually Excel, and
+     * Excel on a comma-decimal locale (such as {@code es-PE}) misreads a double-clicked CSV: it splits
+     * on {@code ;} and takes {@code .} for a thousands separator, so {@code -82.4} can become
+     * {@code -824}. The grey hint printed after the export says how to import it instead. The path
+     * is absolute and normalised, so a relative game directory still opens the right folder.
+     * Package-private for the tests.
+     */
+    static Component fileLink(Path file) {
+        String folder = file.toAbsolutePath().normalize().getParent().toString();
         return Component.literal(file.getFileName().toString())
                 .withStyle(ChatFormatting.UNDERLINE)
-                .withStyle(style -> style.withClickEvent(new ClickEvent(ClickEvent.Action.OPEN_FILE, absolute)));
+                .withStyle(style -> style.withClickEvent(new ClickEvent(ClickEvent.Action.OPEN_FILE, folder)));
     }
 
     /** The first name not already taken; two exports in one second get {@code -1}, {@code -2}, ... */

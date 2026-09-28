@@ -34,11 +34,16 @@ import net.minecraft.world.level.Level;
  * was measured in: the server sends samples and the respawn packet that moves the player to a new
  * dimension over one ordered connection, and the handler runs on the client thread in that order.
  *
- * <p><b>Kept until {@code /rancraftc drivetest clear}.</b> Not cleared on disconnect, respawn or
- * dimension change, unlike the meter and lens readouts in {@link ClientEvents}: a drive test that
- * vanished when you walked through a portal or relogged would not be much of a record. The
- * consequence is that joining a different world keeps the old trail under the same dimension
- * names; clear it first. See NOTES.md.
+ * <p><b>Kept for one session.</b> Cleared by {@code /rancraftc drivetest clear} and on logging out
+ * ({@link ClientEvents#onLoggingOut}), like every other client readout. The key is only the
+ * dimension, and the client cannot reliably tell one world's Overworld from another's, so a log kept
+ * past a disconnect would draw, classify and export one world's trail together with the next
+ * world's. NeoForge fires the logout event on leaving a world and also before every join (a new
+ * singleplayer world, a server, a server transfer all go through {@code Minecraft.disconnect}), so
+ * each session starts empty. Within a session the log is <em>not</em> cleared on respawn or
+ * dimension change: a drive test that vanished when you walked through a portal would not be much of
+ * a record, and the per-dimension split already keeps the trails apart. Export before leaving a
+ * world if you want to keep it. See NOTES.md.
  *
  * <p>Client thread only: fed from the payload handler's enqueued work, read by the renderer and the
  * commands, all on the one thread. Like the other {@code Client*State} classes it is named only
@@ -61,8 +66,16 @@ public final class ClientDriveTest {
         if (level == null) {
             return;
         }
-        LOGS.computeIfAbsent(level.dimension(), key -> new DriveTestLog(RanCraftConfig.driveTestCapacity()))
-                .record(payload.toDriveTestSample());
+        record(level.dimension(), payload.toDriveTestSample());
+    }
+
+    /**
+     * Files one sample under the dimension it was measured in. Split from {@link #accept} only so the
+     * tests can feed the log without a running client.
+     */
+    static void record(ResourceKey<Level> dimension, DriveTestLog.Sample sample) {
+        LOGS.computeIfAbsent(dimension, key -> new DriveTestLog(RanCraftConfig.driveTestCapacity()))
+                .record(sample);
     }
 
     /** The log for one dimension, or {@code null} if nothing was measured there since the last clear. */
