@@ -149,7 +149,7 @@ public final class SignalTicker {
             if (!sendsSample(holdsMeter(player), lens)) {
                 continue;
             }
-            evaluate(player, config, lens != null && lens.showLinks() ? lens : null);
+            evaluate(player, config, lens != null && lens.showLinks() ? lens : null, interval);
         }
     }
 
@@ -187,6 +187,35 @@ public final class SignalTicker {
         return meterHeld || (lens != null && (lens.showTrail() || lens.showLinks()));
     }
 
+    /**
+     * The longest gap, in game ticks, between two evaluations of one player that still counts as
+     * continuous observation of an armed handover candidate. A longer gap drops the candidate before
+     * selection ({@link dev.rancraft.rf.CellSelector#expireStaleCandidate}), so the time-to-trigger
+     * restarts where evaluation resumed instead of counting the unobserved pause.
+     *
+     * <p><b>Exactly one interval, with no margin, and why that is safe.</b> A player who keeps
+     * carrying a device (or keeps a lens on a preset that needs evaluation) is evaluated on every
+     * tick whose stagger phase matches, which recurs every {@code interval} server ticks. While a
+     * candidate is armed the cache is skipped, so each of those is a fresh evaluation that records
+     * its game time. Game time advances by one per server tick, or not at all while the tick rate
+     * manager is frozen ({@code /tick freeze}: checked in {@code MinecraftServer.tickServer} and
+     * {@code ServerLevel.tick}), and every dimension reads the overworld's clock. So a continuously
+     * observed player's gap is exactly one interval, or shorter. If {@code evaluationIntervalTicks} is
+     * changed live, the next evaluation still lands within one <em>new</em> interval. Any longer gap
+     * means at least one scheduled evaluation did not happen.
+     *
+     * <p>A margin would bring the bug back for short pauses. At the defaults (interval 20, TTT 40), a
+     * candidate armed at tick T and one skipped evaluation give a gap of 40 at T + 40, which already
+     * equals the TTT: a two-interval threshold would fire that handover having observed the
+     * neighbour only at T.
+     *
+     * <p>Config-free: it derives from {@code evaluationIntervalTicks}. A receiver on another cadence
+     * (Phase 3's fixed receivers, evaluated round-robin under a time budget) must derive its own.
+     */
+    static long staleCandidateGapTicks(int interval) {
+        return Math.max(1, interval);
+    }
+
     private static boolean holdsMeter(ServerPlayer player) {
         return player.getMainHandItem().getItem() instanceof FieldTestMeterItem
                 || player.getOffhandItem().getItem() instanceof FieldTestMeterItem;
@@ -204,8 +233,11 @@ public final class SignalTicker {
      * evaluation (see {@link #sendsSample}).
      *
      * @param linkLens the lens settings when link rays are wanted, otherwise {@code null}.
+     * @param interval the evaluation interval in ticks, which is also the longest gap after which
+     *                 an armed handover candidate still counts as observed (see
+     *                 {@link #staleCandidateGapTicks}).
      */
-    private static void evaluate(ServerPlayer player, RfConfig config, LensSettings linkLens) {
+    private static void evaluate(ServerPlayer player, RfConfig config, LensSettings linkLens, int interval) {
         ServerLevel level = player.serverLevel();
         SiteRegistry registry = SiteRegistry.of(level);
 
@@ -238,14 +270,16 @@ public final class SignalTicker {
         long gameTime = level.getGameTime();
 
         UUID receiverKey = player.getUUID();
-        ReceiverState previous = RECEIVERS.get(receiverKey);
+        // A candidate armed before an evaluation pause is dropped here, before selection, so the
+        // time-to-trigger restarts where observation resumed. See staleCandidateGapTicks.
+        ReceiverState previous = RECEIVERS.resume(receiverKey, gameTime, staleCandidateGapTicks(interval));
 
         long startNanos = System.nanoTime();
         RfEngine.Evaluation evaluation = RfEngine.evaluate(
                 probe, eyeX, eyeY, eyeZ, candidates, bands, config, gameTime, previous);
         long elapsedNanos = System.nanoTime() - startNanos;
 
-        RECEIVERS.put(receiverKey, evaluation.state());
+        RECEIVERS.put(receiverKey, evaluation.state(), gameTime);
         SignalSample sample = evaluation.sample();
 
         if (elapsedNanos > SLOW_EVALUATION_NANOS) {

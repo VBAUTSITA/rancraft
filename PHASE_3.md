@@ -42,7 +42,7 @@ Legend: `[x]` done and verified · `[~]` partly done / needs a manual in-game ch
 | 1 | Datapack folder fix + runtime check + purity test | pre | [x] folders fixed, harvest game test red before / green after, purity test in `build` (219 tests, 1 skipped until `util` exists); one quick in-game look below | 212f86c; 1471bf3 |
 | 2 | DeviceRequirement + tests | 3A | [x] `rf/DeviceRequirement` per §3A.1, verdict order NO_SERVICE → LOW_QUALITY → LOW_TIER on the serving cell; test 1 green (7 tests, 231 total, 1 skipped) | 4ab5967 |
 | 3 | Ranging + LocatorSolver + tests 2–12 | 3A | [x] `Band.bandwidthMhz` + JSON 10/10/20/100, `Ranging`, `RangeMeasurement`, `LocatorFix`, `LocatorParams`, `LocatorSolver`; 5 locator tunables in `RanCraftConfig`, 4 of them in `RfConfig`; tests 2–12 green (259 total, 1 skipped). Two recorded deviations (floor not round; extra solver starts) and one spec conflict (test 10 vs `errorBlocks`), see follow-ups | 0837945 |
-| 4 | SignalDevice + ticker refactor + meter port (regression gate) | 3A | [ ] | |
+| 4 | SignalDevice + ticker refactor + meter port (regression gate) | 3A | [~] in progress: part 1 (stale armed candidate dropped after an evaluation gap) committed | |
 | 5 | Locator item, payload, HUD, rings, waypoints, emergency record | 3A | [ ] | |
 | 6 | ColumnScan + mast columns + lens column/on-air | 3B | [ ] | |
 | 7 | BinTraversal + region epochs + cache rework | 3B | [ ] | |

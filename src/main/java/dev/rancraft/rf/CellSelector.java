@@ -94,6 +94,45 @@ public final class CellSelector {
         return new Selection(previous.withCandidate(neighbour.cellId(), tick), serving, false);
     }
 
+    /** "This receiver has no recorded evaluation": {@link #expireStaleCandidate} then keeps the state. */
+    public static final long NEVER_EVALUATED = Long.MIN_VALUE;
+
+    /**
+     * The state to carry into an evaluation at {@code tick}, with an armed candidate dropped when
+     * the receiver was not evaluated for longer than {@code maxGapTicks}.
+     *
+     * <p><b>Why.</b> Time-to-trigger is a tick difference ({@code tick - candidateSinceTick}), which
+     * only means "the A3 condition held all along" if the condition was <em>looked at</em> all
+     * along. A receiver that stops being evaluated (a player who puts every device away, or
+     * switches the lens to a preset that needs no evaluation) freezes its state, armed candidate
+     * included. Without this check, the first evaluation after the pause sees a huge
+     * {@code heldTicks} and hands over at once, although nobody observed the neighbour staying
+     * better through the gap. Dropping the candidate makes that evaluation re-arm it instead
+     * (if the neighbour still qualifies), so the handover fires one full time-to-trigger after
+     * evaluation resumed, exactly as if the receiver had just walked into the boundary.
+     *
+     * <p>The serving cell and the handover tally are kept ({@link ReceiverState#withoutCandidate}):
+     * the pause is not an outage and not a handover.
+     *
+     * <p>A negative gap (the clock went backwards, which the game clock never does) cannot vouch
+     * for the timer either, so it drops the candidate too.
+     *
+     * @param lastEvaluatedTick the tick of the evaluation that produced {@code previous}, or
+     *                          {@link #NEVER_EVALUATED} when unknown (the state is then kept).
+     * @param maxGapTicks       the longest gap between two evaluations that still counts as
+     *                          continuous observation. The caller derives it from its own cadence;
+     *                          the player ticker uses one evaluation interval.
+     */
+    public static ReceiverState expireStaleCandidate(
+            ReceiverState previous, long lastEvaluatedTick, long tick, long maxGapTicks) {
+
+        if (!previous.hasCandidate() || lastEvaluatedTick == NEVER_EVALUATED) {
+            return previous;
+        }
+        long gapTicks = tick - lastEvaluatedTick;
+        return gapTicks < 0 || gapTicks > maxGapTicks ? previous.withoutCandidate() : previous;
+    }
+
     private static CellSample find(List<CellSample> cells, long cellId) {
         for (CellSample cell : cells) {
             if (cell.cellId() == cellId) {

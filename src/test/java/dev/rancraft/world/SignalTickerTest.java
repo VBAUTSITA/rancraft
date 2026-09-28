@@ -1,5 +1,6 @@
 package dev.rancraft.world;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -62,6 +63,15 @@ class SignalTickerTest {
         assertTrue(SignalTicker.sendsSample(false, lens(LensLayers.LINKS).withBandFilter("band_3500")));
         assertTrue(SignalTicker.sendsSample(false, lens(LensLayers.TRAIL).withBandFilter("band_700")));
         assertFalse(SignalTicker.sendsSample(false, lens(LensLayers.ANTENNAS).withBandFilter("band_900")));
+    }
+
+    @Test
+    @DisplayName("the stale-candidate threshold is one evaluation interval, never below one tick")
+    void staleCandidateThresholdIsOneInterval() {
+        assertEquals(20L, SignalTicker.staleCandidateGapTicks(20), "the default interval");
+        assertEquals(1L, SignalTicker.staleCandidateGapTicks(1));
+        assertEquals(200L, SignalTicker.staleCandidateGapTicks(200), "the config maximum");
+        assertEquals(1L, SignalTicker.staleCandidateGapTicks(0), "the ticker already clamps the interval to 1");
     }
 
     @Test

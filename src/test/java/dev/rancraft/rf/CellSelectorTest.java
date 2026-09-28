@@ -3,6 +3,7 @@ package dev.rancraft.rf;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import dev.rancraft.rf.CellSelector.Selection;
@@ -170,6 +171,133 @@ class CellSelectorTest {
                         TestCells.sample(cellC, -70.0)), 20L, DEFAULTS).state();
         assertEquals(cellC, state.candidateCellId());
         assertEquals(20L, state.candidateSinceTick());
+    }
+
+    // ---- Phase 3 slice 4: a candidate armed before an evaluation pause ----------------------
+
+    /** The player ticker's cadence at the default config, and its stale-candidate threshold. */
+    private static final long INTERVAL = 20L;
+
+    /**
+     * One evaluation the way {@code SignalTicker} runs it while a candidate is armed (the cache is
+     * skipped then): resume the stored state, select, store the result with its tick.
+     */
+    private static Selection evaluateAt(
+            ReceiverStateStore<String> store, List<CellSample> cells, long tick) {
+        ReceiverState previous = store.resume("player", tick, INTERVAL);
+        Selection selection = CellSelector.select(previous, cells, tick, DEFAULTS);
+        store.put("player", selection.state(), tick);
+        return selection;
+    }
+
+    private static ReceiverStateStore<String> storeCampedOnA() {
+        ReceiverStateStore<String> store = new ReceiverStateStore<>();
+        store.put("player", campedOnA(), 0L);
+        return store;
+    }
+
+    @Test
+    @DisplayName("S4. Evaluated every interval, the handover still fires at exactly TTT: the fix delays nothing")
+    void continuousEvaluationKeepsTheCandidate() {
+        ReceiverStateStore<String> store = storeCampedOnA();
+        List<CellSample> cells = ranked(TestCells.sample(CELL_A, -80.0), TestCells.sample(CELL_B, -75.0));
+
+        Selection armed = evaluateAt(store, cells, 20L);
+        assertEquals(20L, armed.state().candidateSinceTick());
+        Selection held = evaluateAt(store, cells, 40L);
+        assertFalse(held.handedOver());
+        assertEquals(20L, held.state().candidateSinceTick(), "a gap of one interval keeps the clock running");
+
+        Selection fires = evaluateAt(store, cells, 60L);
+        assertTrue(fires.handedOver(), "20 + 40 = 60, as before the fix");
+        assertEquals(CELL_B, fires.servingCellId());
+    }
+
+    @Test
+    @DisplayName("S4. A candidate armed before a pause is re-armed when evaluation resumes, so TTT is observed again")
+    void pauseReArmsTheCandidate() {
+        ReceiverStateStore<String> store = storeCampedOnA();
+        List<CellSample> cells = ranked(TestCells.sample(CELL_A, -80.0), TestCells.sample(CELL_B, -75.0));
+
+        evaluateAt(store, cells, 20L);
+        assertTrue(store.get("player").hasCandidate(), "fixture: armed at 20");
+        // The player puts the meter away at tick 30: nothing evaluates them until tick 200.
+
+        // The bug this pins: the frozen state alone would hand over on the first evaluation back.
+        Selection frozen = CellSelector.select(store.get("player"), cells, 200L, DEFAULTS);
+        assertTrue(frozen.handedOver(), "fixture: without the fix the stale 180-tick timer fires at once");
+
+        Selection resumed = evaluateAt(store, cells, 200L);
+        assertFalse(resumed.handedOver(), "the gap was not observed, so it cannot count towards TTT");
+        assertEquals(CELL_A, resumed.servingCellId());
+        assertEquals(CELL_B, resumed.state().candidateCellId(), "still qualifies, so it is re-armed");
+        assertEquals(200L, resumed.state().candidateSinceTick(), "the clock restarts where evaluation resumed");
+
+        assertFalse(evaluateAt(store, cells, 220L).handedOver());
+        Selection fires = evaluateAt(store, cells, 240L);
+        assertTrue(fires.handedOver(), "200 + 40 = 240: one full TTT after resuming");
+        assertEquals(1, fires.state().handoverCount());
+    }
+
+    @Test
+    @DisplayName("S4. A pause after which the neighbour no longer qualifies leaves no candidate and no handover")
+    void pauseWithNeighbourGoneClearsTheCandidate() {
+        ReceiverStateStore<String> store = storeCampedOnA();
+        evaluateAt(store, ranked(TestCells.sample(CELL_A, -80.0), TestCells.sample(CELL_B, -75.0)), 20L);
+
+        Selection resumed = evaluateAt(store,
+                ranked(TestCells.sample(CELL_A, -80.0), TestCells.sample(CELL_B, -79.0)), 300L);
+        assertFalse(resumed.handedOver());
+        assertFalse(resumed.state().hasCandidate());
+        assertEquals(0, resumed.state().handoverCount());
+    }
+
+    @Test
+    @DisplayName("S4. The threshold: a gap of one interval keeps the candidate, one tick more drops it; serving cell and tally survive")
+    void staleThresholdBoundary() {
+        ReceiverState armed = new ReceiverState(CELL_A, 5L, CELL_B, 100L, 7);
+
+        assertSame(armed, CellSelector.expireStaleCandidate(armed, 100L, 120L, INTERVAL), "gap 20 = interval");
+        ReceiverState dropped = CellSelector.expireStaleCandidate(armed, 100L, 121L, INTERVAL);
+        assertFalse(dropped.hasCandidate(), "gap 21 > interval: at least one scheduled evaluation was missed");
+        assertEquals(CELL_A, dropped.servingCellId());
+        assertEquals(5L, dropped.servingSinceTick());
+        assertEquals(7, dropped.handoverCount(), "a pause is not a handover and not an outage");
+
+        assertFalse(CellSelector.expireStaleCandidate(armed, 100L, 99L, INTERVAL).hasCandidate(),
+                "a clock that ran backwards cannot vouch for the timer");
+        assertSame(armed, CellSelector.expireStaleCandidate(armed, CellSelector.NEVER_EVALUATED, 10_000L, INTERVAL),
+                "no recorded evaluation: nothing to measure the gap from, so the state is kept");
+
+        ReceiverState unarmed = armed.withoutCandidate();
+        assertSame(unarmed, CellSelector.expireStaleCandidate(unarmed, 100L, 10_000L, INTERVAL));
+    }
+
+    @Test
+    @DisplayName("S4. The store records when each state was produced and forgets it with the state")
+    void storeTracksTheEvaluationTick() {
+        ReceiverStateStore<String> store = new ReceiverStateStore<>();
+        assertEquals(CellSelector.NEVER_EVALUATED, store.lastEvaluatedTick("player"));
+
+        store.put("player", ReceiverState.NONE.withCandidate(CELL_B, 90L), 100L);
+        assertEquals(100L, store.lastEvaluatedTick("player"));
+        assertTrue(store.resume("player", 120L, INTERVAL).hasCandidate());
+        assertFalse(store.resume("player", 121L, INTERVAL).hasCandidate());
+        assertTrue(store.get("player").hasCandidate(), "resume only reads; the evaluation stores its result");
+
+        store.put("player", ReceiverState.NONE.withCandidate(CELL_B, 90L));
+        assertEquals(CellSelector.NEVER_EVALUATED, store.lastEvaluatedTick("player"),
+                "a put without a tick must not keep an older evaluation's tick");
+
+        store.select("player", ranked(TestCells.sample(CELL_A, -80.0)), 500L, DEFAULTS);
+        assertEquals(500L, store.lastEvaluatedTick("player"), "select records the tick it ran at");
+
+        store.clear("player");
+        assertEquals(CellSelector.NEVER_EVALUATED, store.lastEvaluatedTick("player"));
+        store.put("other", ReceiverState.NONE, 1L);
+        store.clearAll();
+        assertEquals(CellSelector.NEVER_EVALUATED, store.lastEvaluatedTick("other"));
+        assertEquals(0, store.size());
     }
 
     // ---- Store -----------------------------------------------------------------------------

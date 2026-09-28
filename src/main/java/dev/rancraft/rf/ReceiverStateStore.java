@@ -14,26 +14,62 @@ import java.util.concurrent.ConcurrentHashMap;
  * in. The owner must call {@link #clear(Object)} on logout, on dimension change and on death --
  * the last two because a receiver that teleports has no business carrying a candidate timer for a
  * cell that is now thousands of blocks away.
+ *
+ * <p><b>Phase 3 slice 4:</b> the store also remembers <em>when</em> each state was produced
+ * ({@link #put(Object, ReceiverState, long)}), so {@link #resume} can drop a handover candidate
+ * that went stale while the receiver was not being evaluated. See
+ * {@link CellSelector#expireStaleCandidate}.
  */
 public final class ReceiverStateStore<K> {
 
     private final Map<K, ReceiverState> states = new ConcurrentHashMap<>();
+    private final Map<K, Long> evaluatedAt = new ConcurrentHashMap<>();
 
     public ReceiverState get(K key) {
         return states.getOrDefault(key, ReceiverState.NONE);
     }
 
+    /**
+     * Stores a state with no record of when it was produced, so {@link #resume} will never expire
+     * its candidate. Evaluations should use {@link #put(Object, ReceiverState, long)}.
+     */
     public void put(K key, ReceiverState state) {
         states.put(key, state);
+        evaluatedAt.remove(key);
+    }
+
+    /** Stores the state an evaluation at {@code tick} produced, and remembers that tick. */
+    public void put(K key, ReceiverState state, long tick) {
+        states.put(key, state);
+        evaluatedAt.put(key, tick);
+    }
+
+    /**
+     * The tick of the evaluation that produced this receiver's state, or
+     * {@link CellSelector#NEVER_EVALUATED} if none was recorded.
+     */
+    public long lastEvaluatedTick(K key) {
+        return evaluatedAt.getOrDefault(key, CellSelector.NEVER_EVALUATED);
+    }
+
+    /**
+     * The state to carry into an evaluation at {@code tick}: {@link #get} with an armed candidate
+     * dropped if more than {@code maxGapTicks} passed since the last recorded evaluation
+     * ({@link CellSelector#expireStaleCandidate}). Reads only; the evaluation stores its result.
+     */
+    public ReceiverState resume(K key, long tick, long maxGapTicks) {
+        return CellSelector.expireStaleCandidate(get(key), lastEvaluatedTick(key), tick, maxGapTicks);
     }
 
     /** Forgets one receiver. Safe to call for a key that was never present. */
     public void clear(K key) {
         states.remove(key);
+        evaluatedAt.remove(key);
     }
 
     public void clearAll() {
         states.clear();
+        evaluatedAt.clear();
     }
 
     public int size() {
@@ -48,7 +84,7 @@ public final class ReceiverStateStore<K> {
             CellSelector.SelectionParams params) {
 
         CellSelector.Selection selection = CellSelector.select(get(key), cellsByRsrpDesc, tick, params);
-        put(key, selection.state());
+        put(key, selection.state(), tick);
         return selection;
     }
 }
