@@ -16,6 +16,7 @@
 | `.\gradlew.bat build` | compile + full unit test suite. The gate for every change. |
 | `.\gradlew.bat runClient` | dev client with the mod loaded (for the user to test by hand) |
 | `.\gradlew.bat runServer` | dedicated server, headless; `run/server/logs/latest.log` |
+| `.\gradlew.bat runGameTestServer` | in-game regression tests (`dev.rancraft.gametest`), headless; runs every test, then exits. The task fails if a required test fails. Not part of `build`. Log: `run/gameTestServer/logs/latest.log` |
 
 ## Machine constraints
 
