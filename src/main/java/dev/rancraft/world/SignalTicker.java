@@ -4,7 +4,9 @@ import dev.rancraft.RanCraft;
 import dev.rancraft.RanCraftConfig;
 import dev.rancraft.block.AntennaBlockEntity;
 import dev.rancraft.data.RfDataLoader;
-import dev.rancraft.item.FieldTestMeterItem;
+import dev.rancraft.device.DeviceContext;
+import dev.rancraft.device.DeviceMemory;
+import dev.rancraft.device.SignalDevice;
 import dev.rancraft.item.LensSettings;
 import dev.rancraft.item.RfLensItem;
 import dev.rancraft.net.LensLinksPayload;
@@ -13,6 +15,7 @@ import dev.rancraft.rf.Band;
 import dev.rancraft.rf.BandTable;
 import dev.rancraft.rf.CellParams;
 import dev.rancraft.rf.CellSample;
+import dev.rancraft.rf.DeviceRequirement;
 import dev.rancraft.rf.LinkTracer;
 import dev.rancraft.rf.PciConflict;
 import dev.rancraft.rf.PciPlanner;
@@ -31,10 +34,12 @@ import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Function;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.LevelAccessor;
@@ -53,22 +58,35 @@ import net.neoforged.neoforge.network.PacketDistributor;
 /**
  * Drives evaluation from the receiver side at 1 Hz.
  *
- * <p>Antennas are passive; only players who asked to see the signal cost anything: those holding a
- * Field Test Meter, and those wearing an RF Lens with link rays or the drive-test trail on. Work is
- * staggered across the interval by player id so every player does not land on the same tick.
+ * <p>Antennas are passive; only players who asked for the signal cost anything: those carrying a
+ * {@link SignalDevice} (a Field Test Meter, ...) in a hand or the hotbar, and those wearing an RF
+ * Lens with link rays or the drive-test trail on. Work is staggered across the interval by player
+ * id so every player does not land on the same tick.
  *
- * <p><b>One evaluation per player per interval, however many views want it.</b> A lens wearer's
- * link rays come from the <em>same</em> evaluation as the meter reading, so the rays and the HUD can
- * never disagree about which cells are heard or which one serves. Each drawn link costs one extra
- * traced ray ({@link LinkTracer}), and only while links are on. The drive-test trail (RF Vision
- * Step 3a) costs nothing extra either: it is the same {@link SignalSamplePayload} the meter gets,
- * which now carries the point it was evaluated at.
+ * <p><b>One evaluation per player per interval, however many views or devices want it.</b> A lens
+ * wearer's link rays come from the <em>same</em> evaluation as the meter reading, so the rays and
+ * the HUD can never disagree about which cells are heard or which one serves. Each drawn link costs
+ * one extra traced ray ({@link LinkTracer}), and only while links are on. The drive-test trail (RF
+ * Vision Step 3a) costs nothing extra either: it is the same {@link SignalSamplePayload} the meter
+ * gets, which now carries the point it was evaluated at. Devices (Phase 3, §3A.3) cost nothing extra
+ * either: the one {@link SignalSample} is dispatched to every carried device after the evaluation
+ * ({@link #dispatch}), and devices never compute RF.
  *
  * <p><b>Every evaluation is sent.</b> Whoever is evaluated gets the {@link SignalSamplePayload},
- * whichever view asked for the evaluation (see {@link #sendsSample}). The client's drive-test log
- * reads handovers off the server's counter, so an evaluation it never saw would hide a handover and
- * then mark it at the wrong place. The client logs every sample; the HUD still draws only while the
- * meter is held, and the trail only while the lens shows it.
+ * whichever view or device asked for the evaluation (see {@link #sendsSample}). The client's
+ * drive-test log reads handovers off the server's counter, so an evaluation it never saw would hide
+ * a handover and then mark it at the wrong place. The client logs every sample; the HUD still draws
+ * only while the meter is held, and the trail only while the lens shows it.
+ *
+ * <p><b>Phase 3 slice 4 refactor.</b> The hard-coded "is a meter in a hand" question became a scan
+ * of carried devices ({@link #carried}). What stayed exactly as it was: the stagger, the lens paths
+ * (link rays with their cap, and the trail, which are not devices), the cache and its keys (block
+ * epoch, site registry version, 0.5-block move), the cache skip while a handover candidate is armed,
+ * the rule that a cached entry without links never starves a wearer who now wants them, and
+ * {@link #forget} on logout, dimension change and respawn (which now also forgets device state).
+ * What is new: cached replays are dispatched to devices too, and an armed candidate that went stale
+ * during an evaluation pause is dropped before selection ({@link #staleCandidateGapTicks}). The
+ * regression checklist is in NOTES.md, Phase 3 slice 4.
  *
  * <p>Coverage painting is not driven from here -- it is a much larger, time-sliced job. See
  * {@link CoverageSurveyor}.
@@ -104,13 +122,17 @@ public final class SignalTicker {
      * to be missing, and reconfiguring an antenna changes no block, so a player standing still
      * kept reading the old tilt until they took a step.
      *
+     * @param sample          the evaluation itself, full cell list included. <b>Slice 4:</b> kept so a
+     *                        replay can be dispatched to devices, which need more than the four
+     *                        cells the payload carries. Server memory only; never sent.
      * @param links           the link rays built from this evaluation, or {@code null} when the
      *                        player did not want any. An entry without links is never replayed to
      *                        a player who now wants them -- see {@link #hasLinksFor}.
      * @param linksBandFilter the lens band filter the links were chosen under.
      * @param linksCap        the {@code lensMaxLinks} they were capped at.
      */
-    private record Cached(
+    record Cached(
+            SignalSample sample,
             SignalSamplePayload payload,
             LensLinksPayload links,
             String linksBandFilter,
@@ -133,31 +155,115 @@ public final class SignalTicker {
         }
     }
 
+    /**
+     * Whether {@link #evaluate} replays {@code cached} instead of running a new evaluation. Pure
+     * (slice 4: extracted unchanged from {@code evaluate}, so {@code SignalTickerCacheTest} can pin
+     * every condition). All must hold:
+     *
+     * <ul>
+     *   <li>caching is enabled;
+     *   <li><b>no handover candidate is armed.</b> Replaying would freeze the time-to-trigger clock,
+     *       so a player standing still at a cell boundary would never hand over at all;
+     *   <li>there is an entry, and it is current ({@link Cached#isCurrent}): same block epoch, same
+     *       site registry version, and the eye moved less than {@value #MOVE_EPSILON_BLOCKS} blocks;
+     *   <li><b>the cache must not starve links:</b> if link rays are wanted now, the entry has links
+     *       built under the same band filter and cap ({@link Cached#hasLinksFor}). An entry built for
+     *       a meter alone is never replayed to a player who has since switched the lens to links.
+     * </ul>
+     *
+     * @param candidateArmed the <em>stored</em> handover state has a candidate (stale or not).
+     * @param linkLens       the lens settings when link rays are wanted, otherwise {@code null}.
+     */
+    static boolean canReplay(
+            Cached cached,
+            boolean cachingEnabled,
+            boolean candidateArmed,
+            double eyeX, double eyeY, double eyeZ,
+            long epoch,
+            long siteVersion,
+            LensSettings linkLens,
+            int linkCap) {
+
+        return cachingEnabled
+                && !candidateArmed
+                && cached != null
+                && cached.isCurrent(eyeX, eyeY, eyeZ, epoch, siteVersion)
+                && (linkLens == null || cached.hasLinksFor(linkLens, linkCap));
+    }
+
+    /**
+     * One device a player carries (§3A.3).
+     *
+     * @param stack the live inventory stack, not a copy.
+     * @param held  main hand or offhand. A device in the hotbar runs but draws no HUD.
+     */
+    record CarriedDevice(ItemStack stack, SignalDevice device, boolean held) {
+    }
+
+    /** One carried slot that holds a device, as {@link #scanCarried} finds it, before binding to game types. */
+    record Found<S, D>(S stack, D device, boolean held) {
+    }
+
     @SubscribeEvent
     public static void onServerTick(ServerTickEvent.Post event) {
         MinecraftServer server = event.getServer();
         RfConfig config = RanCraftConfig.snapshot();
         int interval = Math.max(1, config.evaluationIntervalTicks());
-        int phase = Math.floorMod(server.getTickCount(), interval);
+        int tickCount = server.getTickCount();
 
         for (ServerPlayer player : server.getPlayerList().getPlayers()) {
-            if (Math.floorMod(player.getId(), interval) != phase) {
+            if (!isDue(player.getId(), tickCount, interval)) {
                 continue;
             }
             LensSettings lens = wornLensOf(player);
+            List<CarriedDevice> devices = carried(player);
             // One question, not two: whoever is evaluated is sent the sample. See sendsSample.
-            if (!sendsSample(holdsMeter(player), lens)) {
+            if (!sendsSample(devices, lens)) {
                 continue;
             }
-            evaluate(player, config, lens != null && lens.showLinks() ? lens : null, interval);
+            evaluate(player, config, linkLensOf(lens), devices, interval);
         }
     }
 
     /**
+     * The stagger: a player is looked at on the server ticks whose phase in the interval matches
+     * their entity id, so players spread across the interval instead of all landing on one tick.
+     * Each player is due exactly once every {@code interval} server ticks, which is what
+     * {@link #staleCandidateGapTicks} relies on. Pure (slice 4, extracted unchanged so
+     * {@code SignalTickerTest} can pin it).
+     *
+     * @param interval the evaluation interval, already clamped to at least 1.
+     */
+    static boolean isDue(int playerId, int tickCount, int interval) {
+        return Math.floorMod(playerId, interval) == Math.floorMod(tickCount, interval);
+    }
+
+    /** The lens settings when link rays are wanted, otherwise {@code null}. Pure (slice 4). */
+    static LensSettings linkLensOf(LensSettings lens) {
+        return lens != null && lens.showLinks() ? lens : null;
+    }
+
+    /**
+     * The lens link cap: {@code lensMaxLinks}, never above what {@link LensLinksPayload} carries;
+     * 0 when no link rays are wanted. Part of the cache key ({@link Cached#hasLinksFor}). Pure
+     * (slice 4, extracted unchanged).
+     */
+    static int linkCap(LensSettings linkLens, int configuredMaxLinks) {
+        return linkLens == null ? 0 : Math.min(configuredMaxLinks, LensLinksPayload.MAX_LINKS);
+    }
+
+    /**
      * Whether this player is evaluated this interval, which is the same as whether they are sent the
-     * sample: {@link #evaluate} always sends it. Three views ask for an evaluation: a held meter (the
-     * HUD), a worn lens showing the drive-test trail (the log), and a worn lens showing link rays
-     * (the rays are built from the same evaluation).
+     * sample: {@link #evaluate} always sends it. Three things ask for an evaluation: a carried device
+     * (in a hand or the hotbar), a worn lens showing the drive-test trail (the log), and a worn lens
+     * showing link rays (the rays are built from the same evaluation).
+     *
+     * <p><b>Slice 4: any carried device, held or not.</b> Before §3A.3 only a meter in a hand
+     * counted. Now a device in the hotbar makes its carrier evaluated too (the Network Locator keeps
+     * its emergency record in a pocket), and so it must also make them <em>sent</em> the sample, for
+     * the reason below. The spec's "the meter sends SignalSamplePayload only when held" is therefore
+     * "the meter HUD draws only when held", which {@code SignalHudOverlay} enforces on the client.
+     * The sample itself is sent once per evaluation by the ticker, never by a device.
      *
      * <p><b>Why the link rays get the sample too.</b> Until the Phase 3 slice 0 gate review, a lens
      * on the LINKS preset was evaluated but not sent the sample. Its handover state machine kept
@@ -167,24 +273,23 @@ public final class SignalTicker {
      * LINKS walk at once. The log then drew one false HANDOVER pillar at the switch point (and wrote
      * {@code event=HANDOVER} on that CSV row), and none where the handovers fired. The rule is
      * therefore: <em>every evaluation that can move the handover counter reaches the client</em>. A
-     * player who is not evaluated (no meter, and no lens or one on the ANTENNAS or COVERAGE preset)
-     * has a frozen handover state, so the log misses nothing.
+     * player who is not evaluated (no device carried, and no lens or one on the ANTENNAS or COVERAGE
+     * preset) has a frozen handover state, so the log misses nothing.
      *
-     * <p>The extra cost is one {@link SignalSamplePayload} per interval for a wearer who shows only
-     * link rays. That wearer already gets a larger {@link LensLinksPayload} every interval. Nothing
-     * changes on screen: the HUD draws only while the meter is held, and the trail only when shown.
+     * <p>The extra cost is one {@link SignalSamplePayload} per interval for a player evaluated only
+     * for link rays or for a device in the hotbar. Nothing changes on screen: the HUD draws only
+     * while the meter is held, and the trail only when shown.
      *
-     * <p>Pure and package-private so the rule is pinned by {@code SignalTickerTest}. Phase 3 slice 4
-     * replaces the meter check with a scan of carried devices. It must keep "evaluated implies sent"
-     * for devices that trigger an evaluation from the hotbar too (see PHASE_3.md follow-ups).
+     * <p>Pure and package-private so the rule is pinned by {@code SignalTickerTest}.
      *
-     * @param meterHeld a Field Test Meter in the main hand or offhand.
-     * @param lens      the worn lens's settings, or {@code null} when no lens is worn. The band filter
-     *                  does not matter: a filter that hides every heard cell still has the wearer
-     *                  evaluated (the rays come back empty) and so still moves the handover counter.
+     * @param carried the devices the player carries ({@link #carried}), held or not. Only whether
+     *                there are any matters.
+     * @param lens    the worn lens's settings, or {@code null} when no lens is worn. The band filter
+     *                does not matter: a filter that hides every heard cell still has the wearer
+     *                evaluated (the rays come back empty) and so still moves the handover counter.
      */
-    static boolean sendsSample(boolean meterHeld, LensSettings lens) {
-        return meterHeld || (lens != null && (lens.showTrail() || lens.showLinks()));
+    static boolean sendsSample(List<CarriedDevice> carried, LensSettings lens) {
+        return !carried.isEmpty() || (lens != null && (lens.showTrail() || lens.showLinks()));
     }
 
     /**
@@ -200,9 +305,16 @@ public final class SignalTicker {
      * its game time. Game time advances by one per server tick, or not at all while the tick rate
      * manager is frozen ({@code /tick freeze}: checked in {@code MinecraftServer.tickServer} and
      * {@code ServerLevel.tick}), and every dimension reads the overworld's clock. So a continuously
-     * observed player's gap is exactly one interval, or shorter. If {@code evaluationIntervalTicks} is
-     * changed live, the next evaluation still lands within one <em>new</em> interval. Any longer gap
-     * means at least one scheduled evaluation did not happen.
+     * observed player's gap is exactly one interval, or shorter ({@link #isDue}; pinned by
+     * {@code SignalTickerTest}). Any longer gap means at least one scheduled evaluation did not
+     * happen.
+     *
+     * <p><b>One harmless exception: a live change of {@code evaluationIntervalTicks}.</b> The stagger
+     * re-phases, so the first gap after the change can be up to {@code old + new - gcd(old, new)}
+     * ticks, which exceeds the new interval unless the old interval divides the new one (20 to 10:
+     * up to 20 ticks). An armed candidate is then dropped once and re-armed on that
+     * evaluation: the handover can be delayed by at most one time-to-trigger, never made early. Not
+     * worth remembering the previous interval for an admin action.
      *
      * <p>A margin would bring the bug back for short pauses. At the defaults (interval 20, TTT 40), a
      * candidate armed at tick T and one skipped evaluation give a gap of 40 at T + 40, which already
@@ -216,9 +328,99 @@ public final class SignalTicker {
         return Math.max(1, interval);
     }
 
-    private static boolean holdsMeter(ServerPlayer player) {
-        return player.getMainHandItem().getItem() instanceof FieldTestMeterItem
-                || player.getOffhandItem().getItem() instanceof FieldTestMeterItem;
+    /**
+     * The devices this player carries: main hand, offhand, then hotbar slots 0-8, each stack once.
+     * Replaces Phase 2's {@code holdsMeter()}. Armour and the rest of the inventory do not count:
+     * the lens is not a device, and a device packed away in the backpack is switched off.
+     */
+    static List<CarriedDevice> carried(ServerPlayer player) {
+        Inventory inventory = player.getInventory();
+        List<ItemStack> hotbar = new ArrayList<>(Inventory.getSelectionSize());
+        for (int slot = 0; slot < Inventory.getSelectionSize(); slot++) {
+            hotbar.add(inventory.items.get(slot));
+        }
+        List<Found<ItemStack, SignalDevice>> found = scanCarried(
+                player.getMainHandItem(), player.getOffhandItem(), hotbar, SignalTicker::deviceOf);
+        if (found.isEmpty()) {
+            return List.of();
+        }
+        List<CarriedDevice> devices = new ArrayList<>(found.size());
+        for (Found<ItemStack, SignalDevice> device : found) {
+            devices.add(new CarriedDevice(device.stack(), device.device(), device.held()));
+        }
+        return devices;
+    }
+
+    /**
+     * The scan behind {@link #carried}, generic so it is testable without a game.
+     *
+     * <p><b>The main-hand stack is also a hotbar slot.</b> {@code Player.getMainHandItem()} is
+     * {@code Inventory.getSelected()}, which is {@code items.get(selected)}, the very object in
+     * hotbar slot {@code selected} (checked in the 1.21.1 sources). Scanning both would dispatch a
+     * held device twice, once as held and once as not. So a hotbar slot holding the <em>same
+     * object</em> as the main hand (or the offhand) is skipped. Identity, not equality: two separate
+     * meters are two devices, and each is dispatched.
+     *
+     * @return in dispatch order: main hand (held), offhand (held), hotbar left to right (not held).
+     *         Slots whose stack is null or not a device ({@code deviceOf} returns null) are left out.
+     */
+    static <S, D> List<Found<S, D>> scanCarried(
+            S mainHand, S offhand, List<? extends S> hotbar, Function<? super S, ? extends D> deviceOf) {
+
+        List<Found<S, D>> found = new ArrayList<>(2);
+        addIfDevice(found, mainHand, true, deviceOf);
+        addIfDevice(found, offhand, true, deviceOf);
+        for (S stack : hotbar) {
+            if (stack == mainHand || stack == offhand) {
+                continue;
+            }
+            addIfDevice(found, stack, false, deviceOf);
+        }
+        return found;
+    }
+
+    private static <S, D> void addIfDevice(
+            List<Found<S, D>> found, S stack, boolean held, Function<? super S, ? extends D> deviceOf) {
+        if (stack == null) {
+            return;
+        }
+        D device = deviceOf.apply(stack);
+        if (device != null) {
+            found.add(new Found<>(stack, device, held));
+        }
+    }
+
+    /** The stack's item as a device, or {@code null}. An empty stack is air, which is not a device. */
+    private static SignalDevice deviceOf(ItemStack stack) {
+        return stack.getItem() instanceof SignalDevice device ? device : null;
+    }
+
+    /**
+     * Hands the one sample to every carried device, each with its own verdict
+     * ({@code device.requirement(stack).check(sample, bands)}). Called after the sample was sent, on
+     * a fresh evaluation and on a cached replay alike; devices are idempotent on
+     * {@code sample.timestampTick()} (see {@link dev.rancraft.device.ReplayGuard}).
+     *
+     * <p>Devices never compute RF: this is the only thing they get, and it costs no evaluation.
+     *
+     * @param tick the game time now, which is later than {@code sample.timestampTick()} on a replay
+     *             (equal while game time is frozen by {@code /tick freeze}; see
+     *             {@link dev.rancraft.device.ReplayGuard}).
+     */
+    static void dispatch(
+            ServerPlayer player,
+            List<CarriedDevice> devices,
+            SignalSample sample,
+            BandTable bands,
+            RfConfig config,
+            ServerLevel level,
+            long tick) {
+
+        for (CarriedDevice carried : devices) {
+            DeviceRequirement.Verdict verdict = carried.device().requirement(carried.stack()).check(sample, bands);
+            carried.device().onSample(player, carried.stack(), carried.held(),
+                    new DeviceContext(sample, verdict, bands, config, level, tick));
+        }
     }
 
     /** The worn lens's settings, or {@code null} when no lens is worn. */
@@ -228,16 +430,19 @@ public final class SignalTicker {
     }
 
     /**
-     * Evaluates one player, or replays their cached evaluation, and sends the result. The sample is
-     * sent on both paths, with no way to skip it, because the drive-test log must see every
-     * evaluation (see {@link #sendsSample}).
+     * Evaluates one player, or replays their cached evaluation, sends the result, then dispatches it
+     * to the carried devices. The sample is sent on both paths, with no way to skip it, because the
+     * drive-test log must see every evaluation (see {@link #sendsSample}); and it is dispatched on
+     * both paths, so a device sees every interval whether or not the player moved.
      *
      * @param linkLens the lens settings when link rays are wanted, otherwise {@code null}.
+     * @param devices  the carried devices, possibly empty (a lens-only player).
      * @param interval the evaluation interval in ticks, which is also the longest gap after which
      *                 an armed handover candidate still counts as observed (see
      *                 {@link #staleCandidateGapTicks}).
      */
-    private static void evaluate(ServerPlayer player, RfConfig config, LensSettings linkLens, int interval) {
+    private static void evaluate(
+            ServerPlayer player, RfConfig config, LensSettings linkLens, List<CarriedDevice> devices, int interval) {
         ServerLevel level = player.serverLevel();
         SiteRegistry registry = SiteRegistry.of(level);
 
@@ -247,29 +452,28 @@ public final class SignalTicker {
         double eyeZ = eye.z;
         long epoch = blockEpochOf(level);
         long siteVersion = registry.version();
-        int linkCap = linkLens == null ? 0 : Math.min(RanCraftConfig.lensMaxLinks(), LensLinksPayload.MAX_LINKS);
+        int linkCap = linkCap(linkLens, RanCraftConfig.lensMaxLinks());
+        UUID receiverKey = player.getUUID();
+        BandTable bands = RfDataLoader.bands();
 
-        // Caching is skipped while a handover candidate is armed: replaying a cached payload would
-        // freeze the time-to-trigger clock, so a player standing still at a cell boundary would
-        // never hand over at all.
-        if (config.enableSampleCaching() && !RECEIVERS.get(player.getUUID()).hasCandidate()) {
-            Cached cached = CACHE.get(player.getUUID());
-            if (cached != null
-                    && cached.isCurrent(eyeX, eyeY, eyeZ, epoch, siteVersion)
-                    && (linkLens == null || cached.hasLinksFor(linkLens, linkCap))) {
-                send(player, cached.payload(), linkLens == null ? null : cached.links());
-                return;
-            }
+        // The stored state is checked as stored: a stale candidate (see below) also skips the cache,
+        // so the fresh evaluation can drop it and re-arm it.
+        Cached cached = CACHE.get(receiverKey);
+        if (canReplay(cached, config.enableSampleCaching(), RECEIVERS.get(receiverKey).hasCandidate(),
+                eyeX, eyeY, eyeZ, epoch, siteVersion, linkLens, linkCap)) {
+            send(player, cached.payload(), linkLens == null ? null : cached.links());
+            // Replays are dispatched too (§3A.3). The sample keeps the tick of the evaluation it
+            // replays, which is what devices are idempotent on.
+            dispatch(player, devices, cached.sample(), bands, config, level, level.getGameTime());
+            return;
         }
 
         Collection<CellParams> candidates =
                 registry.near(eyeX, eyeY, eyeZ, config.maxEvaluationRangeBlocks());
 
         LevelWorldProbe probe = new LevelWorldProbe(level, RfDataLoader.materials());
-        BandTable bands = RfDataLoader.bands();
         long gameTime = level.getGameTime();
 
-        UUID receiverKey = player.getUUID();
         // A candidate armed before an evaluation pause is dropped here, before selection, so the
         // time-to-trigger restarts where observation resumed. See staleCandidateGapTicks.
         ReceiverState previous = RECEIVERS.resume(receiverKey, gameTime, staleCandidateGapTicks(interval));
@@ -290,16 +494,16 @@ public final class SignalTicker {
         // marks the point measured rather than wherever the client is when the packet lands. A
         // cached replay below carries its original point, which isCurrent() keeps within
         // MOVE_EPSILON_BLOCKS of the player.
-        SignalSamplePayload payload =
-                toPayload(sample, candidates, gameTime, config, evaluation.stats(), eyeX, eyeY, eyeZ);
+        SignalSamplePayload payload = toPayload(sample, candidates, gameTime, config, bands, eyeX, eyeY, eyeZ);
         LensLinksPayload links = linkLens == null
                 ? null
                 : traceLinks(level, sample, candidates, eyeX, eyeY, eyeZ, linkLens, linkCap, bands, config, gameTime);
 
-        CACHE.put(player.getUUID(), new Cached(
-                payload, links, linkLens == null ? LensSettings.ALL_BANDS : linkLens.bandFilter(), linkCap,
+        CACHE.put(receiverKey, new Cached(
+                sample, payload, links, linkLens == null ? LensSettings.ALL_BANDS : linkLens.bandFilter(), linkCap,
                 eyeX, eyeY, eyeZ, epoch, siteVersion));
         send(player, payload, links);
+        dispatch(player, devices, sample, bands, config, level, gameTime);
     }
 
     /** The sample always; the link rays when the lens wants them ({@code links} is null otherwise). */
@@ -397,13 +601,18 @@ public final class SignalTicker {
      * Adds the display-only extras the engine has no business carrying: the serving band frequency,
      * the worst outstanding PCI conflict on the serving cell, pre-rendered as one line, and the
      * point the evaluation ran at (for the drive-test trail).
+     *
+     * <p><b>Slice 4:</b> package-private, and handed the band table the evaluation used instead of
+     * reading {@code RfDataLoader.bands()} a second time (the same table in practice; now provably).
+     * The unused {@code EvaluationStats} parameter is gone. The body is unchanged, and
+     * {@code SignalTickerPayloadTest} pins its output byte for byte against the pre-refactor code.
      */
-    private static SignalSamplePayload toPayload(
+    static SignalSamplePayload toPayload(
             SignalSample sample,
             Collection<CellParams> candidates,
             long tick,
             RfConfig config,
-            RfEngine.EvaluationStats stats,
+            BandTable bands,
             double rxX, double rxY, double rxZ) {
 
         Optional<CellSample> serving = sample.serving();
@@ -411,7 +620,7 @@ public final class SignalTicker {
             return SignalSamplePayload.empty(tick, sample.handoverCount(), rxX, rxY, rxZ);
         }
 
-        Band band = RfDataLoader.bands().getOrFallback(serving.get().bandId());
+        Band band = bands.getOrFallback(serving.get().bandId());
         return SignalSamplePayload.of(
                 sample, band.id(), band.frequencyMhz(), config.metersPerBlock(),
                 conflictNote(serving.get().cellId(), candidates, config),
@@ -532,17 +741,23 @@ public final class SignalTicker {
         forget(event.getEntity().getUUID());
     }
 
-    /** Drops the cached payload, the handover state and any coverage survey for one player. */
-    private static void forget(UUID playerId) {
+    /**
+     * Drops the cached payload, the handover state (with its last evaluation tick), any coverage
+     * survey, and every device's per-player state ({@link DeviceMemory}) for one player.
+     * Package-private so {@code SignalTickerTest} can check the device part.
+     */
+    static void forget(UUID playerId) {
         CACHE.remove(playerId);
         RECEIVERS.clear(playerId);
         CoverageSurveyor.forget(playerId);
+        DeviceMemory.forget(playerId);
     }
 
     @SubscribeEvent
     public static void onServerStopped(ServerStoppedEvent event) {
         CACHE.clear();
         RECEIVERS.clearAll();
+        DeviceMemory.clearAll();
         BLOCK_EPOCHS.clear();
         CoverageSurveyor.clearAll();
         SiteRegistry.clearAll();

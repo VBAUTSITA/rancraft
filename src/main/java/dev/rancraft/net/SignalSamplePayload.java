@@ -25,11 +25,12 @@ import net.minecraft.resources.ResourceLocation;
  * <p><b>The client computes nothing.</b> Gain, SINR, service level and the choice of serving cell
  * are all decided server-side and shipped as values. Everything here is a number to render.
  *
- * <p>Sent with every evaluation the server runs for a player: one holding a Field Test Meter (the
- * HUD), or wearing an RF Lens that shows the drive-test trail or link rays. All of them come from
- * the same single evaluation per interval. Every evaluation is sent, because the client's
- * drive-test log reads handovers off consecutive samples and must not miss one; see
- * {@code world.SignalTicker.sendsSample}.
+ * <p>Sent with every evaluation the server runs for a player: one carrying a signal device (the Field
+ * Test Meter, whose HUD draws only while it is held) in a hand or the hotbar, or wearing an RF Lens
+ * that shows the drive-test trail or link rays. All of them come from the same single evaluation per
+ * interval. Every evaluation is sent, because the client's drive-test log reads handovers off
+ * consecutive samples and must not miss one; see {@code world.SignalTicker.sendsSample}. It is sent
+ * by the ticker, never by a device.
  *
  * @param version               wire version, {@value #VERSION} since RF Vision Step 3a.
  * @param servingConflictNote   one pre-rendered PCI warning line for the serving cell, or empty.
