@@ -962,3 +962,149 @@ refactor and left it alone here, because it is state-machine behaviour outside t
 **Needs a human in game:** on the LINKS preset, walk across two cell boundaries (or A→B→A), then
 cycle to TRAIL. There should be a white pillar at each handover point and none at the switch point,
 and the exported CSV should agree. The check is listed in `PHASE_3.md`.
+
+---
+
+## Slice 1 — datapack folders (§0 known problem 3) and the purity assertion (§2)
+
+### Known problem 3: confirmed at runtime, and fixed
+
+The scout had already read vanilla's own 1.21.1 jar: it ships `data/minecraft/loot_table/`,
+`recipe/`, `tags/block/` and `tags/item/`. RANCraft shipped the pre-1.21 plural names, which 1.21
+neither reads nor warns about. The fix is three `git mv`s; the file contents are unchanged:
+
+| Before (not read by 1.21) | After |
+|---|---|
+| `data/rancraft/loot_tables/blocks/signal_mast.json` | `data/rancraft/loot_table/blocks/signal_mast.json` |
+| `data/rancraft/loot_tables/blocks/sector_antenna.json` | `data/rancraft/loot_table/blocks/sector_antenna.json` |
+| `data/minecraft/tags/blocks/mineable/pickaxe.json` | `data/minecraft/tags/block/mineable/pickaxe.json` |
+
+Nothing else in `src/main/resources/data` used an old name (`rancraft/rf/` is our own reload
+listener's folder, which 1.21 did not rename). No world migration is needed: the fix is data only,
+and placed blocks are unaffected. A mast or sector already broken in survival before this fix
+dropped nothing, and that is not recoverable.
+
+### Runtime check: `HarvestGameTests` (NeoForge GameTest)
+
+`src/main/java/dev/rancraft/gametest/HarvestGameTests.java`, run by `./gradlew runGameTestServer`
+(added to the command tables in `CLAUDE.md` and `README.md`). One generated test per entry in
+`ModBlocks.BLOCKS`, so the blocks §3C.6 adds are covered with no edit. For each block, placed in an
+empty 3x3x3 template, it checks what a survival break decides, and names every failed cause at once:
+
+1. the block is in `#minecraft:mineable/pickaxe` (`BlockTags.MINEABLE_WITH_PICKAXE`);
+2. an iron pickaxe mines it faster than a bare hand (`ItemStack.getDestroySpeed > 1`);
+3. `BlockState.canHarvestBlock` is true for a survival player holding an iron pickaxe (both blocks
+   are `requiresCorrectToolForDrops()`, so false means the loot table is never rolled);
+4. `Block.getDrops(state, level, pos, blockEntity, miner, ironPickaxe)` is non-empty and contains the
+   block's own item.
+
+Before and after (both blocks, every run):
+
+| Layout | Run | Game tests | Gradle |
+|---|---|---|---|
+| old (`loot_tables/`, `tags/blocks/`) | earlier interrupted attempt at this slice, 2026-09-28 02:26 | **2 of 2 failed** | not recorded |
+| new | earlier attempt, 02:27 | **2 of 2 passed** | not recorded |
+| new | this attempt | **2 of 2 passed** (920 ms) | `BUILD SUCCESSFUL`, exit 0, 27 s |
+| old, files moved back by hand for the run, then restored (`git status` clean after) | this attempt | **2 of 2 failed** (805 ms) | `runGameTestServer FAILED`, "non-zero exit value 2", 25 s |
+| new, after the restore, final tree | this attempt | **2 of 2 passed** (1.01 s) | `BUILD SUCCESSFUL`, exit 0, 25 s |
+
+The earlier attempt's two runs are in `run/gameTestServer/logs/` (gitignored; the failing one is
+`2026-09-28-1.log.gz`); the two runs of this attempt reproduced them. The failure on the old layout,
+identical for `sector_antenna`:
+
+> `harvestgametests.signal_mast failed ... rancraft:signal_mast: not in #minecraft:mineable/pickaxe
+> (data/minecraft/tags/block/mineable/pickaxe.json); an iron pickaxe mines it at bare-hand speed
+> (1.0); a survival player holding an iron pickaxe cannot harvest it, so breaking it drops nothing;
+> loot table rancraft:blocks/signal_mast yields nothing (missing, or not under
+> data/<ns>/loot_table/)`
+
+So all four symptoms were real: no tag, no tool speed, no harvest, no loot table. What that meant in
+survival, **computed** from `Block.getDestroyProgress` (progress per tick = dig speed / hardness /
+(harvestable ? 30 : 100)) with hardness 3.0 and iron's tier speed 6.0, not timed in game:
+
+| | Before | After |
+|---|---|---|
+| Iron pickaxe | 1.0 / 3.0 / 100 → 300 ticks = **15 s**, drops nothing | 6.0 / 3.0 / 30 → 15 ticks = **0.75 s**, drops itself |
+
+`GameTestServer` exits with the number of failed required tests (`System.exit(failedRequiredCount)`,
+checked in the decompiled source), which is why the Gradle task goes red.
+
+**Kept as a permanent regression check** for §3C.6 (recipes, loot tables for every new block). It
+is **not** part of `./gradlew build`: run `runGameTestServer` after touching `data/` or `ModBlocks`.
+
+#### Harness notes and honest limits (also in the class javadoc)
+
+- **Mock player, not a connected player.** The miner is vanilla's `GameTestHelper.makeMockPlayer
+  (GameType.SURVIVAL)`. The test runs the two decisions `ServerPlayerGameMode.destroyBlock` makes
+  (`canHarvestBlock`, then `playerDestroy` → `dropResources` → `getDrops`, checked in the patched
+  source) instead of `destroyBlock` itself, which would need a fake network connection. Neither
+  block overrides any drop or removal hook, so the loot table is the whole drop path today. A future
+  block that overrides `playerWillDestroy` or `onDestroyedByPlayer` would need its own check.
+- **A run with no tests passes.** `GameTestServer` reports "All 0 required tests passed" and exits
+  0 if nothing registered. That happens if `neoforge.enabledGameTestNamespaces` is dropped from the
+  `gameTestServer` run in `build.gradle`, or if the template id leaves the `rancraft` namespace:
+  for generated tests, NeoForge's patch to `GameTestRegistry.register` keeps only those whose
+  template namespace is enabled. When reading a green run, check for "2 tests are now running"
+  (one per block).
+- **Template.** Every game test is placed from a structure template, and NeoForge 21.1.251 ships no
+  empty one (checked: nothing in the universal or sources jar). The mod carries
+  `data/rancraft/structure/gametest/empty_3x3x3.nbt`: gzipped NBT, 87 bytes on disk, `DataVersion`
+  3955 (1.21.1), `size` [3,3,3], empty `palette`, `blocks` and `entities`. Git stores it as binary,
+  so `core.autocrlf` cannot corrupt it.
+- **It ships in the jar**, as does the structure. Both are inert in production:
+  `GameTestHooks.isGametestEnabled()` is false whenever `FMLLoader.isProduction()`, so NeoForge never
+  registers the class outside a dev run.
+- The spec asked for a survival check by hand ("survival world, iron pickaxe, break a mast"). The
+  game test stands in for it headlessly. A quick look in game is still listed in `PHASE_3.md` as
+  `[~]`: it also covers the client side (crack animation speed, the item entity popping out).
+
+### Purity assertion: `PackagePurityTest`
+
+**Spec vs tree** (recorded by the scout in `PHASE_3.md`): §2 says "extend the existing zero-import
+grep assertion", but none existed; purity was only ever checked by hand with grep. This slice
+creates it: `src/test/java/dev/rancraft/PackagePurityTest.java`, part of `./gradlew build`.
+
+- **Scope.** Every `.java` file under `src/main/java/dev/rancraft/rf` and
+  `src/main/java/dev/rancraft/util`. `util` does not exist until slice 6 (ColumnScan), so its test is
+  a JUnit assumption that shows as **SKIPPED** until then and runs by itself once the folder
+  appears.
+- **What fails.** Any import (plain, static or wildcard) or fully qualified name of `net.minecraft`,
+  `net.neoforged` or `com.mojang` in code or in a string literal (`Class.forName` is a dependency
+  too). Whitespace around the dots is allowed for, as Java allows it. Comments are blanked first,
+  so javadoc that mentions Minecraft in prose is fine. The failure lists `file:line: text` for every
+  offending line.
+- **Deviation, a tightening beyond the brief:** it also fails on any other `dev.rancraft` package
+  (the root package included, e.g. `dev.rancraft.RanCraft`). `rf` and `util` may use each other.
+  Every other package in the mod is game code, so importing one would bring Minecraft in one step
+  removed. The literal rule would not see it, and neither would the unit tests: NeoForge is on the
+  test classpath too, because `implementation` dependencies are. `rf` currently imports only
+  `java.util`, `java.util.function` and `java.util.concurrent`, so nothing changed for it.
+- **Paths.** The project root is the nearest directory at or above `user.dir` holding
+  `src/main/java/dev/rancraft/RanCraft.java`. Gradle runs tests in the project directory, but an IDE
+  may not. No root, or an `rf` with no `.java` files, fails rather than passing on nothing.
+- **Scanner self-tests (7).** Imports, static imports, qualified names in code and reflective names
+  in strings are caught; game-side `dev.rancraft` packages are caught and `rf`/`util` are not;
+  comments, prose and look-alikes (`internet.minecraft`, `telecom.mojang`) are not; a string, char or
+  text block that looks like a comment does not hide the code after it; line numbers survive a
+  multi-line javadoc and CRLF; the root is found from a nested directory; no root fails loudly.
+- **Proof that it bites on the real tree.** The earlier attempt added a throwaway
+  `src/main/java/dev/rancraft/rf/PurityProbe.java` with one import and one fully qualified name. The
+  build went red: `rfIsPure` reported "2 game reference(s) in a pure package (27 files scanned)" and
+  listed both lines (the saved JUnit report). The probe was deleted. This attempt checked that no
+  probe remains in `src/` (grep), that Gradle's next compile removed the stale
+  `build/classes/.../rf/PurityProbe.class`, and that the rebuilt jar does not contain it. The
+  message now says "forbidden reference(s)", since it covers project packages too.
+- **Limit.** It reads source text, not bytecode. It cannot see a dependency that arrives through a
+  JDK type (there are none in practice), and it does not check `src/test`, where `rf` tests may use
+  test helpers freely.
+
+### Verification
+
+| Check | Result |
+|---|---|
+| `./gradlew build` | succeeds |
+| Unit tests | **219: 218 passed, 0 failed, 1 skipped** (210 + 9 `PackagePurityTest`; the skip is `utilIsPure` until `util` exists) |
+| `rf` references to Minecraft, NeoForge, Mojang or game-side `dev.rancraft` packages | **0** in 26 files (now asserted by `PackagePurityTest`, no longer grep) |
+| `./gradlew runGameTestServer`, new layout | 2 of 2 passed, exit 0 (twice, the second on the final tree) |
+| `./gradlew runGameTestServer`, old layout | 2 of 2 failed, exit 2 (see the table above) |
+| Built jar | contains `loot_table/`, `tags/block/`, the template and `HarvestGameTests`; no `loot_tables/`, no `tags/blocks/`, no probe |

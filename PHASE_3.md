@@ -22,7 +22,9 @@ Legend: `[x]` done and verified · `[~]` partly done / needs a manual in-game ch
       `data/minecraft/loot_table/`, `recipe/`, `tags/block/`, `tags/item/`. RANCraft ships
       `loot_tables/` and `tags/blocks/`, which 1.21 no longer reads. Expected symptom: masts and
       sectors drop nothing in survival, and pickaxes are not their effective tool. Runtime check
-      and fix happen in slice 1.
+      and fix happen in slice 1. **Slice 1: confirmed at runtime** (NeoForge GameTest on the old
+      layout: no tag, bare-hand speed, no harvest, empty loot table, for both blocks) **and fixed**
+      (folders moved; same test passes). Details in NOTES.md, Phase 3 slice 1.
 - [x] **Spec discrepancy, recorded as §8 of the prompt asks:** the prompt says "extend the existing
       zero-import grep assertion". **No such test exists.** Purity was only ever checked by hand
       with grep. Slice 1 creates the assertion test, covering `rf` now and `util` once it exists.
@@ -36,7 +38,7 @@ Legend: `[x]` done and verified · `[~]` partly done / needs a manual in-game ch
 | # | Slice | Part | Status | Commit |
 |---|---|---|---|---|
 | 0 | Land Vision Step 3a (drive-test trail) | pre | [~] landed + gate fixes, build green (210 tests); in-game checks below | af20bb4; gate fixes 3906418 |
-| 1 | Datapack folder fix + runtime check + purity test | pre | [ ] | |
+| 1 | Datapack folder fix + runtime check + purity test | pre | [x] folders fixed, harvest game test red before / green after, purity test in `build` (219 tests, 1 skipped until `util` exists); one quick in-game look below | 212f86c; docs in the "Phase 3 slice 1: fix 1.21 datapack folders..." commit |
 | 2 | DeviceRequirement + tests | 3A | [ ] | |
 | 3 | Ranging + LocatorSolver + tests 2–12 | 3A | [ ] | |
 | 4 | SignalDevice + ticker refactor + meter port (regression gate) | 3A | [ ] | |
@@ -91,6 +93,27 @@ Needs a human in game:
       the gate fix, a links-only wearer, who both receive samples now), link rays behave as before,
       and the handover counter still increments while standing still at a boundary.
 - [~] The layers key cycles ALL -> Antennas -> Links -> Coverage -> Drive-test trail -> ALL.
+
+## Slice 1 (datapack folders, purity test) checks
+
+Headless:
+
+- [x] Old layout, `./gradlew runGameTestServer`: `harvestgametests.signal_mast` and
+      `.sector_antenna` both fail (not in `#minecraft:mineable/pickaxe`, iron pickaxe at bare-hand
+      speed 1.0, `canHarvestBlock` false, loot table yields nothing). Gradle exits non-zero (2).
+- [x] New layout (`loot_table/blocks/`, `tags/block/mineable/`): both pass, `BUILD SUCCESSFUL`.
+- [x] `HarvestGameTests` stays as a regression check, one generated test per `ModBlocks.BLOCKS`
+      entry; `runGameTestServer` is in the command tables of `CLAUDE.md` and `README.md`.
+- [x] `PackagePurityTest` runs in `./gradlew build`: `rf` has 0 references to `net.minecraft`,
+      `net.neoforged`, `com.mojang` or game-side `dev.rancraft` packages; `util` is skipped until it
+      exists. A probe file in `rf` turned it red; no probe remains.
+- [x] The built jar has only the singular folders and no probe class.
+
+Needs a human in game:
+
+- [~] Survival world, iron pickaxe: a Signal Mast and a Sector Antenna each break in under a second
+      (with the crack animation) and pop out as an item. The game test covers the server's
+      decisions, not the client side.
 
 ## 3A done-when
 
@@ -174,3 +197,19 @@ came from.
   components to `DriveTestLog.Sample` (a public `rf` record, so append only) and columns at the end
   of `CSV_HEADER`; `DriveTestLogTest.csvIgnoresDefaultLocale` pins the current row exactly and will
   need its expected string extended.
+- (from slice 1, **for slices 6 and 16; deviation from the brief**) `PackagePurityTest` is
+  stricter than "zero net.minecraft / net.neoforged / com.mojang imports": `rf` and `util` also may
+  not name any other `dev.rancraft` package (the root package included), because every other
+  package is game code and NeoForge is on the test classpath, so the unit tests would not catch
+  Minecraft arriving one step removed. `rf` and `util` may use each other. Pure code must live in
+  one of the two (e.g. ColumnScan in `util`, as §2 says).
+- (from slice 1, for slice 16) `HarvestGameTests` generates one test per `ModBlocks.BLOCKS` entry
+  and requires each block to be pickaxe-mineable and to drop itself. A new block needs a loot table
+  in `data/rancraft/loot_table/blocks/` and an entry in `data/minecraft/tags/block/mineable/`
+  (or an explicit exemption in the test). Run `./gradlew runGameTestServer`; it is not part of
+  `build`.
+- (from slice 1) A game test run where nothing registered passes ("All 0 required tests passed",
+  exit 0). That happens if `neoforge.enabledGameTestNamespaces` leaves the `gameTestServer` run in
+  `build.gradle`, or the test template leaves the `rancraft` namespace. When reading a green run,
+  check the "N tests are now running" line. Possible later guard: a `RegisterGameTestsEvent`-time or
+  post-run count check.

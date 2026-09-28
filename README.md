@@ -54,3 +54,11 @@ every tuning decision, every deviation from spec, and what's honestly modeled vs
 
 Runs the full `dev.rancraft.rf` unit test suite (pure Java, no Minecraft on the classpath) alongside
 the mod compile.
+
+```
+.\gradlew.bat runGameTestServer
+```
+
+Starts a headless game test server, runs the in-game regression tests in `dev.rancraft.gametest`
+(for now: every block drops itself when mined with an iron pickaxe in survival), and exits. The task
+fails if any test fails. It is separate from `build`.

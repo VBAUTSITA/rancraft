@@ -35,6 +35,11 @@ import org.junit.jupiter.api.io.TempDir;
  * {@code Class.forName("net.minecraft...")} is a dependency too. Comments do not count, so a javadoc
  * that mentions Minecraft in prose is fine.
  *
+ * <p>It also fails on a reference to any other {@code dev.rancraft} package (the root package
+ * included). Every other package is game code, so such an import would bring Minecraft in one step
+ * removed. The unit tests would not notice: NeoForge is on the test classpath too
+ * ({@code implementation} dependencies are). {@code rf} and {@code util} may use each other.
+ *
  * <p>The package roots are found from the working directory, walking up to the folder that holds
  * {@code src/main/java/dev/rancraft/RanCraft.java}. Gradle runs tests in the project directory,
  * but an IDE may not.
@@ -52,6 +57,14 @@ class PackagePurityTest {
     static final Pattern GAME_PACKAGE =
             Pattern.compile("\\b(?:net\\s*\\.\\s*(?:minecraft|neoforged)|com\\s*\\.\\s*mojang)\\b");
 
+    /** A {@code dev.rancraft} name outside the pure packages {@code rf} and {@code util}. */
+    static final Pattern GAME_SIDE_PROJECT_PACKAGE =
+            Pattern.compile("\\bdev\\s*\\.\\s*rancraft\\s*\\.\\s*(?!(?:rf|util)\\b)[A-Za-z_$]");
+
+    /** What a pure package may not name: either of the above. */
+    static final Pattern FORBIDDEN =
+            Pattern.compile(GAME_PACKAGE.pattern() + "|" + GAME_SIDE_PROJECT_PACKAGE.pattern());
+
     /** One offending source line. */
     record Violation(String file, int line, String text) {
         @Override
@@ -63,7 +76,7 @@ class PackagePurityTest {
     // ---- the assertions -------------------------------------------------------------------------
 
     @Test
-    @DisplayName("dev.rancraft.rf references no net.minecraft, net.neoforged or com.mojang code")
+    @DisplayName("dev.rancraft.rf references no net.minecraft, net.neoforged or com.mojang code, nor game-side RANCraft packages")
     void rfIsPure() throws IOException {
         Path root = projectRoot(Path.of(System.getProperty("user.dir")));
         Path rf = root.resolve(RF);
@@ -72,7 +85,7 @@ class PackagePurityTest {
     }
 
     @Test
-    @DisplayName("dev.rancraft.util references no net.minecraft, net.neoforged or com.mojang code (skipped until util exists)")
+    @DisplayName("dev.rancraft.util references no net.minecraft, net.neoforged or com.mojang code, nor game-side RANCraft packages (skipped until util exists)")
     void utilIsPure() throws IOException {
         Path root = projectRoot(Path.of(System.getProperty("user.dir")));
         Path util = root.resolve(UTIL);
@@ -97,6 +110,25 @@ class PackagePurityTest {
                 "    Object codec = com.mojang.serialization.Codec.INT;",
                 "}");
         assertEquals(List.of(2, 3, 5, 6, 7, 8), lines(scan("A.java", source)));
+    }
+
+    @Test
+    @DisplayName("a game-side RANCraft package counts, rf and util do not")
+    void scannerCatchesGameSideProjectPackages() {
+        String source = String.join("\n",
+                "package dev.rancraft.rf;",
+                "import dev.rancraft.rf.sub.Pure;",
+                "import dev.rancraft.util.ColumnScan;",
+                "import dev.rancraft.world.LevelWorldProbe;",
+                "import dev.rancraft.RanCraft;",
+                "import static dev.rancraft.RanCraftConfig.COMMON;",
+                "class E {",
+                "    dev.rancraft.item.RfLensItem lens;",
+                "    dev . rancraft . rf . Band band;",
+                "    Object a = dev.rancraft.rfx.Thing.X, b = dev.rancraft.utility.Thing.Y;",
+                "    Object mydev = mydev.rancraft.world;",
+                "}");
+        assertEquals(List.of(4, 5, 6, 8, 10), lines(scan("E.java", source)));
     }
 
     @Test
@@ -188,17 +220,17 @@ class PackagePurityTest {
             String name = root.relativize(file).toString().replace('\\', '/');
             violations.addAll(scan(name, Files.readString(file, StandardCharsets.UTF_8)));
         }
-        assertTrue(violations.isEmpty(), () -> violations.size() + " game reference(s) in a pure package ("
+        assertTrue(violations.isEmpty(), () -> violations.size() + " forbidden reference(s) in a pure package ("
                 + sources.size() + " files scanned):\n"
                 + violations.stream().map(Violation::toString).collect(Collectors.joining("\n")));
     }
 
-    /** Every line of {@code source} whose code (comments blanked) names a game package. */
+    /** Every line of {@code source} whose code (comments blanked) names a forbidden package. */
     static List<Violation> scan(String fileName, String source) {
         String code = blankComments(source);
         String[] sourceLines = source.split("\n", -1);
         List<Violation> found = new ArrayList<>();
-        Matcher matcher = GAME_PACKAGE.matcher(code);
+        Matcher matcher = FORBIDDEN.matcher(code);
         int lastLine = -1;
         while (matcher.find()) {
             int line = lineOf(code, matcher.start());
