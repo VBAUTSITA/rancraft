@@ -38,7 +38,7 @@ Legend: `[x]` done and verified · `[~]` partly done / needs a manual in-game ch
 | # | Slice | Part | Status | Commit |
 |---|---|---|---|---|
 | 0 | Land Vision Step 3a (drive-test trail) | pre | [~] landed + gate fixes, build green (210 tests); in-game checks below | af20bb4; gate fixes 3906418 |
-| 1 | Datapack folder fix + runtime check + purity test | pre | [x] folders fixed, harvest game test red before / green after, purity test in `build` (219 tests, 1 skipped until `util` exists); one quick in-game look below | 212f86c; docs in the "Phase 3 slice 1: fix 1.21 datapack folders..." commit |
+| 1 | Datapack folder fix + runtime check + purity test | pre | [x] folders fixed, harvest game test red before / green after, purity test in `build` (219 tests, 1 skipped until `util` exists); one quick in-game look below | 212f86c; 1471bf3 |
 | 2 | DeviceRequirement + tests | 3A | [ ] | |
 | 3 | Ranging + LocatorSolver + tests 2–12 | 3A | [ ] | |
 | 4 | SignalDevice + ticker refactor + meter port (regression gate) | 3A | [ ] | |
