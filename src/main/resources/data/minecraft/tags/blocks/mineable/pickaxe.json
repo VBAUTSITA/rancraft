@@ -1,0 +1,7 @@
+{
+  "replace": false,
+  "values": [
+    "rancraft:signal_mast",
+    "rancraft:sector_antenna"
+  ]
+}

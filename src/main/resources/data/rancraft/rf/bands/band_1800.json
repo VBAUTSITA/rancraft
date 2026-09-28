@@ -1,0 +1,8 @@
+{
+  "_comment": "The workhorse. Mid reach, mid capacity.",
+  "frequency_mhz": 1800.0,
+  "path_loss_exponent": 3.6,
+  "penetration_factor": 1.1,
+  "noise_floor_dbm": -108.0,
+  "capacity_tier": 2
+}

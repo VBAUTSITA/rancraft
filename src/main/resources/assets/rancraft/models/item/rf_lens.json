@@ -1,0 +1,7 @@
+{
+  "_comment": "Placeholder art: vanilla texture, no PNG shipped. Swap when real art exists.",
+  "parent": "minecraft:item/generated",
+  "textures": {
+    "layer0": "minecraft:item/spyglass"
+  }
+}

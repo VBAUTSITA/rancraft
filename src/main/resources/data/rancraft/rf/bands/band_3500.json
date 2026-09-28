@@ -1,0 +1,8 @@
+{
+  "_comment": "Short and fragile, blocked by almost anything. Unlocks the high-tier devices.",
+  "frequency_mhz": 3500.0,
+  "path_loss_exponent": 4.0,
+  "penetration_factor": 1.8,
+  "noise_floor_dbm": -106.0,
+  "capacity_tier": 3
+}

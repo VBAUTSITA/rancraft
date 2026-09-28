@@ -1,0 +1,181 @@
+package dev.rancraft;
+
+import dev.rancraft.net.CoverageSurveyPayload;
+import dev.rancraft.net.LensLinksPayload;
+import dev.rancraft.rf.RfConfig;
+import dev.rancraft.rf.RayMarcher;
+import net.neoforged.neoforge.common.ModConfigSpec;
+
+/**
+ * COMMON config. Read on the server; {@link #snapshot()} converts it into the Minecraft-free
+ * {@link RfConfig} that the engine actually consumes.
+ */
+public final class RanCraftConfig {
+
+    private RanCraftConfig() {
+    }
+
+    private static final ModConfigSpec.Builder BUILDER = new ModConfigSpec.Builder();
+
+    public static final ModConfigSpec.DoubleValue METERS_PER_BLOCK = BUILDER
+            .comment("Real-world metres represented by one block. Scales all path loss.")
+            .defineInRange("metersPerBlock", 1.0, 0.01, 1000.0);
+
+    public static final ModConfigSpec.DoubleValue MAX_EVALUATION_RANGE_BLOCKS = BUILDER
+            .comment("Cells further than this are skipped before any ray marching.",
+                    "Raised from 600 to 1400 in Phase 2. At 600 this cap, not the -105 dBm floor,",
+                    "bounded band_700, band_900 and band_1800 alike, so three of the four bands had",
+                    "identical range. At 1400 band_1800 (701 blocks) and band_3500 (261) are limited",
+                    "by physics; the two low bands still hit the cap. Raise to ~2900 to differentiate",
+                    "all four, at the cost of larger registry queries. See NOTES.md.")
+            .defineInRange("maxEvaluationRangeBlocks", 1400.0, 16.0, 4096.0);
+
+    public static final ModConfigSpec.IntValue MAX_CELLS_EVALUATED = BUILDER
+            .comment("Upper bound on cells ray-marched per evaluation, best-prospect first.",
+                    "Raised from 8 in Phase 2: interference needs neighbours to be interfering.")
+            .defineInRange("maxCellsEvaluated", 12, 1, 64);
+
+    public static final ModConfigSpec.DoubleValue MAX_OBSTRUCTION_DB = BUILDER
+            .comment("Accumulated obstruction at which the ray march gives up and calls the link dead.")
+            .defineInRange("maxObstructionDb", 120.0, 10.0, 1000.0);
+
+    public static final ModConfigSpec.IntValue MAX_RAY_STEPS = BUILDER
+            .comment("Hard cap on voxels visited in one march.")
+            .defineInRange("maxRaySteps", RayMarcher.DEFAULT_MAX_STEPS, 16, 16384);
+
+    public static final ModConfigSpec.IntValue EVALUATION_INTERVAL_TICKS = BUILDER
+            .comment("Ticks between evaluations for a given player. 20 = 1 Hz.")
+            .defineInRange("evaluationIntervalTicks", 20, 1, 200);
+
+    public static final ModConfigSpec.BooleanValue REQUIRE_REDSTONE = BUILDER
+            .comment("When true a Signal Mast only transmits while receiving a redstone signal.")
+            .define("requireRedstone", false);
+
+    public static final ModConfigSpec.BooleanValue ENABLE_SAMPLE_CACHING = BUILDER
+            .comment("Reuse the previous sample when the player has barely moved and nothing nearby changed.",
+                    "Turn off while debugging propagation.")
+            .define("enableSampleCaching", true);
+
+    // ---- Phase 2: antenna pattern -----------------------------------------------------------
+
+    public static final ModConfigSpec.DoubleValue ANTENNA_FRONT_TO_BACK_DB = BUILDER
+            .comment("A_m: how far down the back of a sector antenna is from its boresight.",
+                    "Also caps the combined horizontal+vertical loss.")
+            .defineInRange("antennaFrontToBackDb", 30.0, 3.0, 60.0);
+
+    public static final ModConfigSpec.DoubleValue ANTENNA_SIDELOBE_FLOOR_DB = BUILDER
+            .comment("SLA_v: the floor the vertical pattern saturates at.")
+            .defineInRange("antennaSidelobeFloorDb", 30.0, 3.0, 60.0);
+
+    // ---- Phase 2: interference ---------------------------------------------------------------
+
+    public static final ModConfigSpec.DoubleValue ADJACENT_CHANNEL_REJECTION_DB = BUILDER
+            .comment("How much a receiver suppresses a neighbour transmitting on a different band.",
+                    "Higher means other-band sites matter less.")
+            .defineInRange("adjacentChannelRejectionDb", 30.0, 0.0, 90.0);
+
+    public static final ModConfigSpec.DoubleValue PCI_MOD3_PENALTY_FACTOR = BUILDER
+            .comment("Linear power multiplier on a co-channel interferer sharing pci % 3.",
+                    "2.0 = +3 dB. GAME ABSTRACTION: real mod-3 conflicts damage channel estimation,",
+                    "not received power. See SinrCalculator for the full note.")
+            .defineInRange("pciMod3PenaltyFactor", 2.0, 1.0, 10.0);
+
+    public static final ModConfigSpec.BooleanValue ENABLE_PCI_MOD3_PENALTY = BUILDER
+            .comment("Turn the mod-3 penalty off to see how much of a reading it accounts for.")
+            .define("enablePciMod3Penalty", true);
+
+    // ---- Phase 2: handover -------------------------------------------------------------------
+
+    public static final ModConfigSpec.DoubleValue HANDOVER_HYSTERESIS_DB = BUILDER
+            .comment("A3 offset: how much better a neighbour must be before it is even a candidate.")
+            .defineInRange("handoverHysteresisDb", 3.0, 0.0, 20.0);
+
+    public static final ModConfigSpec.IntValue TIME_TO_TRIGGER_TICKS = BUILDER
+            .comment("How long that must hold before the handover fires. 40 = 2 s.")
+            .defineInRange("timeToTriggerTicks", 40, 0, 600);
+
+    // ---- Phase 2: PCI planning ---------------------------------------------------------------
+
+    public static final ModConfigSpec.DoubleValue PCI_PLANNING_RADIUS = BUILDER
+            .comment("Same-band cells within this range must not share a PCI.")
+            .defineInRange("pciPlanningRadius", 500.0, 16.0, 8192.0);
+
+    public static final ModConfigSpec.DoubleValue PCI_MOD3_RADIUS = BUILDER
+            .comment("Same-band cells within this range should not share pci % 3.")
+            .defineInRange("pciMod3Radius", 250.0, 16.0, 8192.0);
+
+    // ---- RF Lens, Step 2 ---------------------------------------------------------------------
+    // Server cost controls for the lens, not engine parameters, so they stay out of RfConfig.
+    // Upper bounds are the wire caps, so a config value can never ask for more than a payload holds.
+
+    public static final ModConfigSpec.IntValue LENS_MAX_LINKS = BUILDER
+            .comment("Most link rays sent to a lens wearer per sample, strongest cells first.",
+                    "Each one costs the server an extra traced ray per sample.")
+            .defineInRange("lensMaxLinks", 8, 1, LensLinksPayload.MAX_LINKS);
+
+    public static final ModConfigSpec.IntValue COVERAGE_GRID_SIZE = BUILDER
+            .comment("Coverage painting: grid points per side. Each point is one full evaluation,",
+                    "so a survey's cost grows with the square of this. 48 x 48 = 2304 points.")
+            .defineInRange("coverageGridSize", 48, 8, CoverageSurveyPayload.MAX_SIZE);
+
+    public static final ModConfigSpec.IntValue COVERAGE_STEP_BLOCKS = BUILDER
+            .comment("Coverage painting: blocks between grid points. The painted square is",
+                    "coverageGridSize * coverageStepBlocks blocks across; 48 * 4 = 192.")
+            .defineInRange("coverageStepBlocks", 4, 1, 16);
+
+    public static final ModConfigSpec.DoubleValue COVERAGE_TICK_BUDGET_MS = BUILDER
+            .comment("Server-thread time per tick spent on coverage surveys, shared by every lens",
+                    "wearer. Surveys cannot run off-thread (they read live block state), so this",
+                    "is time taken out of the tick: 2 ms is 4% of a 50 ms tick.")
+            .defineInRange("coverageTickBudgetMs", 2.0, 0.1, 20.0);
+
+    public static final ModConfigSpec.IntValue COVERAGE_MIN_INTERVAL_TICKS = BUILDER
+            .comment("Least ticks between a finished survey and a fresh one triggered by a block",
+                    "change, an antenna change or a short walk. Walking off the painted area",
+                    "restarts at once regardless. 100 = 5 s.")
+            .defineInRange("coverageMinIntervalTicks", 100, 0, 6000);
+
+    public static final ModConfigSpec SPEC = BUILDER.build();
+
+    public static int lensMaxLinks() {
+        return LENS_MAX_LINKS.get();
+    }
+
+    public static int coverageGridSize() {
+        return COVERAGE_GRID_SIZE.get();
+    }
+
+    public static int coverageStepBlocks() {
+        return COVERAGE_STEP_BLOCKS.get();
+    }
+
+    public static double coverageTickBudgetMs() {
+        return COVERAGE_TICK_BUDGET_MS.get();
+    }
+
+    public static int coverageMinIntervalTicks() {
+        return COVERAGE_MIN_INTERVAL_TICKS.get();
+    }
+
+    /** Immutable snapshot handed to the engine, so the engine never touches a config API. */
+    public static RfConfig snapshot() {
+        return new RfConfig(
+                METERS_PER_BLOCK.get(),
+                MAX_EVALUATION_RANGE_BLOCKS.get(),
+                MAX_CELLS_EVALUATED.get(),
+                MAX_OBSTRUCTION_DB.get(),
+                MAX_RAY_STEPS.get(),
+                EVALUATION_INTERVAL_TICKS.get(),
+                REQUIRE_REDSTONE.get(),
+                ENABLE_SAMPLE_CACHING.get(),
+                ANTENNA_FRONT_TO_BACK_DB.get(),
+                ANTENNA_SIDELOBE_FLOOR_DB.get(),
+                ADJACENT_CHANNEL_REJECTION_DB.get(),
+                PCI_MOD3_PENALTY_FACTOR.get(),
+                ENABLE_PCI_MOD3_PENALTY.get(),
+                HANDOVER_HYSTERESIS_DB.get(),
+                TIME_TO_TRIGGER_TICKS.get(),
+                PCI_PLANNING_RADIUS.get(),
+                PCI_MOD3_RADIUS.get());
+    }
+}

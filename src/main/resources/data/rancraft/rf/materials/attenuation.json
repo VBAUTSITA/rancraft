@@ -1,0 +1,41 @@
+{
+  "default_solid_db": 8.0,
+  "blocks": {
+    "minecraft:glass": 2.0,
+    "minecraft:tinted_glass": 2.0,
+    "minecraft:water": 15.0,
+    "minecraft:flowing_water": 15.0,
+    "minecraft:dirt": 6.0,
+    "minecraft:coarse_dirt": 6.0,
+    "minecraft:rooted_dirt": 6.0,
+    "minecraft:grass_block": 6.0,
+    "minecraft:podzol": 6.0,
+    "minecraft:mycelium": 6.0,
+    "minecraft:sand": 6.0,
+    "minecraft:red_sand": 6.0,
+    "minecraft:gravel": 6.0,
+    "minecraft:snow_block": 6.0,
+    "minecraft:powder_snow": 6.0,
+    "minecraft:clay": 6.0,
+    "minecraft:copper_block": 30.0,
+    "minecraft:gold_block": 30.0,
+    "minecraft:iron_block": 30.0,
+    "minecraft:netherite_block": 30.0,
+    "minecraft:bedrock": 60.0,
+    "minecraft:obsidian": 60.0,
+    "minecraft:crying_obsidian": 60.0
+  },
+  "tags": {
+    "minecraft:leaves": 1.0,
+    "minecraft:wool": 4.0,
+    "minecraft:planks": 4.0,
+    "minecraft:logs": 4.0,
+    "minecraft:wooden_slabs": 4.0,
+    "minecraft:wooden_stairs": 4.0,
+    "minecraft:base_stone_overworld": 12.0,
+    "minecraft:base_stone_nether": 12.0,
+    "minecraft:stone_bricks": 12.0,
+    "minecraft:concrete_powder": 12.0,
+    "minecraft:terracotta": 12.0
+  }
+}

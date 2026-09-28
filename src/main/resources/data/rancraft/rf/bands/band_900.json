@@ -1,0 +1,8 @@
+{
+  "_comment": "The Phase 1 default. Balanced. Values unchanged so Phase 1 worlds read identically.",
+  "frequency_mhz": 900.0,
+  "path_loss_exponent": 3.5,
+  "penetration_factor": 1.0,
+  "noise_floor_dbm": -110.0,
+  "capacity_tier": 1
+}

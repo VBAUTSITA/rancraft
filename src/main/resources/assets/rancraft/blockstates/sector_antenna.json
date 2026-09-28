@@ -1,0 +1,12 @@
+{
+  "variants": {
+    "facing=north,powered=false": { "model": "rancraft:block/sector_antenna" },
+    "facing=north,powered=true":  { "model": "rancraft:block/sector_antenna" },
+    "facing=east,powered=false":  { "model": "rancraft:block/sector_antenna", "y": 90 },
+    "facing=east,powered=true":   { "model": "rancraft:block/sector_antenna", "y": 90 },
+    "facing=south,powered=false": { "model": "rancraft:block/sector_antenna", "y": 180 },
+    "facing=south,powered=true":  { "model": "rancraft:block/sector_antenna", "y": 180 },
+    "facing=west,powered=false":  { "model": "rancraft:block/sector_antenna", "y": 270 },
+    "facing=west,powered=true":   { "model": "rancraft:block/sector_antenna", "y": 270 }
+  }
+}

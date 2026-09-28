@@ -1,0 +1,23 @@
+{
+  "_comment": "Placeholder art: vanilla textures, no PNGs shipped. The white face marks boresight so azimuth is visible in world. Swap the textures block when real art exists.",
+  "parent": "block/block",
+  "textures": {
+    "particle": "minecraft:block/iron_block",
+    "body": "minecraft:block/iron_block",
+    "face": "minecraft:block/white_concrete"
+  },
+  "elements": [
+    {
+      "from": [3, 0, 6],
+      "to": [13, 16, 10],
+      "faces": {
+        "north": { "texture": "#face" },
+        "south": { "texture": "#body" },
+        "east":  { "texture": "#body" },
+        "west":  { "texture": "#body" },
+        "up":    { "texture": "#body" },
+        "down":  { "texture": "#body" }
+      }
+    }
+  ]
+}
