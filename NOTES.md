@@ -1451,7 +1451,7 @@ Nothing to check in game yet: the Locator item, payload and HUD are slice 5, whi
 ## Slice 4 — SignalDevice framework, ticker refactor, meter port (§3A.2, §3A.3)
 
 Three commits: part 1 `a51e13a` (stale armed candidate), part 2 `85bd051` (framework, refactor,
-meter port, regression tests), part 3 (these notes and the tracker).
+meter port, regression tests), and the slice commit `6558460` (these notes and the tracker).
 
 ### What was built
 
