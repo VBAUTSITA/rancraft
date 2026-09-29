@@ -63,9 +63,13 @@ public sealed interface LocatorFix {
      * @param y           the assumed eye height: the ground under the estimate + 1.62 (altitude aiding,
      *                    see {@link LocatorSolver}). Not measured.
      * @param hdop        horizontal dilution of precision at the estimate (unweighted).
-     * @param errorBlocks {@code hdop * rms(sigma)}, shown as "±". <b>A reported uncertainty, not a
-     *                    guarantee</b>: it covers the random quantisation error only. The NLOS bias is
-     *                    systematic and is not in it, so behind terrain the true error can be larger.
+     * @param errorBlocks shown as "±": the reported 1-sigma horizontal uncertainty of the weighted
+     *                    fit, {@code sqrt(trace((H^T W H)^-1))} with {@code W = diag(1 / sigma_i^2)}
+     *                    (see {@link LocatorSolver}; an owner-approved deviation from §3A.5's
+     *                    {@code hdop * rms(sigma)}, and identical to {@code hdop * sigma} when every
+     *                    cell has the same sigma). <b>A reported uncertainty, not a guarantee</b>: it
+     *                    covers the random quantisation error only. The NLOS bias is systematic and is
+     *                    not in it, so behind terrain the true error can be larger.
      * @param cellsUsed   cells that went into the fit.
      */
     record Fix(double x, double y, double z, double hdop, double errorBlocks, int cellsUsed)

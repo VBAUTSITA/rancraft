@@ -18,11 +18,14 @@ import java.util.Objects;
  *   <li>Horizontal range per cell: {@code rho_i = sqrt(max(0, r_i^2 - (y_i - yRx)^2))}.
  *   <li>Gauss-Newton on (x, z), weights {@code 1 / sigma_i^2}, at most {@value #MAX_ITERATIONS}
  *       iterations, stopping once a step is under {@value #CONVERGENCE_BLOCKS} blocks.
- *   <li><b>Not in §3A.5 (a recorded deviation):</b> the same fit is also started from the circle
- *       crossings of the strongest cells, and a run that ends in a different place with a smaller
- *       weighted residual wins. From the centroid alone, a receiver outside the cells' footprint
- *       gets a confident fix in the wrong place about one time in eight, even with perfect ranges.
- *       When the centroid's run is the best fit, the answer is the spec's, unchanged.
+ *   <li><b>Deliberate deviation from §3A.5's centroid-only start, kept by the project owner's
+ *       decision</b> (NOTES.md, Phase 3 "Owner decisions on the slice 3 follow-ups"): the same fit is
+ *       also started from the circle crossings of the strongest cells, and a run that ends in a
+ *       different place with a smaller weighted residual wins. Why: from the centroid alone, 10.5 to
+ *       16.7 % of fixes with the receiver outside the cells' footprint settle in a wrong local minimum
+ *       and are reported as a FIX with a small "±", even with perfect ranges. A confident wrong
+ *       answer teaches the wrong thing about the "±". When the centroid's run is the best fit, the
+ *       answer is the spec's, unchanged.
  *   <li>{@code HDOP = sqrt(trace((H^T H)^-1))}, the rows of H being the horizontal unit vectors from
  *       the estimate to each cell. <b>Unweighted</b>, as HDOP is conventionally defined: it describes
  *       the geometry alone.
@@ -31,12 +34,19 @@ import java.util.Objects;
  *       (which is on the line) every line of sight is parallel, the matrix is singular, and the two
  *       mirror-image positions either side of the line cannot be told apart. That is the lesson, not
  *       a bug to smooth over.
- *   <li>{@code errorBlocks = HDOP * rms(sigma_i)}: the reported "±".
+ *   <li>{@code errorBlocks = sqrt(trace((H^T W H)^-1))} with {@code W = diag(1 / sigma_i^2)} and the
+ *       same H as HDOP: the reported "±", the 1-sigma horizontal uncertainty of the weighted fit
+ *       (the root of the two axis variances summed). <b>An owner-approved deviation from §3A.5</b>,
+ *       which writes {@code HDOP * rms(sigma_i)}: the two are identical when every cell has the same
+ *       sigma (any single-band fix), and for mixed bands this is the covariance of the estimate the
+ *       solver actually computes, so it credits a wideband cell for the weight it carries in the
+ *       fit. See {@link #weightedErrorOf}.
  * </ol>
  *
  * <p>Mixed bands just work: a band_3500 cell has a 10x smaller sigma, so its weight is 100x larger
- * and it dominates the fit along its own line of sight. (One range constrains one direction; see
- * NOTES.md, Phase 3 slice 3, for what that means for the "±".)
+ * and it dominates the fit along its own line of sight, and the "±" says so. (One range still
+ * constrains only one direction, so a single wideband cell inside a good triangle helps less than
+ * at the edge of a network; see NOTES.md, Phase 3.)
  *
  * <h2>Two cells: circle intersection</h2>
  * The two horizontal circles (radius {@code rho_i}, altitude-aided at the midpoint of the two cells)
@@ -55,8 +65,9 @@ import java.util.Objects;
  *       {@code y} is that assumption, never a measurement.
  *   <li><b>Absolute ranging, not time differences</b> (see {@link Ranging}): like multi-RTT, with no
  *       clock error and no dedicated positioning reference signals.
- *   <li><b>The "±" is a reported uncertainty, not a guarantee.</b> It covers the random quantisation
- *       error only; the NLOS bias is systematic and is not in it.
+ *   <li><b>The "±" is a reported uncertainty, not a guarantee.</b> It is the 1-sigma horizontal
+ *       uncertainty of the weighted fit, from the random quantisation error only; the NLOS bias is
+ *       systematic and is not in it, and neither is a mirror ambiguity.
  * </ul>
  *
  * <h2>Robustness</h2>
@@ -97,7 +108,8 @@ public final class LocatorSolver {
 
     /**
      * Extra Gauss-Newton starts come from the circle crossings of each pair among this many of the
-     * strongest cells: 3 pairs, at most 6 extra runs. Not in §3A.5; see {@link #leastSquares}.
+     * strongest cells: 3 pairs, at most 6 extra runs. A deliberate deviation from §3A.5, kept by the
+     * project owner; see {@link #leastSquares}.
      */
     static final int ALTERNATIVE_START_CELLS = 3;
 
@@ -166,12 +178,14 @@ public final class LocatorSolver {
             return new LocatorFix.PoorGeometry(HDOP_CEILING, n);
         }
 
-        // Deviation from §3A.5, recorded in NOTES.md (Phase 3 slice 3): the centroid is the first
-        // start, but Gauss-Newton from the centroid settles in a wrong local minimum for about one
-        // fix in eight once the receiver is outside the cells' footprint, even with perfect ranges,
-        // and reports it with a small "±". So the fit is also started from the circle crossings of
-        // the strongest cells (with exact ranges one of them IS the answer), and a start that ends
-        // in a clearly different place with a lower weighted residual replaces the centroid's
+        // DELIBERATE DEVIATION from §3A.5 ("initial guess: centroid"), kept by the project owner's
+        // decision (PHASE_3.md follow-ups; NOTES.md, Phase 3 slice 3 and "Owner decisions"). The
+        // centroid is still the first start, but Gauss-Newton from the centroid alone settles in a
+        // wrong local minimum for 10.5-16.7 % of fixes once the receiver is outside the cells'
+        // footprint, even with perfect ranges, and reports that wrong fix with a small "±" (measured
+        // over 20,000 seeded scenes per case). So the fit is also started from the circle crossings
+        // of the strongest cells (with exact ranges one of them IS the answer), and a start that
+        // ends in a clearly different place with a lower weighted residual replaces the centroid's
         // result. When the centroid's fit is the best one, the result is exactly the spec's.
         double yAtCentroid = eyeY(ground, centroidX, centroidZ, yStart);
         int starters = Math.min(n, ALTERNATIVE_START_CELLS);
@@ -202,13 +216,16 @@ public final class LocatorSolver {
             return new LocatorFix.PoorGeometry(Math.min(hdop, HDOP_CEILING), n);
         }
 
-        double sumSigmaSquared = 0.0;
-        for (RangeMeasurement m : used) {
-            double sigma = sigma(m);
-            sumSigmaSquared += sigma * sigma;
+        // Owner-approved deviation from §3A.5's "errorBlocks = HDOP x rms(sigma)": the "±" is the
+        // covariance of the weighted fit, over the same rows as HDOP. Identical for single-band
+        // fixes; see weightedErrorOf for why it is the right estimate when the bands are mixed.
+        double errorBlocks = weightedErrorOf(used, ux, uz);
+        if (!Double.isFinite(errorBlocks)) {
+            // Unreachable once HDOP passed: every weight is positive, so H^T W H is singular only
+            // where H^T H is. Kept so that no infinity can ever leave the solver (test 12).
+            return new LocatorFix.PoorGeometry(HDOP_CEILING, n);
         }
-        double rmsSigma = Math.sqrt(sumSigmaSquared / n);
-        return new LocatorFix.Fix(best.x(), best.yRx(), best.z(), hdop, hdop * rmsSigma, n);
+        return new LocatorFix.Fix(best.x(), best.yRx(), best.z(), hdop, errorBlocks, n);
     }
 
     private enum Status { CONVERGED_OR_CAPPED, SINGULAR_AT_START, FAILED }
@@ -343,6 +360,43 @@ public final class LocatorSolver {
             return Double.POSITIVE_INFINITY;
         }
         return Math.sqrt(trace / det);
+    }
+
+    /**
+     * The reported "±": {@code sqrt(trace((H^T W H)^-1))} with {@code W = diag(1 / sigma_i^2)}, for
+     * the same rows (ux[i], uz[i]) as {@link #hdopOf}; zero rows add nothing. It is the 1-sigma
+     * horizontal uncertainty of the weighted fit: the root of the x and z variances summed (a
+     * distance-RMS figure, the same convention as {@code HDOP * sigma}).
+     *
+     * <p><b>An owner-approved deviation from §3A.5</b>, which writes {@code HDOP * rms(sigma_i)}.
+     * Why this is the right estimate for this solver: Gauss-Newton with weights {@code 1 / sigma_i^2}
+     * is weighted least squares with W the inverse of the range-error covariance, and the
+     * covariance of that estimate, linearised at the fit, is exactly {@code (H^T W H)^-1} (the
+     * Gauss-Markov result; it is also the Cramer-Rao bound for Gaussian errors). {@code HDOP * rms}
+     * describes a fit that treats every cell alike, which is not the fit being made: it ignores that
+     * a band_3500 range carries 100x the weight of a band_900 one, so it under-reports what the
+     * wideband cell buys. When every sigma is equal, {@code W = I / sigma^2} and the two are
+     * identical: {@code sqrt(sigma^2 trace((H^T H)^-1)) = HDOP * sigma}.
+     *
+     * <p>2x2 closed form: {@code trace(M^-1) = trace(M) / det(M)}, with the determinant summed
+     * pairwise (Cauchy-Binet, as {@link #weightedDet}), exact to rounding when one weight is orders
+     * of magnitude above the rest. The sigmas are the quantisation spread {@code res / sqrt(12)}
+     * (uniform, not Gaussian, errors: the covariance is still exact for a linear fit; only the
+     * "68 %" reading of 1 sigma is approximate). The NLOS bias is systematic and not in it.
+     *
+     * @return {@link Double#POSITIVE_INFINITY} when the weighted matrix is singular or not finite.
+     */
+    static double weightedErrorOf(List<RangeMeasurement> used, double[] ux, double[] uz) {
+        double trace = 0.0;
+        for (int i = 0; i < ux.length; i++) {
+            trace += weight(used.get(i)) * (ux[i] * ux[i] + uz[i] * uz[i]);
+        }
+        double det = weightedDet(used, ux, uz);
+        if (!(det > 0.0) || !Double.isFinite(det) || !Double.isFinite(trace)) {
+            return Double.POSITIVE_INFINITY;
+        }
+        double error = Math.sqrt(trace / det);
+        return Double.isFinite(error) ? error : Double.POSITIVE_INFINITY;
     }
 
     private static double weightedDet(List<RangeMeasurement> used, double[] ux, double[] uz) {

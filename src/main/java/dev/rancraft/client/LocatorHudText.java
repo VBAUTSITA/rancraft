@@ -34,8 +34,10 @@ import java.util.Optional;
  * aiding assumes you stand on the top surface ({@link LocatorSolver}), and the HUD shows that
  * surface (the fix's assumed eye height minus 1.62).
  *
- * <p>The "±" is the Locator's reported uncertainty (HDOP x rms sigma): quantisation only. It is not
- * a guarantee: the NLOS bias behind terrain is systematic and not in it. And quantisation is
+ * <p>The "±" is the Locator's reported uncertainty: the server's 1-sigma horizontal uncertainty of
+ * the weighted fit, {@code sqrt(trace((H^T W H)^-1))}, which is HDOP x sigma for a single-band fix
+ * ({@link LocatorFix.Fix#errorBlocks()}). Quantisation only. It is not a guarantee: the NLOS bias
+ * behind terrain is systematic and not in it. And quantisation is
  * deterministic: standing still, the same ranges round the same way, so the error is fixed, not
  * noise that averages out.
  */

@@ -114,10 +114,12 @@ class LocatorSolverTest {
     }
 
     /**
-     * Pins the one deviation from §3A.5's algorithm (NOTES.md, Phase 3 slice 3). From the centroid
-     * alone, Gauss-Newton settles at (234, -7) here, a wrong local minimum with HDOP 4.3, so the
-     * spec's solver would report FIX "± 0" nearly 400 blocks from the truth, with perfect ranges.
-     * The extra starts from the strongest cells' circle crossings find the real minimum.
+     * Pins the deliberate deviation from §3A.5's centroid-only start, kept by the project owner's
+     * decision (NOTES.md, Phase 3 slice 3 and "Owner decisions on the slice 3 follow-ups"). From the
+     * centroid alone, Gauss-Newton settles at (234, -7) here, a wrong local minimum with HDOP 4.3, so
+     * the spec's solver would report FIX "± 0" nearly 400 blocks from the truth, with perfect ranges
+     * (10.5-16.7 % of fixes outside the footprint do this). The extra starts from the strongest
+     * cells' circle crossings find the real minimum.
      */
     @Test
     @DisplayName("Outside the cells' footprint the fit is not trapped in a wrong local minimum")
@@ -385,13 +387,13 @@ class LocatorSolverTest {
     // ---- Test 10: a wideband cell --------------------------------------------------------------
 
     /**
-     * Test 10 as listed. With {@code errorBlocks = HDOP x rms(sigma)} (§3A.5, followed to the letter)
-     * one wideband cell cannot cut the "±" 3x on bandwidth alone: see
-     * {@link #oneWidebandCellInAGoodTriangle()}. It does here, at the edge of a network: three band_900
-     * sites clustered to the west (a 20 degree wedge, HDOP about 4.1) and a band_3500 site added to
-     * the north. Most of that gain is geometry (the same site on band_900 also helps about 3.6x); the
-     * control below pins the part that is bandwidth. NOTES.md, Phase 3 slice 3, has the numbers and
-     * the open question for the spec.
+     * Test 10 as listed, with the owner-approved weighted "±" ({@code sqrt(trace((H^T W H)^-1))};
+     * NOTES.md, Phase 3 "Owner decisions on the slice 3 follow-ups"). The 3x assertion keeps the
+     * edge-of-network geometry: three band_900 sites clustered to the west (a 20 degree wedge, HDOP
+     * about 4.1) and a band_3500 site added to the north. 35.49 → 5.12 (6.9x). Part of that is
+     * geometry: the same site on band_900 gives 9.81 (3.6x). The weighting credits the rest, which
+     * {@code HDOP x rms(sigma)} (8.50, 4.2x) did not. Inside a good triangle one wideband cell still
+     * gives less than 3x, which the owner accepts: {@link #oneWidebandCellInAGoodTriangle()}.
      */
     @Test
     @DisplayName("Test 10: adding one band_3500 cell to three band_900 cells cuts errorBlocks at least 3x")
@@ -418,20 +420,37 @@ class LocatorSolverTest {
         assertTrue(after.errorBlocks() < control.errorBlocks(),
                 "the band_3500 site must beat the same site on band_900: "
                         + after.errorBlocks() + " vs " + control.errorBlocks());
-        // Same geometry, so the difference is exactly the rms of the sigmas.
+
+        // The numbers NOTES.md quotes, pinned so they are checked, not asserted.
+        assertEquals(35.49, before.errorBlocks(), 0.005, "three band_900 sites in a 20 degree wedge");
+        assertEquals(5.12, after.errorBlocks(), 0.005, "plus band_3500 to the north");
+        assertEquals(9.81, control.errorBlocks(), 0.005, "plus band_900 in the same spot");
+        assertEquals(6.93, before.errorBlocks() / after.errorBlocks(), 0.005);
+        assertEquals(3.62, before.errorBlocks() / control.errorBlocks(), 0.005);
+
+        // Single-band fixes are still HDOP x sigma, exactly as §3A.5 writes it.
         double sigma900 = Ranging.sigmaBlocks(Ranging.resolutionBlocks(10.0, 1.0));
         double sigma3500 = Ranging.sigmaBlocks(Ranging.resolutionBlocks(100.0, 1.0));
-        double rmsRatio = sigma900 / Math.sqrt((3 * sigma900 * sigma900 + sigma3500 * sigma3500) / 4.0);
-        assertEquals(rmsRatio, (control.errorBlocks() / control.hdop()) / (after.errorBlocks() / after.hdop()), 1e-9);
+        assertEquals(before.hdop() * sigma900, before.errorBlocks(), 1e-9);
+        assertEquals(control.hdop() * sigma900, control.errorBlocks(), 1e-9);
+
+        // Same geometry to 0.001 in HDOP, so the gap between the two four-cell fixes is the weighting.
+        // The spec's HDOP x rms(sigma) credited only the rms (1.15x); the weighted fit credits 1.91x.
+        assertEquals(control.hdop(), after.hdop(), 0.001);
+        double rms = Math.sqrt((3 * sigma900 * sigma900 + sigma3500 * sigma3500) / 4.0);
+        assertEquals(8.50, after.hdop() * rms, 0.005, "what HDOP x rms(sigma) would have reported");
+        assertEquals(1.91, control.errorBlocks() / after.errorBlocks(), 0.005);
     }
 
     /**
-     * Pins the limit the spec's test 10 runs into, so NOTES.md's numbers are checked, not asserted:
-     * in an already good triangle one band_3500 cell improves the "±" by about 1.3x, not 3x. A single
-     * range constrains one direction; the rms of the sigmas is still dominated by the coarse cells.
+     * Pins the limit of one wideband cell at fixed good geometry, so NOTES.md's numbers are checked,
+     * not asserted: in a good 120 degree triangle one band_3500 cell improves the weighted "±" by
+     * 1.40x (9.99 → 7.15; the same site on band_900 1.12x). A single range constrains only its own
+     * direction, so the band_900 error across it remains. The project owner accepts that this stays
+     * below 3x; test 10's 3x is asserted at the edge of a network instead.
      */
     @Test
-    @DisplayName("Limit: in a good 120 degree triangle one band_3500 cell improves errorBlocks only ~1.3x")
+    @DisplayName("Limit: in a good 120 degree triangle one band_3500 cell improves errorBlocks 1.40x (below 3x, accepted)")
     void oneWidebandCellInAGoodTriangle() {
         Rx rx = Rx.standingOn(FLAT, 0.5, 0.5);
         List<CellSample> triangle = List.of(
@@ -440,10 +459,115 @@ class LocatorSolverTest {
                 heard(3L, 130, 80, -75, BAND_900, rx));
         List<CellSample> plus3500 = new ArrayList<>(triangle);
         plus3500.add(heard(9L, 52, 80, 30, BAND_3500, rx));
+        List<CellSample> plus900 = new ArrayList<>(triangle);
+        plus900.add(heard(9L, 52, 80, 30, BAND_900, rx));
 
-        double ratio = fix(solve(triangle, FLAT, LocatorParams.DEFAULTS)).errorBlocks()
-                / fix(solve(plus3500, FLAT, LocatorParams.DEFAULTS)).errorBlocks();
-        assertTrue(ratio > 1.2 && ratio < 1.4, "ratio " + ratio);
+        LocatorFix.Fix before = fix(solve(triangle, FLAT, LocatorParams.DEFAULTS));
+        LocatorFix.Fix after = fix(solve(plus3500, FLAT, LocatorParams.DEFAULTS));
+        LocatorFix.Fix control = fix(solve(plus900, FLAT, LocatorParams.DEFAULTS));
+
+        assertEquals(9.99, before.errorBlocks(), 0.005);
+        assertEquals(7.15, after.errorBlocks(), 0.005);
+        double ratio = before.errorBlocks() / after.errorBlocks();
+        assertEquals(1.40, ratio, 0.005);
+        assertEquals(1.12, before.errorBlocks() / control.errorBlocks(), 0.005);
+        assertTrue(ratio < 3.0, "one wideband cell in a good triangle stays below 3x: " + ratio);
+    }
+
+    // ---- The weighted "±" (owner-approved deviation from §3A.5's errorBlocks formula) ----------
+
+    @Test
+    @DisplayName("With every sigma equal, the weighted ± is exactly HDOP x sigma (single-band fixes are unchanged)")
+    void equalSigmasGiveHdopTimesSigma() {
+        SplittableRandom random = new SplittableRandom(0xE0_A1_5EL);
+        Band[] bands = {BAND_900, BAND_1800, BAND_3500};
+        int fixes = 0;
+        for (int scene = 0; scene < 2_000; scene++) {
+            Rx rx = Rx.standingOn(FLAT, random.nextDouble(-150, 150), random.nextDouble(-150, 150));
+            int count = 3 + random.nextInt(6);
+            List<RangeMeasurement> ranges = new ArrayList<>();
+            double sigma;
+            if (random.nextBoolean()) {
+                // Engine cells of one band, quantised as in the game.
+                Band band = bands[random.nextInt(bands.length)];
+                sigma = Ranging.sigmaBlocks(Ranging.resolutionBlocks(band.bandwidthMhz(), 1.0));
+                List<CellSample> cells = new ArrayList<>();
+                for (int i = 0; i < count; i++) {
+                    cells.add(heard(i + 1L, random.nextInt(-300, 301), random.nextInt(66, 140),
+                            random.nextInt(-300, 301), band, rx));
+                }
+                ranges.addAll(measure(cells));
+            } else {
+                // Exact ranges, any common sigma.
+                sigma = random.nextDouble(0.1, 20.0);
+                for (int i = 0; i < count; i++) {
+                    ranges.add(exact(i + 1L, random.nextDouble(-300, 300), random.nextDouble(66, 140),
+                            random.nextDouble(-300, 300), rx, sigma));
+                }
+            }
+            LocatorFix result = LocatorSolver.solve(ranges, FLAT, null, LocatorParams.DEFAULTS);
+            if (result instanceof LocatorFix.Fix fix) {
+                fixes++;
+                assertEquals(fix.hdop() * sigma, fix.errorBlocks(), 1e-9 * Math.max(1.0, fix.errorBlocks()),
+                        "scene " + scene + ": " + fix);
+            }
+        }
+        assertTrue(fixes > 1_000, "the sweep should mostly give FIX results, got " + fixes);
+    }
+
+    @Test
+    @DisplayName("Mixed bands: ± is sqrt(trace((HᵀWH)⁻¹)) and HDOP sqrt(trace((HᵀH)⁻¹)) over the same rows at the fix")
+    void errorIsTheWeightedCovarianceAndHdopStaysUnweighted() {
+        SplittableRandom random = new SplittableRandom(0xC0_7A_12L);
+        Band[] bands = {BAND_900, BAND_1800, BAND_3500};
+        int mixedFixes = 0;
+        for (int scene = 0; scene < 2_000; scene++) {
+            Rx rx = Rx.standingOn(FLAT, random.nextDouble(-150, 150), random.nextDouble(-150, 150));
+            int count = 3 + random.nextInt(6);
+            List<CellSample> cells = new ArrayList<>();
+            for (int i = 0; i < count; i++) {
+                cells.add(heard(i + 1L, random.nextInt(-300, 301), random.nextInt(66, 140),
+                        random.nextInt(-300, 301), bands[random.nextInt(bands.length)], rx));
+            }
+            List<RangeMeasurement> ranges = measure(cells);
+            if (!(LocatorSolver.solve(ranges, FLAT, null, LocatorParams.DEFAULTS) instanceof LocatorFix.Fix fix)) {
+                continue;
+            }
+            // Written out independently: the 2x2 normal matrices at the estimate, inverted directly.
+            double a = 0.0;
+            double b = 0.0;
+            double c = 0.0;
+            double wa = 0.0;
+            double wb = 0.0;
+            double wc = 0.0;
+            boolean mixed = false;
+            for (RangeMeasurement m : LocatorSolver.cellsUsed(ranges, LocatorParams.DEFAULTS)) {
+                mixed |= m.sigmaBlocks() != ranges.get(0).sigmaBlocks();
+                double dx = m.x() - fix.x();
+                double dz = m.z() - fix.z();
+                double d = Math.hypot(dx, dz);
+                if (d < 1e-6) {
+                    continue;
+                }
+                double ex = dx / d;
+                double ez = dz / d;
+                double w = 1.0 / (m.sigmaBlocks() * m.sigmaBlocks());
+                a += ex * ex;
+                b += ex * ez;
+                c += ez * ez;
+                wa += w * ex * ex;
+                wb += w * ex * ez;
+                wc += w * ez * ez;
+            }
+            double hdop = Math.sqrt((a + c) / (a * c - b * b));
+            double weighted = Math.sqrt((wa + wc) / (wa * wc - wb * wb));
+            assertEquals(hdop, fix.hdop(), 1e-7 * hdop, "scene " + scene + ": HDOP is unweighted");
+            assertEquals(weighted, fix.errorBlocks(), 1e-7 * weighted, "scene " + scene + ": ± is the weighted covariance");
+            if (mixed) {
+                mixedFixes++;
+            }
+        }
+        assertTrue(mixedFixes > 500, "the sweep should reach many mixed-band fixes, got " + mixedFixes);
     }
 
     // ---- Test 11: NLOS bias --------------------------------------------------------------------
