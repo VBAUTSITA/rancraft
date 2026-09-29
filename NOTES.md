@@ -1881,7 +1881,7 @@ world preset), the vanilla `compass_16` texture in the client assets.
 The two open slice 3 follow-ups in `PHASE_3.md` were decided by the project owner (2026-09-29).
 Both are now **owner-approved deviations from §3A.5**, labelled as such at the code sites
 (`LocatorSolver` class javadoc, `leastSquares`, `weightedErrorOf`; `LocatorFix.Fix`;
-`LocatorHudText`). Code and tests: part 1 `f61a739`; these notes and the tracker: the slice commit.
+`LocatorHudText`). Code and tests: part 1 `f61a739`; these notes and the tracker: `b47bcbf`.
 
 ### 1. The extra Gauss-Newton starts are kept (deviation from §3A.5's centroid-only start)
 
