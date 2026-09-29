@@ -41,7 +41,8 @@ Legend: `[x]` done and verified · `[~]` partly done / needs a manual in-game ch
 | 0a | Vision Step 3a follow-ups: trail cleared on logout, export link opens the folder | pre | [~] both fixed, build green (224 tests, 1 skipped); two in-game checks below | 0afda73; docs f2f8453 |
 | 1 | Datapack folder fix + runtime check + purity test | pre | [x] folders fixed, harvest game test red before / green after, purity test in `build` (219 tests, 1 skipped until `util` exists); one quick in-game look below | 212f86c; 1471bf3 |
 | 2 | DeviceRequirement + tests | 3A | [x] `rf/DeviceRequirement` per §3A.1, verdict order NO_SERVICE → LOW_QUALITY → LOW_TIER on the serving cell; test 1 green (7 tests, 231 total, 1 skipped) | 4ab5967 |
-| 3 | Ranging + LocatorSolver + tests 2–12 | 3A | [x] `Band.bandwidthMhz` + JSON 10/10/20/100, `Ranging`, `RangeMeasurement`, `LocatorFix`, `LocatorParams`, `LocatorSolver`; 5 locator tunables in `RanCraftConfig`, 4 of them in `RfConfig`; tests 2–12 green (259 total, 1 skipped). Two recorded deviations (floor not round; extra solver starts) and one spec conflict (test 10 vs `errorBlocks`), see follow-ups | 0837945 |
+| 3 | Ranging + LocatorSolver + tests 2–12 | 3A | [x] `Band.bandwidthMhz` + JSON 10/10/20/100, `Ranging`, `RangeMeasurement`, `LocatorFix`, `LocatorParams`, `LocatorSolver`; 5 locator tunables in `RanCraftConfig`, 4 of them in `RfConfig`; tests 2–12 green (259 total, 1 skipped). Two recorded deviations (floor not round; extra solver starts) and one spec conflict (test 10 vs `errorBlocks`), see follow-ups (both decided by the owner, row 3a) | 0837945 |
+| 3a | Owner decisions on the slice 3 follow-ups: keep the extra solver starts; weighted-fit `errorBlocks` | 3A | [x] extra starts kept and labelled a deliberate deviation; `errorBlocks = sqrt(trace((HᵀWH)⁻¹))`, HDOP unchanged; test 10 6.93x, triangle 1.40x pinned; equal-σ equivalence pinned (369 tests, 0 skipped) | f61a739 |
 | 4 | SignalDevice + ticker refactor + meter port (regression gate) | 3A | [~] `device/` (`SignalDevice`, `DeviceContext` per §3A.2, `DeviceMemory`, `ReplayGuard`); ticker scans carried devices, dispatches every sample (replays too), keeps "evaluated ⇒ sent"; meter ported (payload byte-identical to bd996d6, checked against the old code); stale armed candidate dropped after a gap of more than one interval. Regression gate passed headless (299 tests, 1 skipped; `runGameTestServer` 2/2); in-game checks below | a51e13a; 85bd051; 6558460 |
 | 5 | Locator item, payload, HUD, rings, waypoints, emergency record | 3A | [~] `rancraft:network_locator` ("Network Locator", a `SignalDevice`, requirement NONE); fix from the full cell list every dispatch, replays reuse it; `LocatorFixPayload` v1 only while held; HUD top-left stacked under the meter's detailed readout; rings, FIX marker + error circle, AMBIGUOUS markers; 8 waypoints of the estimate; `copyOnDeath` emergency record; `PROTOCOL_VERSION` 5. Headless green (367 tests, 0 skipped; `runGameTestServer` 4/4, incl. death/clone of the record and the live-level cost: 22 µs per 8-cell solve); in-game checks below. **3A ships here** | bf5eb47; e0fcfcd; 610a79c; 6c5d391 |
 | 6 | ColumnScan + mast columns + lens column/on-air | 3B | [ ] | |
@@ -164,6 +165,28 @@ Headless (verified by `./gradlew build`, 259 tests, 1 skipped):
 
 Nothing in game yet: slices 2 and 3 have no caller until slices 4 and 5.
 
+## Row 3a (owner decisions on the slice 3 follow-ups) checks
+
+Headless (verified by `./gradlew build`, 369 tests, 0 skipped; details in NOTES.md, "Owner
+decisions on the slice 3 follow-ups"):
+
+- [x] Extra Gauss-Newton starts kept; the class javadoc, the `leastSquares` comment and NOTES.md
+      call them a deliberate deviation from §3A.5 and say why (10.5-16.7 % wrong fixes with a small
+      ± outside the footprint from the centroid alone). `notTrappedOutsideTheFootprint` still pins it.
+- [x] `errorBlocks = sqrt(trace((HᵀWH)⁻¹))`, W = diag(1/σ²), same H as HDOP; HDOP stays unweighted
+      (`errorIsTheWeightedCovarianceAndHdopStaysUnweighted`: 2,000 seeded scenes, both checked
+      against a direct 2x2 inversion).
+- [x] Equal σ gives exactly HDOP × σ (`equalSigmasGiveHdopTimesSigma`, 2,000 seeded single-band
+      scenes); test 7 unchanged.
+- [x] Test 10 at the edge of a network: 35.49 → 5.12 (6.93x, ≥ 3x); good triangle pinned at 1.40x
+      (below 3x, accepted by the owner).
+- [x] The tests bite: the spec's `HDOP × rms(σ)` put back fails test 10, the triangle pin and the
+      covariance test; a `1/σ` weight fails those plus the equivalence and test 7.
+- [x] No wire or save change (`PROTOCOL_VERSION` stays "5"); the only game-side edit is the
+      `LocatorHudText` javadoc.
+
+In game: see the slice 5 band_3500 check below (numbers updated).
+
 ## Slice 4 (SignalDevice, ticker refactor, meter port) checks
 
 Headless (verified by `./gradlew build`, 299 tests, 1 skipped; method and checklist in NOTES.md,
@@ -261,7 +284,8 @@ Needs a human in game (`runClient`, creative tab "RANCraft"):
       the ground near your feet. Then three masts in a line (you off the line): POOR GEOMETRY
       (HDOP x).
 - [~] Add a band_3500 sector nearby: "best res 3.0 m (band_3500)" and the ± shrinks (most at the edge
-      of the network; about 1.3x only inside a good triangle, see the test 10 follow-up).
+      of the network, about 7x in the test 10 geometry; about 1.4x only inside a good triangle,
+      accepted by the owner; see row 3a).
 - [~] Walk behind a hill from a mast: the fix moves away from that mast (NLOS bias) and the rings no
       longer meet at your feet. The ± does **not** grow with the bias (it is quantisation only); it
       grows only if a cell drops below -100 dBm and the geometry gets worse.
@@ -291,8 +315,9 @@ Needs a human in game (`runClient`, creative tab "RANCraft"):
 - [~] Triangle of three masts → FIX with a sensible ±; three in a line → POOR GEOMETRY. *(Solver
       side verified headless in slice 3, tests 6 and 7; the item, payload and HUD in slice 5; in-game
       check above.)*
-- [~] Adding a band_3500 site visibly shrinks ±. *(Headless: 1.29× in a good triangle, 4.17× at the
-      edge of a network; see the test 10 follow-up. In-game check above.)*
+- [~] Adding a band_3500 site visibly shrinks ±. *(Headless, with the owner-approved weighted ±:
+      1.40× in a good triangle, 6.93× at the edge of a network; see row 3a and the resolved test 10
+      follow-up. In-game check above.)*
 - [~] Walking behind a hill visibly increases fix error. *(Headless: test 11, the NLOS bias pushes the
       fix away from the hidden cell. The **±** does not grow, by design: it is quantisation only. In
       game the error shows as the marker moving off you and the rings not meeting at your feet.)*
@@ -433,7 +458,10 @@ came from.
   `surfaceY(round(x), round(z))`. The tree's convention for "the column a point is in" is `floor`
   (`BlockPos.containing`); `round` reads the neighbouring column for half of all positions, a wrong
   height on any slope. `LocatorSolver` uses `floor`; `perfectRangesOnASlope` fails with `round`.
-- **[ ] Open, decision needed (slice 3 deviation from §3A.5's algorithm).** Gauss-Newton from the
+- **[x] Resolved by the project owner (row 3a): kept**, because a centroid-only start reports a
+  wrong fix with a small ± for 10.5-16.7 % of fixes outside the footprint. The code comments and
+  NOTES.md label it a deliberate deviation from §3A.5 and say why; no code change.
+  *(Original entry:)* **Decision needed (slice 3 deviation from §3A.5's algorithm).** Gauss-Newton from the
   centroid alone lands in a wrong local minimum for 10.5–16.7 % of FIX results once the receiver is
   outside the cells' footprint, **even with perfect ranges**, and reports it with a small ± (measured
   over 20,000 seeded scenes per case; e.g. FIX 390 blocks from the truth, "± 0", HDOP 4.3). Slice 3
@@ -443,7 +471,13 @@ came from.
   results are identical to the spec's. Cost about 19 µs per 8-cell fix plus the in-game surface
   lookups (slice 5 measured the whole solve on live ground: 22.2 µs, 37 lookups). To revert, delete the alternative-start loop in `LocatorSolver.leastSquares` and
   `notTrappedOutsideTheFootprint`. Details and the table in NOTES.md, slice 3.
-- **[ ] Open, spec conflict, decision needed (slice 3): test 10 vs `errorBlocks = HDOP × rms(σ)`.**
+- **[x] Resolved by the project owner (row 3a, f61a739): switched to the weighted covariance.**
+  `errorBlocks = sqrt(trace((HᵀWH)⁻¹))`, W = diag(1/σ²), same H as HDOP; HDOP stays unweighted.
+  Identical to HDOP × σ for single-band fixes (pinned; test 7 unchanged). Test 10: 35.49 → 5.12
+  (6.93×) at the edge of a network; the good triangle pinned at 1.40× (below 3×, accepted). An
+  owner-approved deviation from §3A.5's formula, recorded in NOTES.md with why it is the right
+  estimate for a weighted fit. *(Original entry:)*
+  **Spec conflict, decision needed (slice 3): test 10 vs `errorBlocks = HDOP × rms(σ)`.**
   Implemented to the letter. With that formula one band_3500 cell cannot cut the ± 3× on bandwidth
   alone: 1.29× in a good 120° triangle (band_900 in the same spot 1.12×). Test 10 passes (4.17×) in
   an edge-of-network geometry where most of the gain is HDOP (band_900 in the same spot 3.62×); a

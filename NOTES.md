@@ -1336,7 +1336,8 @@ the cap at its payload constant. Its minimum is 3, because fewer can never give 
    the extra starts switched off** (checked). The remaining band_900 misses are measurement
    ambiguity (a mirror position that genuinely fits the coarse ranges better), which no start can
    fix; see honest limits. Reverting is deleting one loop in `leastSquares`. Recorded in
-   `PHASE_3.md` follow-ups for a decision.
+   `PHASE_3.md` follow-ups for a decision. **Resolved: kept by the project owner** (see "Owner
+   decisions on the slice 3 follow-ups" at the end of Phase 3).
 3. **Spec conflict: test 10 vs the `errorBlocks` formula.** `errorBlocks = HDOP x rms(sigma_i)` is
    implemented to the letter. With it, **one band_3500 cell cannot cut the "±" 3x on bandwidth
    alone**: in a good 120° triangle it improves 9.99 → 7.77 (1.29x; the same site on band_900 gives
@@ -1352,6 +1353,10 @@ the cap at its payload constant. Its minimum is 3, because fewer can never give 
    credits the weighting that makes band_3500 "dominate the fit": edge case 35.7 → 5.1 (7.0x, band_900
    control 3.6x), triangle 1.40x. It would make "Adding a band_3500 site nearby visibly shrinks the
    ±" much more visible. Not changed here, because §3A.5 gives the formula explicitly.
+   **Resolved: the project owner switched `errorBlocks` to the weighted covariance** (measured:
+   edge 35.49 → 5.12, 6.93x; triangle 9.99 → 7.15, 1.40x). See "Owner decisions on the slice 3
+   follow-ups" at the end of Phase 3; the numbers in this item and in "Measured" below are the
+   slice 3 (`HDOP x rms`) ones.
 4. **`RangeOnly.radius` is the measured slant (3D) range**, exactly as measured (test 9 says "the
    measured radius"). A horizontal ring of that radius is the widest circle of the range sphere; a
    receiver below the radiating point is horizontally a little closer. A single cell gives no
@@ -1401,7 +1406,8 @@ the cap at its payload constant. Its minimum is 3, because fewer can never give 
   clock error and no dedicated positioning reference signals.
 - **"±" is a reported uncertainty, not a guarantee** (`LocatorFix.Fix.errorBlocks`): quantisation
   only. The NLOS bias is systematic and not in it (test 11 asserts the ± does not move when the
-  bias does). Nor does it cover a mirror ambiguity (above).
+  bias does). Nor does it cover a mirror ambiguity (above). *(Since the owner decisions it is the
+  1-sigma horizontal uncertainty of the weighted fit; still quantisation only.)*
 - **Altitude aiding assumes the top surface** (`LocatorSolver`, `SurfaceProbe`): wrong in caves,
   under overhangs, while flying or on a tower. The reported `y` is that assumption.
 - **Towers in a line** (`LocatorSolver`): exactly collinear towers are PoorGeometry (singular at the
@@ -1415,8 +1421,8 @@ the cap at its payload constant. Its minimum is 3, because fewer can never give 
 | Resolution | band_700/900 29.98 m, band_1800 14.99 m, band_3500 2.998 m (table: 30 / 30 / 15 / 3) |
 | Sigma | 8.654 / 8.654 / 4.327 / 0.865 blocks at 1 m per block |
 | Test 7 | HDOP 1.1547 at the true point (exact geometry); 1.1547 with band_1800 quantisation on the grid, ± 4.997 |
-| Test 10 | 35.49 → 8.50 (4.17x) adding band_3500; 9.81 (3.62x) adding band_900 in the same spot |
-| Good triangle + one band_3500 | 9.99 → 7.77 (1.29x); + band_900 8.93 (1.12x) |
+| Test 10 | 35.49 → 8.50 (4.17x) adding band_3500; 9.81 (3.62x) adding band_900 in the same spot. *Weighted "±" (owner decision): 35.49 → 5.12 (6.93x); the band_900 control unchanged.* |
+| Good triangle + one band_3500 | 9.99 → 7.77 (1.29x); + band_900 8.93 (1.12x). *Weighted "±": 9.99 → 7.15 (1.40x); control unchanged.* |
 | Narrow 6° wedge at 300 blocks | HDOP 13.29 → PoorGeometry at the default limit 6.0 |
 | Cost | 18.8 µs per 8-cell mixed-band solve (7 Gauss-Newton runs, synthetic hilly `SurfaceProbe`), 0.38 µs to range 8 cells; JIT-warm, 200,000 repetitions, this PC. The in-game `SurfaceProbe` cost is not in this; slice 5 must measure it (up to 7 x 15 lookups per fix in the worst case). |
 
@@ -1867,3 +1873,114 @@ world preset), the vanilla `compass_16` texture in the client assets.
 | `rf` / `util` purity | `PackagePurityTest` (both run now) |
 | `./gradlew runGameTestServer` | "4 tests are now running", "All 4 required tests passed" (2 harvest + 2 locator); the cost line above is from this run |
 | In game | not run by the agent (no `runClient`); the checks are listed in `PHASE_3.md`, slice 5 |
+
+---
+
+## Owner decisions on the slice 3 follow-ups
+
+The two open slice 3 follow-ups in `PHASE_3.md` were decided by the project owner (2026-09-29).
+Both are now **owner-approved deviations from §3A.5**, labelled as such at the code sites
+(`LocatorSolver` class javadoc, `leastSquares`, `weightedErrorOf`; `LocatorFix.Fix`;
+`LocatorHudText`). Code and tests: part 1 `f61a739`; these notes and the tracker: the slice commit.
+
+### 1. The extra Gauss-Newton starts are kept (deviation from §3A.5's centroid-only start)
+
+§3A.5 says "Initial guess: centroid". `LocatorSolver` still starts there first, and also from the
+circle crossings of each pair among the 3 strongest cells (at most 6 extra runs), keeping a run
+that ends more than 1 block away with a smaller weighted residual (slice 3, deviation 2). **Kept
+because a centroid-only start reports a wrong fix with a small "±" for 10.5-16.7 % of fixes with
+the receiver outside the cells' footprint**, even with perfect ranges (e.g. FIX 390 blocks from the
+truth, "± 0", HDOP 4.3; 20,000 seeded scenes per case, table in slice 3). A confident wrong answer
+teaches the wrong thing about what the "±" means. With the extra starts: perfect ranges 0 %,
+band_900 1.3-5.2 % (genuine mirror ambiguity, which no start can remove). When the centroid's run
+is the best fit, the result is exactly the spec's. Cost: about 19 µs per 8-cell fix synthetic,
+22.2 µs measured on live ground (slice 5). No code change in this step: only the comments now say
+"deliberate deviation, kept by the owner" and why. `notTrappedOutsideTheFootprint` still pins it
+(fails with the extra starts off, checked in slice 3).
+
+### 2. `errorBlocks` is the weighted-fit covariance (deviation from §3A.5's errorBlocks formula)
+
+§3A.5 writes `errorBlocks = HDOP × rms(σ_i)`. It is now
+
+```
+errorBlocks = sqrt(trace((HᵀWH)⁻¹)),   W = diag(1/σ_i²)
+```
+
+in the horizontal plane, with the **same H as HDOP** (rows: the horizontal unit vectors from the
+estimate to each cell; a cell directly overhead adds no row). **HDOP is unchanged**: still the
+unweighted, conventional `sqrt(trace((HᵀH)⁻¹))`, describing the geometry alone, and still what the
+`locatorMaxHdop` gate and PoorGeometry read. The "±" is the reported **1-sigma horizontal
+uncertainty of the weighted fit** (the root of the x and z variances summed, the same distance-RMS
+convention as `HDOP × σ`), still from quantisation only: the NLOS bias is systematic and not in it,
+nor is a mirror ambiguity.
+
+**Why this is the statistically right estimate for this solver.** The fit is Gauss-Newton with
+weights `1/σ_i²`, i.e. weighted least squares with W the inverse of the range-error covariance.
+Linearised at the solution, the covariance of that estimate is exactly `(HᵀWH)⁻¹` (Gauss-Markov:
+the best linear unbiased estimator's covariance; for Gaussian errors it is also the Cramér-Rao
+bound). `HDOP × rms(σ)` is the error of a fit that weighs every cell alike, which is not the fit the
+solver makes: it averages a band_3500 range's σ in as one of n equals although that range carries
+100x the weight of a band_900 one, so it under-reports what the wideband cell buys along its line of
+sight. §3A.5's own sentence, "a band_3500 cell has a 10x smaller σ, so it dominates the fit", is true
+of the estimate; the weighted covariance makes the "±" say it too. **When every σ is equal**, W =
+I/σ² and `sqrt(trace((HᵀWH)⁻¹)) = σ · sqrt(trace((HᵀH)⁻¹)) = HDOP × σ`: every single-band fix, test 7
+included, reads exactly as before. (The quantisation errors are uniform, not Gaussian; σ = res/√12
+is their true standard deviation, so the covariance is still right for the linearised fit and only
+the "68 %" reading of one sigma is approximate.)
+
+Implementation: `LocatorSolver.weightedErrorOf`, the 2x2 closed form `trace(M)/det(M)` with the
+determinant summed pairwise (Cauchy-Binet, as the Gauss-Newton step already does), so it stays
+exact to rounding with weights 100x apart. Since every weight is positive, `HᵀWH` is singular only
+where `HᵀH` is, which the HDOP gate has already rejected; a non-finite result would still give
+PoorGeometry (the ceiling) rather than an infinity (test 12). No record, wire or save format
+changes: `Fix.errorBlocks` keeps its place and type, `PROTOCOL_VERSION` stays "5",
+`LocatorFixPayload` v1. Waypoints and emergency records saved before the change keep the "±" they
+were saved with.
+
+**Measured** (the pinned tests; blocks at 1 m per block):
+
+| Geometry | band_900 only | + band_3500 (was: `HDOP × rms`) | + band_900 in the same spot |
+|---|---|---|---|
+| Edge of network: 3 band_900 sites in a 20° wedge to the west (HDOP 4.10), 4th site 60 blocks north | ± 35.49 | **± 5.12, 6.93x** (was 8.50, 4.17x) | ± 9.81, 3.62x |
+| Good 120° triangle (HDOP 1.15), 4th site inside at (52, 30) | ± 9.99 | **± 7.15, 1.40x** (was 7.77, 1.29x) | ± 8.93, 1.12x |
+
+In the edge case the two four-cell fixes have the same HDOP (1.133) to 0.001, so the gap between
+them (9.81 / 5.12 = 1.91x) is what the weighting is credited with; `HDOP × rms` credited 1.15x.
+**Test 10's 3x** is asserted in the edge-of-network geometry. **Inside a good triangle one band_3500
+cell still gives less than 3x (1.40x); the owner accepts that.** One range constrains only its own
+line of sight, so the band_900 error across it remains; more wideband sites are what shrink it.
+The weighted "±" is not always smaller than `HDOP × rms`: when the wideband cell's direction
+duplicates a coarse one, the rms under-weights the remaining coarse direction and the weighted
+figure can be slightly larger (it is the honest one either way).
+
+### Honest-abstraction notes (also at the code sites)
+
+- **The "±" is a reported uncertainty, not a guarantee**: quantisation only, deterministic (a player
+  standing still sees a fixed error, not noise), no NLOS bias, no mirror ambiguity.
+- **Slant σ used for horizontal ranges.** The fit works on horizontal ranges
+  `ρ = sqrt(r² − dy²)`, whose error is σ·r/ρ, larger than σ close under a high tower. Both the
+  weights and the "±" use the slant-range σ, as §3A.5 does. Small at the usual distances; it
+  under-states the "±" only when you stand almost under a mast.
+
+### Tests
+
+| | |
+|---|---|
+| `LocatorSolverTest` (+2, now 22) | `equalSigmasGiveHdopTimesSigma`: 2,000 seeded single-band scenes (engine cells of band_900 / 1800 / 3500 quantised, or exact ranges with any common σ in 0.1-20): every FIX has `errorBlocks = HDOP × σ` to 1e-9 relative. `errorIsTheWeightedCovarianceAndHdopStaysUnweighted`: 2,000 seeded mixed-band scenes (over 500 of them mixed-band FIX results), both 2x2 normal matrices written out and inverted directly at the estimate; `hdop` matches the unweighted one and `errorBlocks` the weighted one to 1e-7 relative. |
+| Test 10 (`widebandCellShrinksTheError`) | Still asserts ≥ 3x and band_3500 beating band_900 in the same spot; now also pins 35.49 / 5.12 / 9.81, 6.93x and 3.62x, the single-band fixes at `HDOP × σ` exactly, equal HDOP to 0.001, what `HDOP × rms` would have reported (8.50) and the 1.91x credited to the weighting. |
+| `oneWidebandCellInAGoodTriangle` | Pins 9.99 → 7.15 (1.40x) and the band_900 control (1.12x), and asserts the ratio stays below 3x (the accepted limit). |
+
+**The tests bite** (checked by breaking the code temporarily, then restoring it): putting the
+spec's `HDOP × rms(σ)` back fails test 10, the triangle pin and the weighted-covariance test, while
+the equal-σ equivalence and test 7 still pass (as they must: the formulas agree there). Weighting
+the "±"'s trace by `1/σ` instead of `1/σ²` fails all five, including the equivalence and test 7.
+
+### Verification
+
+| Check | Result |
+|---|---|
+| `./gradlew build` | succeeds |
+| Unit tests | **369: 369 passed, 0 failed, 0 skipped** (367 + 2) |
+| `rf` purity | `PackagePurityTest` (`LocatorSolver`, `LocatorFix`: `java.util` only) |
+| `./gradlew runGameTestServer` | not rerun: nothing game-side changed, and the game test's solve is single-band (band_1800), where the "±" is identical by construction |
+| In game | the slice 5 check "add a band_3500 sector nearby: the ± shrinks" in `PHASE_3.md` now expects about 1.4x inside a good triangle and much more at the edge of the network |
