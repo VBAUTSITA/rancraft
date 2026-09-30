@@ -3161,7 +3161,7 @@ Memory per receiver: one entry (its key, device and cached sample with the full 
 Remote redstone through the cell network: the first fixed devices, on slice 8's registry and ticker.
 An earlier attempt at this slice was interrupted with its files on disk, unbuilt and uncommitted; this
 step reviewed them, built and ran them, reworked the hot path after measuring it (below), and
-committed the slice as "Phase 3 slice 9: Radio Link". With it the code of Part 3B is complete; the 3B
+committed the slice as `10c1de7` "Phase 3 slice 9: Radio Link". With it the code of Part 3B is complete; the 3B
 review and docs follow as their own step.
 
 ### What was built
