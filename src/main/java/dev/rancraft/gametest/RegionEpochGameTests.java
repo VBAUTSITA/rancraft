@@ -120,7 +120,12 @@ public final class RegionEpochGameTests {
                 eyeX, eyeY, eyeZ, List.of(cell), bands, config, level.getGameTime(), ReceiverState.NONE);
         helper.assertTrue(evaluation.marched().size() == 1, "the cell 300 blocks east is marched");
         long[] bins = evaluation.dependencyBins(RegionEpochs.BIN_SIZE);
-        helper.assertTrue(bins.length == 3, "a 300-block ray crosses 3 bins, got " + bins.length);
+        // Along +x at one z: 3 bins, or 4 when the receiver stands 84 or more blocks into its bin (44
+        // of 128 offsets). The test's position varies per run; the fixed "3" of slice 7 failed once
+        // in about ten runs during slice 8.
+        int expectedBins = Math.floorDiv(cell.x(), RegionEpochs.BIN_SIZE) - Math.floorDiv(rx.getX(), RegionEpochs.BIN_SIZE) + 1;
+        helper.assertTrue(bins.length == expectedBins,
+                "a 300-block ray crosses " + expectedBins + " bins from x " + rx.getX() + ", got " + bins.length);
         RegionEpochs.Snapshot cached = epochs.snapshot(bins);
         double obstructionBefore = obstruction(level, cell, eyeX, eyeY, eyeZ, bands, config);
 
