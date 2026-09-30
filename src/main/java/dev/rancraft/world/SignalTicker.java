@@ -33,23 +33,18 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Function;
-import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.item.ItemStack;
-import net.minecraft.world.level.Level;
-import net.minecraft.world.level.LevelAccessor;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.chunk.LevelChunk;
 import net.minecraft.world.phys.Vec3;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.event.entity.player.PlayerEvent;
-import net.neoforged.neoforge.event.level.BlockEvent;
 import net.neoforged.neoforge.event.level.ChunkEvent;
 import net.neoforged.neoforge.event.server.ServerStoppedEvent;
 import net.neoforged.neoforge.event.tick.ServerTickEvent;
@@ -88,6 +83,12 @@ import net.neoforged.neoforge.network.PacketDistributor;
  * during an evaluation pause is dropped before selection ({@link #staleCandidateGapTicks}). The
  * regression checklist is in NOTES.md, Phase 3 slice 4.
  *
+ * <p><b>Phase 3 slice 7 (§3B.2, region epochs).</b> The cache's block key is no longer one epoch
+ * for the whole dimension: an entry records the epochs of the 128-block bins its evaluation's rays
+ * crossed ({@link RegionEpochs}), so a block placed far from every link path leaves it valid, and
+ * one on a link path invalidates it. Every other condition of {@link #canReplay} is unchanged. Block
+ * events are now handled in {@link RegionEpochs}.
+ *
  * <p>Coverage painting is not driven from here -- it is a much larger, time-sliced job. See
  * {@link CoverageSurveyor}.
  */
@@ -110,17 +111,17 @@ public final class SignalTicker {
      * {@link #forget(UUID)}. Left uncleared, this map grows for the life of the server.
      */
     private static final ReceiverStateStore<UUID> RECEIVERS = new ReceiverStateStore<>();
-    private static final Map<ResourceKey<Level>, AtomicLong> BLOCK_EPOCHS = new ConcurrentHashMap<>();
 
     private static volatile long lastSlowWarnMillis = 0L;
 
     /**
      * The last evaluation for one player, replayed while nothing it depends on has changed.
      *
-     * <p>It depends on three things: where the player's head is, the blocks around it (the
-     * per-dimension block epoch), and the antennas (the site registry version). The last one used
-     * to be missing, and reconfiguring an antenna changes no block, so a player standing still
-     * kept reading the old tilt until they took a step.
+     * <p>It depends on three things: where the player's head is, the blocks along the rays it
+     * marched (the epochs of its dependency bins, Phase 3 slice 7; before that, the per-dimension
+     * block epoch), and the antennas (the site registry version). The last one used to be missing,
+     * and reconfiguring an antenna changes no block, so a player standing still kept reading the old
+     * tilt until they took a step.
      *
      * @param sample          the evaluation itself, full cell list included. <b>Slice 4:</b> kept so a
      *                        replay can be dispatched to devices, which need more than the four
@@ -130,6 +131,11 @@ public final class SignalTicker {
      *                        a player who now wants them -- see {@link #hasLinksFor}.
      * @param linksBandFilter the lens band filter the links were chosen under.
      * @param linksCap        the {@code lensMaxLinks} they were capped at.
+     * @param dependencies    <b>Slice 7</b> (replaces the per-dimension {@code blockEpoch}): the
+     *                        epochs of the evaluation's dependency bins
+     *                        ({@code RfEngine.Evaluation.dependencyBins}) when it ran. The link rays
+     *                        need no bins of their own: each is traced along a ray the evaluation
+     *                        marched (a heard cell's, same endpoints), so its bins are already in.
      */
     record Cached(
             SignalSample sample,
@@ -138,16 +144,21 @@ public final class SignalTicker {
             String linksBandFilter,
             int linksCap,
             double x, double y, double z,
-            long blockEpoch,
+            RegionEpochs.Snapshot dependencies,
             long siteVersion) {
 
-        boolean isCurrent(double eyeX, double eyeY, double eyeZ, long epoch, long sites) {
+        /**
+         * Same antennas, no dependency bin bumped, and the eye moved less than half a block
+         * ({@code MOVE_EPSILON_BLOCKS}). A block change outside the dependency bins cannot
+         * change the evaluation ({@link dev.rancraft.rf.BinTraversal} has the argument).
+         */
+        boolean isCurrent(double eyeX, double eyeY, double eyeZ, RegionEpochs epochs, long sites) {
             double dx = x - eyeX;
             double dy = y - eyeY;
             double dz = z - eyeZ;
-            return blockEpoch == epoch
-                    && siteVersion == sites
-                    && dx * dx + dy * dy + dz * dz < MOVE_EPSILON_BLOCKS * MOVE_EPSILON_BLOCKS;
+            return siteVersion == sites
+                    && dx * dx + dy * dy + dz * dz < MOVE_EPSILON_BLOCKS * MOVE_EPSILON_BLOCKS
+                    && epochs.unchanged(dependencies);
         }
 
         boolean hasLinksFor(LensSettings lens, int cap) {
@@ -164,14 +175,20 @@ public final class SignalTicker {
      *   <li>caching is enabled;
      *   <li><b>no handover candidate is armed.</b> Replaying would freeze the time-to-trigger clock,
      *       so a player standing still at a cell boundary would never hand over at all;
-     *   <li>there is an entry, and it is current ({@link Cached#isCurrent}): same block epoch, same
-     *       site registry version, and the eye moved less than {@value #MOVE_EPSILON_BLOCKS} blocks;
+     *   <li>there is an entry, and it is current ({@link Cached#isCurrent}): same site registry
+     *       version, <b>every dependency bin's epoch unchanged</b> (Phase 3 slice 7, §3B.2: the
+     *       bins along the rays the evaluation marched; until slice 7, one epoch for the whole
+     *       dimension), and the eye moved less than {@value #MOVE_EPSILON_BLOCKS} blocks;
      *   <li><b>the cache must not starve links:</b> if link rays are wanted now, the entry has links
      *       built under the same band filter and cap ({@link Cached#hasLinksFor}). An entry built for
      *       a meter alone is never replayed to a player who has since switched the lens to links.
      * </ul>
      *
+     * <p>This is the only place the cache decision is made; {@code SignalTickerCacheTest} pins each
+     * condition.
+     *
      * @param candidateArmed the <em>stored</em> handover state has a candidate (stale or not).
+     * @param epochs         the dimension's bin epochs now ({@link RegionEpochs#of}).
      * @param linkLens       the lens settings when link rays are wanted, otherwise {@code null}.
      */
     static boolean canReplay(
@@ -179,7 +196,7 @@ public final class SignalTicker {
             boolean cachingEnabled,
             boolean candidateArmed,
             double eyeX, double eyeY, double eyeZ,
-            long epoch,
+            RegionEpochs epochs,
             long siteVersion,
             LensSettings linkLens,
             int linkCap) {
@@ -187,7 +204,7 @@ public final class SignalTicker {
         return cachingEnabled
                 && !candidateArmed
                 && cached != null
-                && cached.isCurrent(eyeX, eyeY, eyeZ, epoch, siteVersion)
+                && cached.isCurrent(eyeX, eyeY, eyeZ, epochs, siteVersion)
                 && (linkLens == null || cached.hasLinksFor(linkLens, linkCap));
     }
 
@@ -457,7 +474,7 @@ public final class SignalTicker {
         double eyeX = eye.x;
         double eyeY = eye.y;
         double eyeZ = eye.z;
-        long epoch = blockEpochOf(level);
+        RegionEpochs epochs = RegionEpochs.of(level);
         long siteVersion = registry.version();
         int linkCap = linkCap(linkLens, RanCraftConfig.lensMaxLinks());
         UUID receiverKey = player.getUUID();
@@ -468,7 +485,7 @@ public final class SignalTicker {
         // evaluation below can drop it and re-arm it.
         Cached cached = CACHE.get(receiverKey);
         if (canReplay(cached, config.enableSampleCaching(), RECEIVERS.get(receiverKey).hasCandidate(),
-                eyeX, eyeY, eyeZ, epoch, siteVersion, linkLens, linkCap)) {
+                eyeX, eyeY, eyeZ, epochs, siteVersion, linkLens, linkCap)) {
             send(player, cached.payload(), linkLens == null ? null : cached.links());
             // Replays are dispatched too (§3A.3). The sample keeps the tick of the evaluation it
             // replays, which is what devices are idempotent on.
@@ -507,9 +524,12 @@ public final class SignalTicker {
                 ? null
                 : traceLinks(level, sample, candidates, eyeX, eyeY, eyeZ, linkLens, linkCap, bands, config, gameTime);
 
+        // The dependency set (slice 7): the bins along the rays this evaluation marched. No block
+        // event can fire between the evaluation above and this snapshot (both on the server thread).
+        RegionEpochs.Snapshot dependencies = epochs.snapshot(evaluation.dependencyBins(RegionEpochs.BIN_SIZE));
         CACHE.put(receiverKey, new Cached(
                 sample, payload, links, linkLens == null ? LensSettings.ALL_BANDS : linkLens.bandFilter(), linkCap,
-                eyeX, eyeY, eyeZ, epoch, siteVersion));
+                eyeX, eyeY, eyeZ, dependencies, siteVersion));
         send(player, payload, links);
         dispatch(player, devices, sample, bands, config, level, gameTime);
     }
@@ -665,32 +685,16 @@ public final class SignalTicker {
     }
 
     /**
-     * The dimension's block-change counter. Anything derived from its blocks -- a cached sample, a
-     * coverage survey -- records this and is stale once it moves. See {@link #bumpBlockEpoch}.
+     * The dimension's block-change counter: moves on any block change anywhere in the dimension.
+     * A coverage survey records this and is stale once it moves.
+     *
+     * <p><b>Phase 3 slice 7:</b> the sum of the dimension's per-bin epochs
+     * ({@link RegionEpochs#total()}), so it moves exactly when the old per-dimension epoch did (and
+     * now also on explosions and piston moves). Kept so {@code CoverageSurveyor} works untouched;
+     * the player cache no longer reads it (it checks its own dependency bins, {@link #canReplay}).
      */
     public static long blockEpochOf(ServerLevel level) {
-        return BLOCK_EPOCHS.computeIfAbsent(level.dimension(), key -> new AtomicLong()).get();
-    }
-
-    /**
-     * Coarser than "within the evaluation radius": any block change anywhere in the dimension
-     * invalidates every cached sample in it. Conservative -- it recomputes more often than
-     * strictly needed, never less. See NOTES.md.
-     */
-    private static void bumpBlockEpoch(LevelAccessor levelAccessor) {
-        if (levelAccessor instanceof ServerLevel level) {
-            BLOCK_EPOCHS.computeIfAbsent(level.dimension(), key -> new AtomicLong()).incrementAndGet();
-        }
-    }
-
-    @SubscribeEvent
-    public static void onBlockBroken(BlockEvent.BreakEvent event) {
-        bumpBlockEpoch(event.getLevel());
-    }
-
-    @SubscribeEvent
-    public static void onBlockPlaced(BlockEvent.EntityPlaceEvent event) {
-        bumpBlockEpoch(event.getLevel());
+        return RegionEpochs.of(level).total();
     }
 
     /**
@@ -766,7 +770,7 @@ public final class SignalTicker {
         CACHE.clear();
         RECEIVERS.clearAll();
         DeviceMemory.clearAll();
-        BLOCK_EPOCHS.clear();
+        RegionEpochs.clearAll();
         CoverageSurveyor.clearAll();
         SiteRegistry.clearAll();
     }

@@ -25,6 +25,12 @@ import java.util.List;
  *       as Phase 1 did, would spend them on a near cell that is pointing the other way.
  *   <li><b>Ray march</b>, then the real RSRP, then the floor check again.
  * </ol>
+ *
+ * <h2>What an evaluation depends on (Phase 3 slice 7)</h2>
+ * Stages 1-4 read no block, so which cells are marched is fixed by the receiver point, the cells and
+ * the config. The world enters only through stage 5, and every ray marched there is reported in
+ * {@link Evaluation#marched()}. The ticker caches a sample against the bins those rays cross
+ * ({@link Evaluation#dependencyBins}); {@link BinTraversal} has the full argument.
  */
 public final class RfEngine {
 
@@ -46,9 +52,56 @@ public final class RfEngine {
         }
     }
 
-    /** Everything one evaluation produces: the sample, the carried-forward state, and the cost. */
+    /**
+     * One ray the engine marched: from a cell's radiating centre to the receiver, exactly the
+     * endpoints {@link RayMarcher#march} was given. Phase 3 slice 7 (§3B.2).
+     *
+     * @param cellId the cell it was marched for.
+     */
+    public record MarchedRay(
+            long cellId,
+            double fromX, double fromY, double fromZ,
+            double toX, double toY, double toZ) {
+    }
+
+    /**
+     * Everything one evaluation produces: the sample, the carried-forward state, and the cost.
+     *
+     * @param marched <b>Phase 3 slice 7 (appended).</b> Every ray this evaluation marched, in march
+     *                order, whether or not its cell ended up heard: the only way an evaluation reads
+     *                the world. Empty when nothing was marched (no cell in range, or every cell
+     *                pruned). {@link #dependencyBins} turns it into the cache's dependency set.
+     */
     public record Evaluation(
-            SignalSample sample, ReceiverState state, boolean handedOver, EvaluationStats stats) {
+            SignalSample sample, ReceiverState state, boolean handedOver, EvaluationStats stats,
+            List<MarchedRay> marched) {
+
+        public Evaluation {
+            marched = List.copyOf(marched);
+        }
+
+        /** The pre-slice-7 shape: no marched rays recorded. */
+        public Evaluation(SignalSample sample, ReceiverState state, boolean handedOver, EvaluationStats stats) {
+            this(sample, state, handedOver, stats, List.of());
+        }
+
+        /**
+         * The evaluation's <b>dependency set</b>: the union of the XZ bins along every marched ray
+         * ({@link BinTraversal#binsAlong}), sorted by key, each once. A block change outside these
+         * bins cannot change this evaluation's result; {@link BinTraversal}'s class javadoc has the
+         * argument (marched cells are chosen with no obstruction term, and pruned cells cannot be
+         * revived by any block). Empty when nothing was marched: then no block anywhere matters.
+         *
+         * @param binSize bin edge in blocks (the server passes {@code SiteRegistry.BIN_SIZE}).
+         */
+        public long[] dependencyBins(int binSize) {
+            long[][] perRay = new long[marched.size()][];
+            for (int i = 0; i < perRay.length; i++) {
+                MarchedRay ray = marched.get(i);
+                perRay[i] = BinTraversal.binsAlong(ray.fromX(), ray.fromZ(), ray.toX(), ray.toZ(), binSize);
+            }
+            return BinTraversal.union(perRay);
+        }
     }
 
     /**
@@ -130,12 +183,19 @@ public final class RfEngine {
         prospects.sort(Comparator.comparingDouble(Prospect::optimisticRsrpDbm).reversed());
         int limit = Math.min(prospects.size(), Math.max(0, config.maxCellsEvaluated()));
 
-        // Stage 5: the expensive part.
+        // Stage 5: the expensive part. Which prospects get here was decided above with no
+        // obstruction term, so it cannot depend on blocks: that is why the marched rays alone are
+        // the evaluation's dependency set (Evaluation.dependencyBins, BinTraversal).
         List<CellSample> evaluated = new ArrayList<>(limit);
+        List<MarchedRay> marched = new ArrayList<>(limit);
         int rayMarched = 0;
         for (int i = 0; i < limit; i++) {
             rayMarched++;
-            CellSample sample = march(probe, rxX, rxY, rxZ, prospects.get(i), config);
+            Prospect prospect = prospects.get(i);
+            CellParams cell = prospect.cell();
+            marched.add(new MarchedRay(
+                    cell.cellId(), cell.centerX(), cell.centerY(), cell.centerZ(), rxX, rxY, rxZ));
+            CellSample sample = march(probe, rxX, rxY, rxZ, prospect, config);
             if (sample != null) {
                 evaluated.add(sample);
             }
@@ -143,7 +203,8 @@ public final class RfEngine {
 
         if (evaluated.isEmpty()) {
             return outOfService(previous, tick, config,
-                    new EvaluationStats(candidateCount, prunedByDistance, prunedByBudget, rayMarched, 0));
+                    new EvaluationStats(candidateCount, prunedByDistance, prunedByBudget, rayMarched, 0),
+                    marched);
         }
 
         evaluated.sort(Comparator.comparingDouble(CellSample::rsrpDbm).reversed());
@@ -154,7 +215,8 @@ public final class RfEngine {
         CellSample serving = selection.serving();
         if (serving == null) {
             return outOfService(previous, tick, config,
-                    new EvaluationStats(candidateCount, prunedByDistance, prunedByBudget, rayMarched, 0));
+                    new EvaluationStats(candidateCount, prunedByDistance, prunedByBudget, rayMarched, 0),
+                    marched);
         }
 
         double noiseFloorDbm = bands.getOrFallback(serving.bandId()).noiseFloorDbm();
@@ -173,7 +235,8 @@ public final class RfEngine {
 
         return new Evaluation(sample, selection.state(), selection.handedOver(),
                 new EvaluationStats(
-                        candidateCount, prunedByDistance, prunedByBudget, rayMarched, evaluated.size()));
+                        candidateCount, prunedByDistance, prunedByBudget, rayMarched, evaluated.size()),
+                marched);
     }
 
     /** @return null when the ray ran out of steps or the cell fell below the floor. */
@@ -212,6 +275,12 @@ public final class RfEngine {
 
     private static Evaluation outOfService(
             ReceiverState previous, long tick, RfConfig config, EvaluationStats stats) {
+        return outOfService(previous, tick, config, stats, List.of());
+    }
+
+    /** @param marched the rays marched before every cell turned out unheard: still a dependency. */
+    private static Evaluation outOfService(
+            ReceiverState previous, long tick, RfConfig config, EvaluationStats stats, List<MarchedRay> marched) {
 
         CellSelector.Selection selection =
                 CellSelector.select(previous, List.of(), tick, config.selectionParams());
@@ -219,7 +288,8 @@ public final class RfEngine {
                 SignalSample.empty(tick, selection.state().handoverCount()),
                 selection.state(),
                 false,
-                stats);
+                stats,
+                marched);
     }
 
     /** 3D Euclidean distance from the receiver to the centre of the radiating voxel. */
