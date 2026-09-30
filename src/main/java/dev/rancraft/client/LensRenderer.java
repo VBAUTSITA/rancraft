@@ -4,6 +4,7 @@ import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
 import dev.rancraft.RanCraft;
 import dev.rancraft.block.AntennaBlockEntity;
+import dev.rancraft.block.SignalMastBlockEntity;
 import dev.rancraft.item.LensSettings;
 import dev.rancraft.item.RfLensItem;
 import dev.rancraft.rf.AntennaPattern;
@@ -18,7 +19,6 @@ import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.client.renderer.MultiBufferSource;
 import net.minecraft.client.renderer.RenderType;
-import net.minecraft.core.BlockPos;
 import net.minecraft.core.SectionPos;
 import net.minecraft.util.Mth;
 import net.minecraft.world.item.ItemStack;
@@ -42,6 +42,13 @@ import org.joml.Matrix4f;
  *
  * <p>Meshes are cached per cell configuration, so standing still costs nothing and only an actual
  * edit rebuilds geometry.
+ *
+ * <p><b>Mast columns (Phase 3 slice 6, §3B.1).</b> One lobe per cell, not per block: a column of
+ * stacked masts is one cell, so only its base gets a lobe, drawn at the column's radiating point (just
+ * above the top mast), and a column with a sector antenna on top (a mounting pole) gets none. The
+ * client applies the server's rule ({@code util.ColumnScan}, through {@code MastColumn}) to the blocks
+ * it can see; that is public world data, not a measurement. A cell the server reports off the air
+ * ({@code OnAir} in the antenna's update tag) is drawn greyed, never hidden.
  */
 @EventBusSubscriber(modid = RanCraft.MOD_ID, value = Dist.CLIENT)
 public final class LensRenderer {
@@ -128,16 +135,22 @@ public final class LensRenderer {
                     if (!settings.showsBand(antenna.bandId())) {
                         continue;
                     }
+                    // Structure and mounting poles are not cells. Two block reads for structure,
+                    // however tall the column, so a tall tower costs one scan per frame, not one per mast.
+                    if (antenna instanceof SignalMastBlockEntity mast && !mast.ownsColumnCell()) {
+                        continue;
+                    }
 
-                    BlockPos point = antenna.radiatingPoint();
-                    double dx = (point.getX() + 0.5) - camera.x;
-                    double dy = (point.getY() + 0.5) - camera.y;
-                    double dz = (point.getZ() + 0.5) - camera.z;
+                    // The column's radiating point for a mast base (the same scan the server uses).
+                    CellParams cell = antenna.toCellParams();
+                    double dx = cell.centerX() - camera.x;
+                    double dy = cell.centerY() - camera.y;
+                    double dz = cell.centerZ() - camera.z;
                     if (dx * dx + dy * dy + dz * dz > rangeSq) {
                         continue;
                     }
 
-                    drawLobe(poseStack, consumer, antenna, point);
+                    drawLobe(poseStack, consumer, cell, antenna.onAir());
                     drawn++;
                 }
             }
@@ -147,20 +160,20 @@ public final class LensRenderer {
         buffers.endBatch(RenderType.lines());
     }
 
+    /** One cell's lobe at its radiating point; greyed ({@link LensStyle#lobeRgb}) when off the air. */
     private static void drawLobe(
-            PoseStack poseStack, VertexConsumer consumer, AntennaBlockEntity antenna, BlockPos point) {
+            PoseStack poseStack, VertexConsumer consumer, CellParams cell, boolean onAir) {
 
-        CellParams cell = antenna.toCellParams();
         List<PatternMesh.Shell> shells = meshFor(cell);
-        int colour = BandColours.of(cell.bandId());
+        int colour = LensStyle.lobeRgb(BandColours.of(cell.bandId()), onAir);
 
         Matrix4f matrix = poseStack.last().pose();
-        float ox = point.getX() + 0.5f;
-        float oy = point.getY() + 0.5f;
-        float oz = point.getZ() + 0.5f;
+        float ox = cell.x() + 0.5f;
+        float oy = cell.y() + 0.5f;
+        float oz = cell.z() + 0.5f;
 
         for (int i = 0; i < shells.size(); i++) {
-            int alpha = SHELL_ALPHA[Math.min(i, SHELL_ALPHA.length - 1)];
+            int alpha = LensStyle.lobeAlpha(SHELL_ALPHA[Math.min(i, SHELL_ALPHA.length - 1)], onAir);
             int red = (colour >> 16) & 0xFF;
             int green = (colour >> 8) & 0xFF;
             int blue = colour & 0xFF;

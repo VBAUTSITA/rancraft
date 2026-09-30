@@ -180,6 +180,19 @@ public final class RanCraftConfig {
                     "it is younger than this. 1200 = 60 s.")
             .defineInRange("locatorEmergencyMaxAgeTicks", 1200, 0, 72_000);
 
+    // ---- Phase 3: mast columns (§3B.1) ---------------------------------------------------------
+    // Gameplay (which blocks form one tower), not an engine parameter, so it stays out of RfConfig.
+    // The RF Lens reads the same value on the client to draw a column's lobe where the server
+    // radiates it. COMMON configs are not synced, so a dedicated server and a client with different
+    // values disagree about columns taller than the smaller cap; see NOTES.md, slice 6.
+
+    public static final ModConfigSpec.IntValue MAX_MAST_HEIGHT = BUILDER
+            .comment("Mast columns: a vertical run of Signal Masts is one cell, radiating from above its",
+                    "top mast. Only the lowest this-many masts raise the radiating point; masts above",
+                    "them are structure. A change applies to a column the next time it is rebuilt or",
+                    "its chunk loads.")
+            .defineInRange("maxMastHeight", 64, 1, 4096);
+
     public static final ModConfigSpec SPEC = BUILDER.build();
 
     // ---- RF Vision Step 3a: the drive-test trail (CLIENT) --------------------------------------
@@ -260,6 +273,14 @@ public final class RanCraftConfig {
     /** Gameplay only (the emergency record); deliberately not in {@link RfConfig}. */
     public static int locatorEmergencyMaxAgeTicks() {
         return LOCATOR_EMERGENCY_MAX_AGE_TICKS.get();
+    }
+
+    /**
+     * The mast-column height cap (§3B.1). Read by the server and by the RF Lens on the client, so it
+     * falls back to the default if read before the config has loaded, rather than throwing.
+     */
+    public static int maxMastHeight() {
+        return SPEC.isLoaded() ? MAX_MAST_HEIGHT.get() : MAX_MAST_HEIGHT.getDefault();
     }
 
     /** Immutable snapshot handed to the engine, so the engine never touches a config API. */

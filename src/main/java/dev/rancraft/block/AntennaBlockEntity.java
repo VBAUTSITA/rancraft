@@ -24,7 +24,8 @@ import net.minecraft.world.level.block.state.properties.BlockStateProperties;
  * Everything a radio site persists, shared by the omni Signal Mast and the Sector Antenna.
  *
  * <p>Both are independent cells as far as {@code SiteRegistry} is concerned; the only difference is
- * their defaults and whether they have a facing. There is deliberately no "site" container block --
+ * their defaults and whether they have a facing. (Since Phase 3 slice 6 a column of stacked masts is
+ * one cell, owned by its lowest mast: see {@link SignalMastBlockEntity}.) There is deliberately no "site" container block --
  * a three-sector site is three blocks at azimuths 0/120/240, and Phase 4's planning table will group
  * them by proximity.
  *
@@ -42,6 +43,9 @@ public abstract class AntennaBlockEntity extends BlockEntity {
      * </ul>
      */
     public static final int DATA_VERSION = 2;
+
+    /** The update tag's on-air flag (slice 6). Never saved; see {@link #getUpdateTag}. */
+    public static final String ON_AIR_TAG = "OnAir";
 
     /** Debounce so migrating a large world logs a running total, not one line per tower. */
     private static final long MIGRATION_LOG_INTERVAL_MILLIS = 10_000L;
@@ -71,6 +75,21 @@ public abstract class AntennaBlockEntity extends BlockEntity {
      */
     protected boolean needsPciAssignment = true;
 
+    /**
+     * Whether this antenna is on the air: registered as a transmitting cell. Phase 3 slice 6 (§3B.1).
+     *
+     * <p>Server: set by {@link #refreshRegistration()} and pushed to clients when it changes. Client:
+     * the value from the server's update tag ({@code OnAir}), which the RF Lens uses to draw an
+     * off-air cell greyed out. It is the antenna's own public state, like a furnace being lit: the
+     * client learns <em>that</em> a cell is off the air, never why (redstone now; backhaul and power
+     * in §3C) and never anything it would receive. Not persisted: the server works it out again on
+     * load, so the save format and {@code DATA_VERSION} are unchanged.
+     *
+     * <p>Starts true, so a client that has not been told (or a server that never sends the flag)
+     * draws the antenna as before.
+     */
+    private boolean onAir = true;
+
     protected AntennaBlockEntity(BlockEntityType<?> type, BlockPos pos, BlockState state) {
         super(type, pos, state);
     }
@@ -84,8 +103,9 @@ public abstract class AntennaBlockEntity extends BlockEntity {
 
     /**
      * The radiating point: the top face of the block, not the block itself. Consistent with Phase 1
-     * and with sector antennas. Phase 3 stacks masts for height, so nothing may assume the
-     * radiating point equals the block position.
+     * and with sector antennas. A mast column's base overrides it with the top of its column
+     * (Phase 3 slice 6, {@link SignalMastBlockEntity#radiatingPoint()}), so nothing may assume the
+     * radiating point equals the block position or the block above it.
      */
     public BlockPos radiatingPoint() {
         return getBlockPos().above();
@@ -131,6 +151,11 @@ public abstract class AntennaBlockEntity extends BlockEntity {
 
     public int pci() {
         return pci;
+    }
+
+    /** See {@link #onAir}: on the server whether the cell is registered, on the client what the server said. */
+    public boolean onAir() {
+        return onAir;
     }
 
     /**
@@ -193,14 +218,22 @@ public abstract class AntennaBlockEntity extends BlockEntity {
         super.setRemoved();
     }
 
-    /** Re-evaluates whether this antenna should currently be in the registry. */
+    /**
+     * Re-evaluates whether this antenna should currently be in the registry, and tells clients when
+     * that changes its {@link #onAir()} flag.
+     */
     public void refreshRegistration() {
         if (level instanceof ServerLevel serverLevel) {
             SiteRegistry registry = SiteRegistry.of(serverLevel);
-            if (isTransmitting()) {
+            boolean transmitting = isTransmitting();
+            if (transmitting) {
                 registry.register(toCellParams());
             } else {
                 registry.unregister(cellId());
+            }
+            if (transmitting != onAir) {
+                onAir = transmitting;
+                syncToClients();
             }
         }
     }
@@ -216,7 +249,7 @@ public abstract class AntennaBlockEntity extends BlockEntity {
      * residue is also free. Runs for migrated Phase 1 sites and for newly placed antennas.
      */
     protected void assignPciIfNeeded() {
-        if (!needsPciAssignment || !(level instanceof ServerLevel serverLevel)) {
+        if (!needsPciAssignment || !(level instanceof ServerLevel serverLevel) || !readyForPciPlan()) {
             return;
         }
         needsPciAssignment = false;
@@ -256,6 +289,14 @@ public abstract class AntennaBlockEntity extends BlockEntity {
         refreshRegistration();
     }
 
+    /**
+     * Whether this antenna may be planned now. Always, except for a Signal Mast that is structure in
+     * a column: it keeps {@link #needsPciAssignment} until it becomes a column's base (slice 6).
+     */
+    protected boolean readyForPciPlan() {
+        return true;
+    }
+
     // ---- client sync --------------------------------------------------------
 
     /**
@@ -265,10 +306,15 @@ public abstract class AntennaBlockEntity extends BlockEntity {
      * anything: azimuth, tilt, beamwidths, gain and band are the antenna's own specification, in
      * the same way a furnace's contents are. Measurements are <em>not</em> sent this way and never
      * should be -- see VISION.md for where that line sits.
+     *
+     * <p>Phase 3 slice 6 appends {@code OnAir} (see {@link #onAir}), in the update tag only: it is
+     * written here, not in {@link #saveAdditional}, so it never reaches the save.
      */
     @Override
     public CompoundTag getUpdateTag(HolderLookup.Provider registries) {
-        return saveWithoutMetadata(registries);
+        CompoundTag tag = saveWithoutMetadata(registries);
+        tag.putBoolean(ON_AIR_TAG, onAir);
+        return tag;
     }
 
     @Override
@@ -334,6 +380,11 @@ public abstract class AntennaBlockEntity extends BlockEntity {
         }
         if (tag.contains("Pci")) {
             pci = tag.getInt("Pci");
+        }
+        // Only an update tag carries it (the client's copy). On the server it is recomputed by the
+        // next refreshRegistration(), so a crafted block_entity_data value does not stick there.
+        if (tag.contains(ON_AIR_TAG)) {
+            onAir = tag.getBoolean(ON_AIR_TAG);
         }
 
         // Real persisted data just arrived, so this is not a fresh placement -- the constructor's

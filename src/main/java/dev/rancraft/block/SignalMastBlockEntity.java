@@ -1,7 +1,13 @@
 package dev.rancraft.block;
 
+import dev.rancraft.RanCraftConfig;
 import dev.rancraft.registry.ModBlockEntities;
+import dev.rancraft.util.ColumnScan;
+import dev.rancraft.world.MastColumnCensus;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.HolderLookup;
+import net.minecraft.nbt.CompoundTag;
+import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.block.state.BlockState;
 
 /**
@@ -14,10 +20,135 @@ import net.minecraft.world.level.block.state.BlockState;
  *
  * <p>All state, persistence and migration live in {@link AntennaBlockEntity}; the defaults there
  * are already the mast's.
+ *
+ * <p><b>Mast columns (Phase 3 slice 6, §3B.1).</b> Stacked masts are one site (see
+ * {@link SignalMastBlock}). Every mast keeps its own entity, but only the column's base registers a
+ * cell: {@link #isTransmitting()} is false for structure and for a mounting pole, and
+ * {@link #radiatingPoint()} is the column top's. Nothing persisted changes, so there is no
+ * {@code DATA_VERSION} bump: a saved column works out its shape again from the blocks on load.
+ *
+ * <p>PCI planning waits until a mast is a base: a mast placed on top of a column is structure and
+ * gets no plan (and no log line). When a structure mast becomes a base while loaded (the base below
+ * it was broken, or the column split), it gets a fresh plan, as a newly placed mast would. That is a
+ * known behaviour, not a bug (NOTES.md, slice 6): the new base is a different cell with a new id, so
+ * its old entity's saved PCI (if any) is not the column's.
  */
 public class SignalMastBlockEntity extends AntennaBlockEntity {
 
+    /**
+     * Whether the last server-side refresh found this mast to be structure. Not persisted: it only
+     * detects a promotion to base while the chunk stays loaded. Starts false, so a base loaded from
+     * disk keeps its saved PCI.
+     */
+    private boolean seenAsStructure;
+
+    /** Set when saved data arrived ({@link #loadAdditional}); only such a column is counted in the census. */
+    private boolean loadedFromSave;
+
     public SignalMastBlockEntity(BlockPos pos, BlockState state) {
         super(ModBlockEntities.SIGNAL_MAST.get(), pos, state);
+    }
+
+    /**
+     * Whether this mast is its column's base (the lowest mast). Without a level (never in play) it
+     * counts as a column of one.
+     */
+    public boolean isColumnBase() {
+        return level == null || MastColumn.isBase(level, getBlockPos());
+    }
+
+    /**
+     * Whether this mast owns a cell by the shape of its column: the base, with no sector antenna on
+     * top. Power is not considered. The RF Lens draws a lobe only for such a mast, greyed when the
+     * server says it is off the air.
+     */
+    public boolean ownsColumnCell() {
+        return level == null || MastColumn.ownsCell(level, getBlockPos());
+    }
+
+    /**
+     * For a column's base: just above the top of the column's signal part ({@code top.above()}). For
+     * a single mast that is {@code pos.above()}, as in Phase 2. For structure (never registered) the
+     * block above, which nothing uses.
+     */
+    @Override
+    public BlockPos radiatingPoint() {
+        BlockPos pos = getBlockPos();
+        if (level == null || !MastColumn.isBase(level, pos)) {
+            return super.radiatingPoint();
+        }
+        ColumnScan.Bounds column = MastColumn.bounds(level, pos);
+        return column == null ? super.radiatingPoint() : new BlockPos(pos.getX(), column.radiatingY(), pos.getZ());
+    }
+
+    /**
+     * Only a column's base transmits, and not when a sector antenna sits on top (a mounting pole).
+     * With {@code requireRedstone} on, the column needs any of its masts powered.
+     */
+    @Override
+    public boolean isTransmitting() {
+        if (level == null) {
+            return super.isTransmitting();
+        }
+        BlockPos pos = getBlockPos();
+        if (!MastColumn.isBase(level, pos)) {
+            return false;
+        }
+        ColumnScan.Bounds column = MastColumn.bounds(level, pos);
+        if (column == null || MastColumn.mountingPole(level, pos, column)) {
+            return false;
+        }
+        if (!RanCraftConfig.REQUIRE_REDSTONE.get()) {
+            return true;
+        }
+        return MastColumn.powered(level, pos, column);
+    }
+
+    /** A mast is planned only once it owns its column's cell; see the class javadoc. */
+    @Override
+    protected boolean readyForPciPlan() {
+        return isColumnBase();
+    }
+
+    /**
+     * Registers the cell if this mast is a transmitting base, unregisters it otherwise. A structure
+     * mast that has just become a base gets a fresh PCI plan first.
+     */
+    @Override
+    public void refreshRegistration() {
+        if (level instanceof ServerLevel) {
+            boolean base = isColumnBase();
+            if (base && seenAsStructure) {
+                // Promoted: the mast (or masts) under it went. A fresh plan, as for a new mast.
+                needsPciAssignment = true;
+            }
+            seenAsStructure = !base;
+            if (base && needsPciAssignment) {
+                // Plans, then refreshes again (with nothing left to plan) to register the result.
+                assignPciIfNeeded();
+                if (!needsPciAssignment) {
+                    return;
+                }
+            }
+        }
+        super.refreshRegistration();
+    }
+
+    @Override
+    public void onLoad() {
+        super.onLoad();
+        if (loadedFromSave && level instanceof ServerLevel serverLevel && isColumnBase()) {
+            ColumnScan.Bounds column = MastColumn.bounds(serverLevel, getBlockPos());
+            if (column != null) {
+                MastColumnCensus.noteLoaded(serverLevel, getBlockPos(), column.height(),
+                        MastColumn.mountingPole(serverLevel, getBlockPos(), column));
+            }
+        }
+    }
+
+    @Override
+    protected void loadAdditional(CompoundTag tag, HolderLookup.Provider registries) {
+        super.loadAdditional(tag, registries);
+        loadedFromSave = true;
     }
 }

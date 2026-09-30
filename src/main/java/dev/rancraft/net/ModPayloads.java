@@ -32,9 +32,14 @@ public final class ModPayloads {
      *   <li><b>5</b> -- Phase 3 slice 5: {@link LocatorFixPayload} is new (the Network Locator), and
      *       the Locator's waypoint data component is synced. A slice 4 client has no handler for the
      *       payload and does not know the component.
+     *   <li><b>6</b> -- Phase 3 slice 6: mast columns. The antennas' block-entity update tag appends
+     *       {@code OnAir}, and the RF Lens now draws one lobe per column, at its top, working the
+     *       column out from the blocks as the server does. No payload changed shape, but a slice 5
+     *       client on a slice 6 server would draw a lobe on every stacked mast (and none greyed), and
+     *       the reverse pairing would draw one lobe where nine cells transmit.
      * </ul>
      */
-    private static final String PROTOCOL_VERSION = "5";
+    private static final String PROTOCOL_VERSION = "6";
 
     @SubscribeEvent
     public static void register(RegisterPayloadHandlersEvent event) {

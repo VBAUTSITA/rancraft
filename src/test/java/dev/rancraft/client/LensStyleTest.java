@@ -26,6 +26,27 @@ class LensStyleTest {
         return rgb & 0xFF;
     }
 
+    // ---- lobes on and off the air (Phase 3 slice 6) -------------------------------------------
+
+    @Test
+    @DisplayName("an on-air lobe keeps its band colour and opacity; an off-air one is grey at half opacity")
+    void offAirLobesAreGreyed() {
+        int band = 0x33AAFF;
+        assertEquals(band, LensStyle.lobeRgb(band, true));
+        assertEquals(LensStyle.OFF_AIR_RGB, LensStyle.lobeRgb(band, false));
+        assertEquals(LensStyle.OFF_AIR_RGB, LensStyle.lobeRgb(0xFF0000, false), "grey whatever the band");
+        assertEquals(red(LensStyle.OFF_AIR_RGB), green(LensStyle.OFF_AIR_RGB), "a neutral grey");
+        assertEquals(green(LensStyle.OFF_AIR_RGB), blue(LensStyle.OFF_AIR_RGB), "a neutral grey");
+        assertEquals(0x33AAFF, LensStyle.lobeRgb(0xFF33AAFF, true), "alpha bits are dropped");
+
+        for (int alpha : new int[] {70, 120, 200}) {
+            assertEquals(alpha, LensStyle.lobeAlpha(alpha, true));
+            assertEquals(alpha / 2, LensStyle.lobeAlpha(alpha, false));
+        }
+        assertEquals(1, LensStyle.lobeAlpha(1, false), "never fully transparent");
+        assertEquals(255, LensStyle.lobeAlpha(999, true), "clamped");
+    }
+
     // ---- loss colour ------------------------------------------------------------------------
 
     @Test

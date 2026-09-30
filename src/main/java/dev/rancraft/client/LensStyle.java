@@ -20,6 +20,30 @@ public final class LensStyle {
     private LensStyle() {
     }
 
+    // ---- antenna lobes: on the air or not (Phase 3 slice 6) ---------------------------------
+
+    /**
+     * An off-air cell's lobe: a neutral grey whatever its band, so "declared but not transmitting"
+     * reads differently from any band colour.
+     */
+    public static final int OFF_AIR_RGB = 0x8C8C8C;
+
+    /**
+     * A lobe's colour. On the air, the band's colour; off the air, {@link #OFF_AIR_RGB}.
+     *
+     * <p>{@code onAir} is the server's flag from the antenna's update tag: the client is told that a
+     * cell is off the air (redstone now; backhaul and power in §3C), it never works it out. 0xRRGGBB.
+     */
+    public static int lobeRgb(int bandRgb, boolean onAir) {
+        return onAir ? bandRgb & 0xFFFFFF : OFF_AIR_RGB;
+    }
+
+    /** A lobe shell's opacity: half for an off-air cell, so it recedes behind live ones, never 0. */
+    public static int lobeAlpha(int shellAlpha, boolean onAir) {
+        int alpha = Math.clamp(shellAlpha, 0, 255);
+        return onAir ? alpha : Math.max(1, alpha / 2);
+    }
+
     // ---- link rays --------------------------------------------------------------------------
 
     /**
@@ -269,9 +293,10 @@ public final class LensStyle {
      * into one stack, so co-sited antennas get a readable list instead of a pile of overlapping
      * text.
      *
-     * <p>This is the stacked-mast case VISION.md opens with: nine masts in one column are nine
-     * lines on one stack above the tower, rather than nine labels drawn over each other. A
-     * three-sector site, whose antennas sit on neighbouring blocks, is also one stack.
+     * <p>This was the stacked-mast case VISION.md opens with: nine masts in one column were nine
+     * cells, drawn as nine lines on one stack above the tower rather than nine labels over each
+     * other. Since Phase 3 slice 6 such a column is one cell, so it is one line; the rule still
+     * serves a three-sector site, whose antennas sit on neighbouring blocks, as one stack.
      *
      * <p>Points are taken in the order given and each joins the first group whose seed (its
      * first member) is within the radius, so the result is deterministic. Within a group the
