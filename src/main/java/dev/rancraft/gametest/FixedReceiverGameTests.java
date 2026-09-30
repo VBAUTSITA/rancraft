@@ -49,7 +49,7 @@ import net.neoforged.neoforge.gametest.GameTestHolder;
  *       subclass that borrows the vanilla chest's block entity type (a new type cannot be created
  *       once registries are frozen). The chest-typed entity is saved as a plain chest, so reloading
  *       its chunk brings back a chest, not the device: "reloading resumes it" needs a real device
- *       block and is slice 9's check.
+ *       block, and {@code RadioLinkGameTests} (slice 9) checks it with the Radio Link.
  *   <li>The ticker tests run in <b>the Nether</b>, at y 200 above its roof, in a chunk the test
  *       forces. The overworld is busy between batches (the runner unforces each batch's chunks, and
  *       masts left by other tests unregister as they unload, which moves the site registry version),
@@ -325,8 +325,9 @@ public final class FixedReceiverGameTests {
 
     /**
      * Paths 3 and 4 with a real chunk. A device block entity is put into a forced Nether chunk
-     * ({@code Level.setBlockEntity}, which defers its {@code onLoad}); {@link ChunkEvent.Load}, posted
-     * on the event bus for that chunk, registers it, and it is served. Then the chunk is released and
+     * ({@code Level.setBlockEntity}, which defers its {@code onLoad} but registers it at once through
+     * {@code clearRemoved}, slice 9); dropped by hand, it is registered again by {@link ChunkEvent.Load},
+     * posted on the event bus for that chunk, and it is served. Then the chunk is released and
      * really unloads: the unload event drops it (by position), the game removes the entity
      * ({@code setRemoved}, path 2 on unload), and it hears nothing more. Loading the chunk again fires
      * the real load event, which registers nothing: the saved entity came back as a plain chest (the
@@ -347,6 +348,11 @@ public final class FixedReceiverGameTests {
         nether.setBlock(pos, Blocks.CHEST.defaultBlockState(), 3);
         nether.setBlockEntity(device);
         helper.assertTrue(nether.getBlockEntity(pos) == device, "the device entity is in the chunk");
+        helper.assertTrue(registry.deviceAt(pos) == device,
+                "joining the chunk registered it at once (FixedDeviceBlockEntity.clearRemoved, slice 9)");
+        // Path 3 on its own: drop it, then post the load event.
+        registry.unregister(pos, device);
+        helper.assertTrue(!registry.contains(pos), "dropped by hand");
         NeoForge.EVENT_BUS.post(new ChunkEvent.Load(chunk, false));
         helper.assertTrue(registry.deviceAt(pos) == device, "the chunk load event registered it (path 3)");
         int[] mark = new int[1];

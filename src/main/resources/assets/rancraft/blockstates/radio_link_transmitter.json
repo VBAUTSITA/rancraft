@@ -1,0 +1,6 @@
+{
+  "variants": {
+    "lit=false": { "model": "rancraft:block/radio_link_transmitter" },
+    "lit=true":  { "model": "rancraft:block/radio_link_transmitter_on" }
+  }
+}

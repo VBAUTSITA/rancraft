@@ -30,7 +30,9 @@ import net.neoforged.neoforge.event.level.ChunkEvent;
  * loaded:
  * <ol>
  *   <li>the block entity's {@code onLoad} ({@link #hostLoaded}, from
- *       {@code block.FixedDeviceBlockEntity});
+ *       {@code block.FixedDeviceBlockEntity}); since slice 9 also its {@code clearRemoved}, which
+ *       {@code LevelChunk.setBlockEntity} calls the moment the entity joins a chunk, so a device placed
+ *       where block entities are not ticking registers at once rather than at the deferred {@code onLoad};
  *   <li>its {@code setRemoved} ({@link #hostRemoved}): the block broken or replaced, and also every
  *       block entity of an unloading chunk ({@code ServerLevel.unload} → {@code clearAllBlockEntities});
  *   <li>{@link ChunkEvent.Load} ({@link #onChunkLoad}): every block entity of the chunk that is a

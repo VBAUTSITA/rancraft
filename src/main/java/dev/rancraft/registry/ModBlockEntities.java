@@ -1,6 +1,8 @@
 package dev.rancraft.registry;
 
 import dev.rancraft.RanCraft;
+import dev.rancraft.block.RadioLinkReceiverBlockEntity;
+import dev.rancraft.block.RadioLinkTransmitterBlockEntity;
 import dev.rancraft.block.SectorAntennaBlockEntity;
 import dev.rancraft.block.SignalMastBlockEntity;
 import java.util.function.Supplier;
@@ -25,6 +27,16 @@ public final class ModBlockEntities {
     public static final Supplier<BlockEntityType<SectorAntennaBlockEntity>> SECTOR_ANTENNA =
             BLOCK_ENTITIES.register("sector_antenna", () -> BlockEntityType.Builder
                     .of(SectorAntennaBlockEntity::new, ModBlocks.SECTOR_ANTENNA.get())
+                    .build(null));
+
+    public static final Supplier<BlockEntityType<RadioLinkTransmitterBlockEntity>> RADIO_LINK_TRANSMITTER =
+            BLOCK_ENTITIES.register("radio_link_transmitter", () -> BlockEntityType.Builder
+                    .of(RadioLinkTransmitterBlockEntity::new, ModBlocks.RADIO_LINK_TRANSMITTER.get())
+                    .build(null));
+
+    public static final Supplier<BlockEntityType<RadioLinkReceiverBlockEntity>> RADIO_LINK_RECEIVER =
+            BLOCK_ENTITIES.register("radio_link_receiver", () -> BlockEntityType.Builder
+                    .of(RadioLinkReceiverBlockEntity::new, ModBlocks.RADIO_LINK_RECEIVER.get())
                     .build(null));
 
     public static void register(IEventBus modBus) {

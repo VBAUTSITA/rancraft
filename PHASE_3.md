@@ -54,7 +54,7 @@ Legend: `[x]` done and verified · `[~]` partly done / needs a manual in-game ch
 | 6 | ColumnScan + mast columns + lens column/on-air | 3B | [~] `util/ColumnScan` (pure, 12 tests); a contiguous mast column is one cell owned by its base (`cellId = base.asLong()`), radiating from `top.above()`, structure never registers, a sector on the highest mast silences it, any powered mast powers it, `maxMastHeight` 64 caps the signal part; re-scan on `updateShape`/`neighborChanged` refreshes only the mast and the base; fresh PCI plan on promotion; `OnAir` in the update tag (not saved), lens draws one lobe per cell at the top and greys off-air cells; one census log line; `PROTOCOL_VERSION` 6. Headless green (398 tests, 0 skipped; `runGameTestServer` 13/13, 8 new: 624 ns per nine-mast scan); in-game checks below; three recorded deviations in follow-ups | 703c3a1; 5299fb4; tracker "PHASE_3.md, NOTES.md: record slice 6 commit hash" |
 | 7 | BinTraversal + region epochs + cache rework | 3B | [~] `rf/BinTraversal` (pure 2D DDA over bins, both side bins through a corner; the correctness argument in its javadoc); `RfEngine.Evaluation.marched` (appended) and `dependencyBins`; `world/RegionEpochs`: per-bin (128) epochs bumped by break/place (multi-block too), explosions, pistons (at once and after the blocks settle) and tree growth, plus the dimension-wide sum (`CoverageSurveyor` untouched); `canReplay`'s epoch condition is now "every dependency bin unchanged", the rest unchanged; no version bump. Headless green (429 tests, 0 skipped; `runGameTestServer` 17/17, 4 new: a block 500 blocks away keeps the cache, one on the link path does not; +3-7 µs per fresh evaluation, 0.4 µs per replay check); in-game checks below; gaps recorded in follow-ups | 97489e6; e0383ee; 9c6d39f; tracker "PHASE_3.md, NOTES.md: record slice 7 commit hash" |
 | 8 | Fixed receiver registry + ticker | 3B | [x] `device/FixedDevice` (`requirement()`, `onSample(ServerLevel, BlockPos, DeviceContext)`); `block/FixedDeviceBlockEntity` (paths 1-2); `world/FixedReceiverRegistry` per dimension, keyed by `BlockPos.asLong()`, `ReceiverStateStore<Long>`, chunk load/unload paths (unload by position, not type), unregister by identity; `world/FixedReceiverTicker`: round robin under `fixedReceiverTickBudgetMs` (0.5, new), batches of 4 with the clock read between, rotating first dimension, at most once per interval, block-centre receiver, replay while the site version and every dependency bin are unchanged, its own stale-candidate threshold (interval + lag). Headless green (449 tests, 0 skipped; `runGameTestServer` 21/21, 4 new: 200 receivers 29-42 µs/tick in steady state). No device block yet, so no in-game check until slice 9; the two done-when items it feeds are [~] (below) | 02d1790; 62b54c7 (slice 7 game test fix); 7866ca9; tracker "PHASE_3.md, NOTES.md: record slice 8 commit hash" |
-| 9 | BlerModel + Radio Link | 3B | [ ] | |
+| 9 | BlerModel + Radio Link | 3B | [~] `rf/BlerModel` (the §3B.4 sigmoid, `P(deliver)`, the table within 0.001, monotonic) and `rf/SplitMix64` (seed `pos.asLong() ^ gameTime`); `blerSinr50Db` 0 / `blerSlopeDb` 2 (COMMON, appended to `RfConfig`); blocks `radio_link_transmitter` / `radio_link_receiver` (FixedDevices, POOR tier 1, address 0-15 by use / sneak + use with the action bar, `LIT` while served, the receiver outputs weak power 15, a per-transmitter memory: a lost message is a stale state, a broken or re-addressed transmitter is forgotten at once, memory from a save is verified on the receiver's turns); `device/RadioLinkNetwork` per dimension (both ends served, each end's BLER, deterministic draws); tooltip "about once a second, by design"; loot tables, pickaxe tag, creative tab, lang, placeholder models; `FixedDeviceBlockEntity.clearRemoved` registers (closes the slice 8 `onPlace` follow-up). Headless green (482 tests, 0 skipped; `runGameTestServer` 27/27, 4 new + 2 generated harvest tests: POOR 49-56 % delivered vs 52 % modelled, FAIR 1,400 of 1,400; a real chunk reload resumes; 200 radio links (400 blocks) 20-53 µs/tick, medians 27-44). No version bump. The code of Part 3B is complete; the 3B review and docs follow; in-game checks below | "Phase 3 slice 9: Radio Link"; tracker "PHASE_3.md, NOTES.md: record slice 9 commit hash" |
 | 10 | Radio tiers + v3 migration | 3C | [ ] | |
 | 11 | MicrowaveLink + BackhaulGraph + tests | 3C | [ ] | |
 | 12 | Core site, dish, link tool, backhaul state, lens lines, `/rancraft backhaul status` | 3C | [ ] | |
@@ -530,6 +530,65 @@ Headless (verified by `./gradlew build`, 449 tests, 0 skipped, and `./gradlew ru
 Needs a human in game: nothing yet. Slice 8 adds no device block; the Radio Link (slice 9) brings the
 first in-game checks of fixed receivers (place one, unload and reload its chunk, watch it resume).
 
+## Slice 9 (Radio Link) checks
+
+Headless (verified by `./gradlew build`, 482 tests, 0 skipped, and `./gradlew runGameTestServer`,
+27 of 27 in each of eight runs; details and numbers in NOTES.md, slice 9):
+
+- [x] `rf/BlerModel` matches the §3B.4 table within 0.001 and is monotonic in SINR;
+      `P(deliver) = (1 - BLER(tx)) x (1 - BLER(rx))` (`BlerModelTest`, 9).
+- [x] Draws come from SplitMix64 seeded with `pos.asLong() ^ gameTime` (the transmitter's position, the
+      dispatch tick), identical across two runs with the same seed and different across ticks
+      (`SplitMix64Test`, 5; `RadioLinkNetworkTest.deterministicDraws`, `drawOrder`). No `Math.random()`.
+- [x] `blerSinr50Db` 0.0 and `blerSlopeDb` 2.0 in `RanCraftConfig` (COMMON), appended to `RfConfig`.
+- [x] Both ends must be served, each end's BLER applies, and the delivered fraction matches the model
+      (`RadioLinkNetworkTest`, 11).
+- [x] A receiver outputs 15 while a transmitter on its address was last heard powered; a lost message
+      holds the old state (`RadioLinkMemoryTest`, 8). **At runtime**: it follows within one interval
+      with redstone 15 beside it; another address hears nothing; it holds 15 through a service loss
+      while its transmitter, unpowered, sends into no service; a lever on stone beside the transmitter
+      works; a broken transmitter turns it off at once.
+- [x] Address 0-15 by use and sneak + use, wrapping (**at runtime**, through the block's use).
+- [x] `LIT` while served, set by the server (**at runtime**: lit when served, dark when the cell goes).
+- [x] **At runtime**, POOR drops and FAIR is solid: both ends at POOR (SINR 0.7-1.0 dB) delivered 49-56 %
+      of 200 messages against 52.4 % modelled; both ends at FAIR (8.9-9.3 dB) 200 of 200 in each of 7
+      runs.
+- [x] **At runtime**, a real chunk unload and reload: unregistered and removed on unload, while a
+      receiver elsewhere holds the unloaded transmitter's state; reloaded from disk, registered at once
+      with its address and memory as saved, then served again; a receiver that missed a transmitter's
+      removal while unloaded finds it gone on its first turn.
+- [x] Cost: 200 radio links (200 transmitters + 200 receivers) in steady state, 20-53 µs/tick per
+      100-tick window, medians 27-44 µs over 3 runs; the game test asserts the median under 100 µs.
+- [x] Both blocks drop themselves and are pickaxe-mineable (`HarvestGameTests`, generated); loot tables,
+      tag, creative tab, lang, models.
+- [x] A device placed where block entities are not ticking registers at once (`clearRemoved`; **at
+      runtime** for a `setBlock` placement).
+- [x] No version change (`PROTOCOL_VERSION` "6", `DATA_VERSION` 2); the Radio Link entities save their
+      own `DataVersion` 1.
+
+Needs a human in game (creative is fine unless noted):
+
+- [ ] Place a Signal Mast (with a redstone signal if `requireRedstone` is on), then a Radio Link
+      Transmitter and a Radio Link Receiver a few blocks away. Both lamp tops light within about a
+      second. Break the mast: both go dark within about a second.
+- [ ] Right-click each: the action bar reads "Radio Link Transmitter: address 1" (then 2, and so on).
+      Sneak + right-click with an empty hand counts down; 0 wraps to 15. Set both to the same address.
+- [ ] Put a lever on the transmitter and a redstone lamp beside the receiver. Flip the lever: the lamp
+      follows within about a second, both ways. A receiver on another address does not react.
+- [ ] Redstone dust run up to the transmitter bends into it and powers it.
+- [ ] The tooltip of either item (creative tab) says updates arrive about once a second, by design,
+      and that both ends need POOR service or better.
+- [ ] POOR against FAIR (done-when): with the Field Test Meter, find a spot that reads POOR with SINR
+      0 to 5 dB (between two masts on the same band, for example) and put the transmitter there, the
+      receiver where the meter reads FAIR or better. Flip the lever every few seconds: the lamp misses
+      or lags some flips by a second or more. Move the transmitter to a FAIR spot: every flip arrives
+      within about a second.
+- [ ] Unload and reload (done-when): with the lever on, go far enough away that the radio links' chunks
+      unload (beyond the view distance), then come back: the receiver's lamp is still on, and it still
+      follows the lever.
+- [ ] Break a powered transmitter: its receivers turn off at once.
+- [ ] Survival, iron pickaxe: both blocks drop themselves.
+
 ## 3B done-when
 
 - [~] The nine-mast column reads as one cell, (0 co-channel), lobe at the top. *One registered cell
@@ -545,17 +604,24 @@ first in-game checks of fixed receivers (place one, unload and reload its chunk,
       south and 150 blocks along the link, the snapshot the ticker keeps, and the march reading the
       same obstruction vs 12 dB more). The per-player ticker path itself runs only in game (the
       fake-connection follow-up); the in-game checks for slice 7 cover invalidation.*
-- [~] 200 radio links on a quiet server cost < 0.1 ms/tick in steady state (measured). *Slice 8: the
-      fixed-receiver ticker's part is measured and asserted at runtime, 200 receivers at 29-42
-      µs/tick in steady state (`FixedReceiverGameTests.two_hundred_receivers_in_steady_state`, devices
-      that only record). The Radio Link's own `onSample` work comes on top: slice 9 re-measures with
-      200 real radio links.*
-- [ ] A radio link drops updates at POOR and is solid at FAIR.
-- [~] Unloading a chunk stops its fixed devices; reloading resumes them. *Slice 8: unloading verified
-      at runtime with a real chunk unload (`chunk_load_registers_and_unload_stops_it`: dropped by the
-      unload event, entity removed, no more dispatches); the load path registers a device entity when
-      the load event is posted for its chunk. A real reload needs a real device block (the test entity
-      is saved as a chest): slice 9, with the Radio Link.*
+- [x] 200 radio links on a quiet server cost < 0.1 ms/tick in steady state (measured). *Slice 9:
+      measured and asserted at runtime with 200 real radio links, each a transmitter and a receiver
+      (400 blocks, every message reaching 12-13 receivers), replays only: 20-53 µs/tick per 100-tick
+      window, medians 27-44 µs over 3 runs, the Radio Links' own work included
+      (`RadioLinkGameTests.two_hundred_radio_links_in_steady_state`, median asserted under 100 µs;
+      method and numbers in NOTES.md, slice 9). Slice 8 measured the ticker alone at 29-42 µs/tick for
+      200 plain receivers.*
+- [~] A radio link drops updates at POOR and is solid at FAIR. *Verified at runtime with real blocks on
+      the real ticker (`poor_link_drops_updates_fair_link_is_solid`): both ends at POOR (SINR about
+      1 dB) delivered 49-56 % of 200 messages against 52 % modelled; both ends at FAIR (about 9 dB)
+      200 of 200 in each of 7 runs. Seeing it (a lamp missing lever flips) needs the user in game
+      (slice 9 in-game checks).*
+- [x] Unloading a chunk stops its fixed devices; reloading resumes them. *Slice 9: verified at runtime
+      with real Radio Links and a real chunk unload and reload from disk
+      (`unloading_stops_it_reloading_resumes_it`): unregistered, removed, no more dispatches; reloaded,
+      registered at once with address and memory as saved, served again, messages arrive. Slice 8
+      verified the unload path with a test entity. The in-game check (walk away and back) is in the
+      slice 9 list.*
 
 ## 3C done-when
 
@@ -912,7 +978,11 @@ centroid, so 7 × 16 + 1 = 113). (g)
   records that sector antennas once missed the chunk paths". The record is in
   `SignalTicker.onChunkLoad`'s javadoc, not NOTES.md. No action beyond following the lesson: the
   fixed receivers' unload path drops by position, with no type check at all.
-- **[ ] Open, for slice 9 (from slice 8).** Two 3B done-when items finish with the Radio Link:
+- **[x] Done in slice 9 (from slice 8).** *(a) `RadioLinkGameTests.unloading_stops_it_reloading_resumes_it`
+  unloads and reloads real Radio Links from disk; (b) 200 real radio links (400 blocks) measured at
+  20-53 µs/tick, medians 27-44 (NOTES.md, slice 9); (c) closed by `FixedDeviceBlockEntity.clearRemoved`
+  instead of `onPlace`, which `LevelChunk.setBlockState` calls before it creates the block entity
+  (NOTES.md, slice 9, decision 9).* Two 3B done-when items finish with the Radio Link:
   (a) "reloading resumes them": add a game test that places a real Radio Link in a forced chunk,
   releases the chunk, waits for the unload (registry empty for that chunk), loads it again and checks
   that the load event registered it and the ticker serves it (slice 8's test entity borrows the chest
@@ -928,7 +998,28 @@ centroid, so 7 × 16 + 1 = 113). (g)
   they move half a block. Option: a maximum replay age (e.g. `fixedReceiverMaxReplayTicks`, a new
   `RanCraftConfig` value not in §5), re-evaluating each receiver at least that often: at 600 ticks
   about 200 x 25 µs / 600 ≈ 8 µs/tick for 200 receivers. Most relevant once the Radio Link exists
-  (slice 9).
+  (slice 9). *Slice 9: still open. The Radio Link now exists, so water flowing into a link's path can
+  leave one end replaying a sample that is too good (or too bad) until the next event in its bins.*
+- **[x] Decided in slice 9, spec wording (NOTES.md, slice 9, decision 1).** §3B.4's receiver rule, read
+  literally ("outputs 15 if any transmitter ... is powered and the last update from it was delivered;
+  otherwise it holds its previous output"), would never turn a receiver off. Implemented per
+  transmitter: the receiver remembers the state in the last delivered message from each transmitter
+  and outputs 15 while any says powered; a lost message changes nothing.
+- **[x] Decided in slice 9 (NOTES.md, slice 9, decisions 3 and 12).** The draw seed is the
+  transmitter's `pos.asLong() ^ gameTime`, one stream per message, one draw per receiver in ascending
+  key order. "200 radio links" is measured as 200 transmitter-receiver pairs (400 blocks), and the game
+  test asserts the median of three windows because the same code varies by up to a factor of two
+  between runs on the development machine. Any later cost assertion needs a similar margin.
+- **[ ] Open, decision for the owner (from slice 9).** An unloaded transmitter is never timed out: its
+  receivers hold its last delivered state for as long as its chunk stays unloaded (a real network
+  would time out a silent terminal). Option: a maximum age for a remembered transmitter, a new
+  `RanCraftConfig` value not in §5. Not needed for the done-when.
+- **[ ] Open, minor (from slice 9).** A transmitter whose input changes turns every receiver on its
+  address on or off inside its own dispatch, each a `setBlock` with neighbour updates. The budget is
+  checked only between batches, so a toggle with dozens of receivers on one address is one burst. Not
+  measured; measure it if a large build shows it.
+- **[ ] Note for slice 16 (from slice 9).** Both Radio Link blocks are creative-only until their
+  recipes exist.
 - **[ ] Open, minor (from slice 8).** The round robin scans every registered receiver's due tick every
   tick: 8-12 µs/tick at 200 (40-60 ns each, loop and lock included), so the scan alone nears 0.1
   ms/tick around 2,000 receivers. A timing wheel (one bucket per tick of the interval) would make the

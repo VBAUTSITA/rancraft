@@ -19,6 +19,11 @@ package dev.rancraft.rf;
  *
  * <p>The Phase 3A review (round 1) appends {@code locatorSiteMergeBlocks}: which antennas count as
  * one site for positioning ({@link LocatorParams#siteMergeBlocks()}).
+ *
+ * <p>Phase 3 slice 9 appends the two {@link BlerModel} parameters, {@code blerSinr50Db} and
+ * {@code blerSlopeDb} (§5), for the same reason as the locator's: {@code rf} code reads them, and the
+ * Radio Link reaches them through the {@code RfConfig} its device context carries
+ * ({@link #blerModel()}).
  */
 public record RfConfig(
         double metersPerBlock,
@@ -45,7 +50,10 @@ public record RfConfig(
         double locatorMaxHdop,
         double nlosBiasBlocksPerDb,
         // ---- Phase 3A review, round 1: sites for positioning ----
-        double locatorSiteMergeBlocks
+        double locatorSiteMergeBlocks,
+        // ---- Phase 3 slice 9: Radio Link block error rate ----
+        double blerSinr50Db,
+        double blerSlopeDb
 ) {
     public static final RfConfig DEFAULTS = new RfConfig(
             1.0,
@@ -75,7 +83,9 @@ public record RfConfig(
             LocatorParams.DEFAULT_MAX_CELLS,
             LocatorParams.DEFAULT_MAX_HDOP,
             LocatorParams.DEFAULT_NLOS_BIAS_BLOCKS_PER_DB,
-            LocatorParams.DEFAULT_SITE_MERGE_BLOCKS);
+            LocatorParams.DEFAULT_SITE_MERGE_BLOCKS,
+            BlerModel.DEFAULT_SINR50_DB,
+            BlerModel.DEFAULT_SLOPE_DB);
 
     public SinrCalculator.SinrParams sinrParams() {
         return new SinrCalculator.SinrParams(
@@ -88,6 +98,11 @@ public record RfConfig(
 
     public PciPlanner.PciParams pciParams() {
         return new PciPlanner.PciParams(pciPlanningRadius, pciMod3Radius);
+    }
+
+    /** The block-error-rate curve (§3B.4). Throws if {@code blerSlopeDb} is not positive. */
+    public BlerModel blerModel() {
+        return new BlerModel(blerSinr50Db, blerSlopeDb);
     }
 
     public LocatorParams locatorParams() {

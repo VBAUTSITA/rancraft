@@ -1,0 +1,9 @@
+{
+  "_comment": "Placeholder art: vanilla textures, no PNGs shipped. Oxidised copper sides mark a receiver (copper a transmitter); the lamp on top lights while the block has service (the server's LIT). Its redstone output is not drawn: put a lamp or dust next to it. Swap when real art exists.",
+  "parent": "minecraft:block/cube_bottom_top",
+  "textures": {
+    "top": "minecraft:block/redstone_lamp",
+    "side": "minecraft:block/oxidized_copper",
+    "bottom": "minecraft:block/oxidized_copper"
+  }
+}

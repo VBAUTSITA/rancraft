@@ -313,6 +313,7 @@ class RfEnginePhase2Test {
                 base.enablePciMod3Penalty(), base.handoverHysteresisDb(), base.timeToTriggerTicks(),
                 base.pciPlanningRadius(), base.pciMod3Radius(),
                 base.locatorMinRsrpDbm(), base.locatorMaxCells(), base.locatorMaxHdop(),
-                base.nlosBiasBlocksPerDb(), base.locatorSiteMergeBlocks());
+                base.nlosBiasBlocksPerDb(), base.locatorSiteMergeBlocks(),
+                base.blerSinr50Db(), base.blerSlopeDb());
     }
 }

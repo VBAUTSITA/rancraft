@@ -28,6 +28,8 @@ public final class ModCreativeTabs {
                         output.accept(ModItems.FIELD_TEST_METER.get());
                         output.accept(ModItems.RF_LENS.get());
                         output.accept(ModItems.NETWORK_LOCATOR.get());
+                        output.accept(ModItems.RADIO_LINK_TRANSMITTER.get());
+                        output.accept(ModItems.RADIO_LINK_RECEIVER.get());
                     })
                     .build());
 

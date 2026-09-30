@@ -41,6 +41,13 @@ public final class ModItems {
     public static final DeferredItem<BlockItem> SECTOR_ANTENNA =
             ITEMS.registerSimpleBlockItem(ModBlocks.SECTOR_ANTENNA);
 
+    /** Phase 3 slice 9, §3B.4. No recipe yet (§3C.6, slice 16): creative-only for now. */
+    public static final DeferredItem<BlockItem> RADIO_LINK_TRANSMITTER =
+            ITEMS.registerSimpleBlockItem(ModBlocks.RADIO_LINK_TRANSMITTER);
+
+    public static final DeferredItem<BlockItem> RADIO_LINK_RECEIVER =
+            ITEMS.registerSimpleBlockItem(ModBlocks.RADIO_LINK_RECEIVER);
+
     public static void register(IEventBus modBus) {
         ITEMS.register(modBus);
     }

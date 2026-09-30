@@ -1,0 +1,8 @@
+{
+  "variants": {
+    "lit=false,powered=false": { "model": "rancraft:block/radio_link_receiver" },
+    "lit=false,powered=true":  { "model": "rancraft:block/radio_link_receiver" },
+    "lit=true,powered=false":  { "model": "rancraft:block/radio_link_receiver_on" },
+    "lit=true,powered=true":   { "model": "rancraft:block/radio_link_receiver_on" }
+  }
+}

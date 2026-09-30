@@ -46,5 +46,13 @@
   "rancraft.locator.waypoint.none": "Network Locator: no waypoints yet. Sneak + use saves the estimate.",
   "rancraft.locator.waypoint.saved": "Waypoint %s/%s saved: x %s z %s, ±%s m (the estimate, not where you stand)",
   "rancraft.locator.waypoint.replaced": "Waypoint %s/%s replaced: x %s z %s, ±%s m (the estimate, not where you stand)",
-  "rancraft.locator.waypoint.selected": "Waypoint %s/%s selected"
+  "rancraft.locator.waypoint.selected": "Waypoint %s/%s selected",
+  "block.rancraft.radio_link_transmitter": "Radio Link Transmitter",
+  "block.rancraft.radio_link_receiver": "Radio Link Receiver",
+  "block.rancraft.radio_link_transmitter.tooltip": "Sends its redstone input through the cell network to every receiver on its address",
+  "block.rancraft.radio_link_receiver.tooltip": "Outputs redstone while a transmitter on its address is powered",
+  "block.rancraft.radio_link.tooltip.rate": "Updates arrive about once a second, by design: not for clocks",
+  "block.rancraft.radio_link.tooltip.service": "Both ends need POOR service or better. Low SINR loses updates; a lost one leaves the old state",
+  "block.rancraft.radio_link.tooltip.use": "Use: address up  Sneak + use (empty hand): address down",
+  "rancraft.radio_link.address": "%s: address %s"
 }

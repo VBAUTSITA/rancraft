@@ -2,6 +2,8 @@
   "replace": false,
   "values": [
     "rancraft:signal_mast",
-    "rancraft:sector_antenna"
+    "rancraft:sector_antenna",
+    "rancraft:radio_link_transmitter",
+    "rancraft:radio_link_receiver"
   ]
 }

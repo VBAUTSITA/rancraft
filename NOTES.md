@@ -3155,3 +3155,307 @@ Memory per receiver: one entry (its key, device and cached sample with the full 
 | `./gradlew runGameTestServer` | "21 tests are now running", "All 21 required tests passed" (4 new in 4 batches of their own); run D above is from this step |
 | Versions | `PROTOCOL_VERSION` "6", `DATA_VERSION` 2, unchanged |
 | In game | nothing to check yet: slice 8 adds no device block. The Radio Link (slice 9) brings the first in-game checks of fixed receivers |
+
+## Slice 9 — Radio Link (§3B.4)
+
+Remote redstone through the cell network: the first fixed devices, on slice 8's registry and ticker.
+An earlier attempt at this slice was interrupted with its files on disk, unbuilt and uncommitted; this
+step reviewed them, built and ran them, reworked the hot path after measuring it (below), and
+committed the slice as "Phase 3 slice 9: Radio Link". With it the code of Part 3B is complete; the 3B
+review and docs follow as their own step.
+
+### What was built
+
+- **`rf/BlerModel`** (pure): `BLER(sinr) = 1 / (1 + 10^((sinr - sinr50) / slope))`,
+  `success(sinr) = 1 - BLER` computed directly (exact where the BLER is tiny),
+  `deliveryProbability(tx, rx) = success(tx) x success(rx)`, `delivered(p, uniform)`. NaN and
+  -Infinity mean no link.
+- **`rf/SplitMix64`** (pure): Steele, Lea and Flood's generator with Vigna's reference constants;
+  `seed(posKey, gameTime) = posKey ^ gameTime` (§3B.4). Checked against the reference output.
+- **`RanCraftConfig.blerSinr50Db`** (0.0, range -20 to 30) and **`blerSlopeDb`** (2.0, range 0.1 to 20),
+  COMMON, as §5 names them. They are engine-facing (`rf` reads them), so they are appended to
+  `RfConfig` (`blerSinr50Db`, `blerSlopeDb`, `blerModel()`), as the locator's tunables were.
+- **`device/RadioLinkNetwork`**, one per dimension: the address book (16 addresses, each a key-ordered
+  map of receivers, with a flat snapshot rebuilt only when it changes) and `send`, one status message
+  from a transmitter to every receiver on its address. MC-free except `of` / `clearAll`.
+- **`device/RadioLinkMemory`** (MC-free): a receiver's output rule. The set of transmitters last heard
+  powered, and the subset not yet verified since a save was loaded.
+- **Blocks `rancraft:radio_link_transmitter` and `rancraft:radio_link_receiver`**
+  (`block/RadioLinkBlock` and the two subclasses; entities `RadioLinkBlockEntity`,
+  `RadioLinkTransmitterBlockEntity`, `RadioLinkReceiverBlockEntity`, all `FixedDeviceBlockEntity`s):
+  - requirement POOR, tier 1;
+  - address 0 to 15 on the entity (use: up; sneak + use: down; the action bar shows it);
+  - `LIT` while the block has service;
+  - the receiver's `POWERED` is its output: weak power 15 on every side, like a redstone block;
+  - redstone dust bends into the transmitter (`canConnectRedstone`);
+  - tooltip: the role, "Updates arrive about once a second, by design: not for clocks", the service
+    rule, and the controls.
+- Block items (creative tab, no recipe until slice 16), lang, blockstates, and models on vanilla
+  placeholder textures (copper sides for the transmitter, oxidised copper for the receiver, a redstone
+  lamp top that lights with `LIT`). Loot tables under `data/rancraft/loot_table/blocks/`, both ids in
+  `data/minecraft/tags/block/mineable/pickaxe.json`; `HarvestGameTests` generated a drop test for each.
+- **`FixedDeviceBlockEntity.clearRemoved`** now registers too (lifecycle, below).
+
+### Where each part of §3B.4 lives
+
+| §3B.4 | Where | Pinned by |
+|---|---|---|
+| Two blocks, both `FixedDevice`s | `RadioLinkTransmitterBlock` / `RadioLinkReceiverBlock`, entities extend `FixedDeviceBlockEntity` | every game test below; `HarvestGameTests` (drops, pickaxe) |
+| Address 0-15 on the entity; use up, sneak + use down, action bar; "address", not "channel" | `RadioLinkBlockEntity.cycleAddress`, `RadioLinkBlock.useWithoutItem` | `follows_its_transmitter_...`: use x3 → 3, sneak + use from 0 → 15, then up to 4 |
+| Requirement POOR, tier 1 | `RadioLinkBlockEntity.REQUIREMENT` | `poor_link_...`: both ends at POOR are served |
+| Output 15 if any transmitter on its address is powered and its last update was delivered; otherwise hold | `RadioLinkMemory` + `RadioLinkReceiverBlockEntity` | `RadioLinkMemoryTest` (8); game test: follows, holds when lost, other address hears nothing |
+| Both ends must be served; through the network, not to each other | `RadioLinkNetwork.send` | `RadioLinkNetworkTest.bothEndsServed`; game test: cell removed → the receiver holds while the transmitter sends into no service |
+| `LIT` while served; server-derived, vanilla block-state sync | `RadioLinkBlockEntity.onSample` → `showService` (`UPDATE_CLIENTS`) | game tests: lit when served, dark when the cell goes |
+| `BLER(sinr)`, `P(deliver)`; the table within 0.001; monotonic | `rf/BlerModel` | `BlerModelTest` (9) |
+| SplitMix64 seeded with `pos.asLong() ^ gameTime`, never `Math.random()` | `rf/SplitMix64`, `RadioLinkNetwork.send` | `SplitMix64Test` (5), `RadioLinkNetworkTest.deterministicDraws`, `.drawOrder` |
+| POOR is flaky, FAIR is solid | the curve | `BlerModelTest.poorIsFlakyFairIsSolid`; game test `poor_link_drops_updates_fair_link_is_solid` |
+| Tooltip: about 1 Hz by design | `RadioLinkBlock.appendHoverText`, lang `block.rancraft.radio_link.tooltip.rate` | (in-game check) |
+| Honest labels: generic sigmoid, not an MCS table; no HARQ | `BlerModel` javadoc, the `blerSinr50Db` comment, `RadioLinkTransmitterBlockEntity` javadoc | this section |
+
+### Decisions and deviations
+
+1. **The output rule is per transmitter.** §3B.4 read literally ("outputs 15 if any transmitter ... is
+   powered and the last update from it was delivered; otherwise it holds its previous output") would
+   never turn a receiver off: a delivered "unpowered" fails the condition and so "holds". The intent
+   is a receiver that knows what the messages that got through told it. So it remembers, per
+   transmitter, the state in the last delivered message from it, and outputs 15 while any says
+   "powered"; a lost message changes nothing (a stale state, never a toggle). Only "powered" needs
+   storing, so the memory is a set of transmitter keys, saved with the block (`KnownOn`).
+2. **Every turn sends, replays included.** The transmitter reads its input and sends on each of its
+   turns (once per `evaluationIntervalTicks`, 20 by default: the "about 1 Hz" of the tooltip),
+   whether the ticker evaluated it afresh or replayed its sample. A replay is the same channel one
+   interval later, and each message is drawn afresh. The fixed-device contract's idempotence is kept
+   where it matters: never two sends in one dispatch tick (possible only with `/tick freeze`).
+3. **One draw stream per message.** §3B.4 fixes the seed as `pos.asLong() ^ gameTime`; here `pos` is
+   the transmitter's and `gameTime` the dispatch tick, and the stream gives one draw to each receiver
+   in the book at that address, in ascending key order. Every receiver takes its draw, served or not,
+   so one receiver's service never shifts another's. Reproducible for the same world at the same game
+   time; a receiver added with a lower key does shift the draws of those after it.
+4. **Each end's decode chance is fixed at its own turn.** `RadioLinkBlockEntity.decodeSuccess()` is
+   `1 - BLER` of the end's last SINR under that tick's `blerSinr50Db` / `blerSlopeDb`, recomputed only
+   when one of the three changes (never on a replay). A message multiplies the two. A config change
+   reaches each end at its next turn, within one interval.
+5. **The transmitter reads its input only after a neighbour update** (`RadioLinkTransmitterBlock.
+   neighborChanged` marks it; the first turn always reads). `Level.hasNeighborSignal` is what a
+   redstone lamp reads, and a lamp too re-reads only on a neighbour update, so the value is the same as
+   asking every turn: any change of the power reaching a block comes with a neighbour update to it
+   (dust updates its neighbours' neighbours; a lever, button or torch the neighbours of the block it
+   powers; repeaters and observers the block in front and its neighbours). The game test also drives a
+   lever on stone next to the transmitter. In the packed cost test, reading every turn cost about 2 µs
+   per transmitter (30-odd block lookups around conductors).
+6. **A transmitter that leaves tells the network; unverified memory covers what that misses.** Broken
+   or replaced (`onRemove`, before the entity goes) or re-addressed, a transmitter calls
+   `RadioLinkNetwork.transmitterGone`, and every receiver in the book at that address forgets it at
+   once, so breaking a powered transmitter turns its receivers off. A receiver not in the book at the
+   time (unloaded, or loaded but before its first turn, when it attaches) misses this, so everything it
+   loads from a save is unverified: on each turn it looks the unverified transmitters up (loaded chunk:
+   forget if the block there is not a transmitter on this address, confirm if it is; unloaded chunk:
+   keep, ask again next turn). Hearing a transmitter verifies it. In steady state nothing is
+   unverified and a turn looks nothing up. (The first version time-stamped every delivery and looked up
+   any transmitter not heard for an interval; this does the same job without a write per delivery.)
+   Unloading is not leaving: a transmitter in an unloaded chunk cannot change its input, so its last
+   delivered state stands.
+7. **A receiver attaches on its turn, not on load.** It joins the address book at each evaluation
+   (idempotent) and leaves it in `setRemoved` or on an address change; a stale entry is also dropped at
+   the next send to its old address. Until its first turn it has no service (`served()` is false), so
+   it could not decode a message anyway.
+8. **Changing a receiver's address forgets everything it heard** (the old address's transmitters say
+   nothing about the new one's); its output goes to 0 until a message on the new address gets through.
+9. **Lifecycle: `FixedDeviceBlockEntity.clearRemoved` registers the device** (closes the slice 8
+   follow-up about devices placed where block entities are not ticking). `LevelChunk.setBlockEntity`
+   calls it, after `setLevel`, on every entity it puts into a chunk: a block placed by anyone, and
+   every entity of a chunk loading from disk (1.21.1: its only caller). The block's `onPlace`, which
+   the follow-up suggested, cannot do it: `LevelChunk.setBlockState` calls `onPlace` before it creates
+   the entity. A chunk still being promoted to FULL may register its devices a moment before its load
+   event; the ticker skips a receiver whose chunk is not FULL, and the unload paths drop it.
+   `FixedReceiverGameTests.chunk_load_...` now asserts the immediate registration, then drops the
+   entity by hand to test the load event on its own.
+10. **Saved data.** Both entities save `DataVersion` 1 (the Radio Link's own format, independent of the
+    antennas' `DATA_VERSION`) and `Address`; the receiver adds `KnownOn` (the transmitters last heard
+    powered). `LIT` and `POWERED` are block states and are saved with the chunk, so a reloaded receiver
+    keeps its output. No existing format changed: `AntennaBlockEntity.DATA_VERSION` stays 2 and
+    `PROTOCOL_VERSION` "6" (no payload; `LIT` and `POWERED` reach clients by vanilla block-state sync).
+11. **The receiver's output is weak power** on all six sides, like a redstone block: it powers dust,
+    lamps and mechanisms next to it, not the far side of a solid block it touches.
+12. **Measuring "200 radio links".** Read conservatively as 200 links, each a transmitter and a
+    receiver: 400 fixed devices, and with 16 addresses every message reaches 12 or 13 receivers. The
+    game test asserts the median of three 100-tick windows (each without its slowest tick) under
+    0.1 ms, because this machine's run-to-run noise is large (below). 200 blocks (100 links) cost about
+    half.
+
+### Known behaviours and limits (honest)
+
+- **Distance between the two radios plays no part** (`RadioLinkNetwork` javadoc): the message goes up
+  to the transmitter's cell and down from the receiver's, so a receiver 5,000 blocks away hears as
+  well as one next door if both are served. A different dimension is a different network.
+- **About one update per second, by design.** A pulse shorter than an interval can fall between two
+  turns and never be sent; a receiver follows at best one interval behind. The tooltip says so.
+- **At POOR a lost update shows as a delay**, not a wrong state: the next message an interval later
+  usually gets through. At SINR about 1 dB at both ends, half the messages arrive (measured below), so
+  a change typically shows after one or two seconds, occasionally several.
+- **An unloaded transmitter is never timed out**: its receivers hold its last delivered state for as
+  long as its chunk stays unloaded. A real network would time a silent terminal out. Option, if it
+  matters in play: a maximum age for a remembered transmitter (a new config value, not in §5).
+- **A chunk deleted or regenerated by an outside tool** while its transmitter was remembered and
+  verified by a loaded receiver leaves that receiver holding the old state until it reloads (its memory
+  is then unverified and checked) or changes address. No in-game action does this.
+- **A state change costs block updates.** A transmitter whose input changes turns every receiver on
+  its address on or off in its own dispatch, each a `setBlock` with neighbour updates. Steady state
+  costs none; a toggle with dozens of receivers on one address costs one burst inside one batch, which
+  the budget cannot split.
+- **Slice 8's event-less block changes** (water flowing into a link path above all) can leave a Radio
+  Link replaying a sample that is too good, or too bad, indefinitely. The owner decision on a maximum
+  replay age stays open (PHASE_3.md follow-ups).
+- **A receiver next to its own transmitter latches** (its output powers the transmitter), as a vanilla
+  circuit with the same wiring would.
+
+### Honest-abstraction notes (also at the code sites)
+
+- **The BLER curve is generic** (`BlerModel` javadoc; the `blerSinr50Db` comment). The shape is right:
+  link-level BLER curves are steep sigmoids in SINR, about a decade per dB or two around an operating
+  point. The numbers are not a real system's: one curve, not an MCS table. A real link picks a
+  modulation and coding scheme from its channel-quality reports, so each MCS has its own curve, several
+  dB apart, and link adaptation holds the BLER near a target (typically 10 %) instead of letting it run
+  up the curve. §6 "real": the BLER-vs-SINR sigmoid shape; §6 "abstracted": the generic curve with no
+  MCS table and no HARQ.
+- **No HARQ, no retransmission** (`BlerModel`, `RadioLinkTransmitterBlockEntity` javadocs). A failed
+  block is lost; a real link would retransmit it within milliseconds and almost always deliver it,
+  late. Here the next status message, an interval later, is the retry. The two ends' errors are
+  independent draws.
+- **Every message is a full status report** (`RadioLinkTransmitterBlockEntity` javadoc): a real
+  telemetry device sends on change plus a periodic keep-alive.
+- **A receiver learns that a transmitter left from its removal or its own look at the block**
+  (`RadioLinkReceiverBlockEntity` javadoc), where a real network would see a detach or an inactivity
+  timer, and an unloaded transmitter is never timed out.
+- **Both ends hear through a 0 dBi antenna at the block centre** (slice 8's `FixedDevice` label).
+- **`LIT` is the device's own public state** (`RadioLinkBlock` javadoc), like a lit furnace: set by the
+  server from the verdict, synced by vanilla. The client computes nothing.
+
+### Measured
+
+**The BLER check at runtime** (`poor_link_drops_updates_fair_link_is_solid`; real blocks, real ticker,
+interval 2 during the count, 200 messages per link). Each link sits between two co-channel band_900
+omnis with the same PCI; both ends of each link are asserted to be at the named service level:
+
+| | SINR tx / rx | model P(deliver) | delivered of 200, in 7 of this step's 8 runs |
+|---|---|---|---|
+| POOR link | 0.98 / 0.71 dB | 0.524 | 100, 98, 112, 112, 106, 105, 103 |
+| FAIR link | 9.31 / 8.94 dB | 0.9999 | 200 in every run |
+
+(The geometry is fixed, so the SINRs are the same every run. The draws are deterministic for a given
+game time; the counts differ because the test starts at a different game time each run.) The POOR
+link delivered 49 to 56 % against the model's 52.4 %, and the FAIR link lost nothing in 1,400
+messages. So a POOR link visibly drops updates and a FAIR one is solid.
+
+**200 radio links** (`two_hundred_radio_links_in_steady_state`): 200 transmitters and 200 receivers in
+one forced Nether chunk at y 200, packed (transmitters in a 16 x 13 layer, receivers two layers up),
+every other transmitter powered by a redstone block, addresses 0 to 15 in turn, one band_900 omni above.
+Interval 20, budget 0.5 ms. After a warm-up (100 ticks at interval 1, then 400 at interval 20), each
+window is 100 ticks of replays only (2,000 dispatches, 0 evaluations, 1,000 messages, 12,520
+deliveries, every one delivered, every receiver on exactly when its address has a powered transmitter).
+The figure is the ticker's whole cost per tick, the Radio Links' own work included (it runs inside the
+dispatch), without the window's slowest tick:
+
+| Code | Run | µs/tick | per dispatch |
+|---|---|---|---|
+| as found (one window) | 1 | 77.0 | 3.26 µs |
+| as found | 2 | 88.1 | 3.65 µs |
+| final (three windows) | 6 | 28.7 / 27.5 / 19.6, median **27.5** | 0.47-0.77 µs |
+| final | 7 | 53.3 / 43.5 / 39.1, median **43.5** | 0.88-1.59 µs |
+| final | 8 | 45.0 / 41.5 / 36.0, median **41.5** | 1.04-1.30 µs |
+
+So **200 radio links (400 blocks) cost 20 to 53 µs per tick in steady state, medians 27 to 44 µs**,
+under the 3B done-when's 0.1 ms, asserted on the median. Of that, the scan of the 400 due ticks is 9 to
+20 µs and the per-tick setup 3 to 8 µs; the rest is the 20 dispatches per tick. Run to run the same
+code varies by a factor of up to two on this machine (slice 8's own cost test, unchanged code, ranged
+from 20 to 36 µs/tick for 200 plain receivers across the same eight runs).
+
+How the first version was made cheaper. Three runs with temporary timers inside `onSample` (removed
+before the commit; 69.7, 76.5 and 85.4 µs/tick in total) split the cost of a turn. The first split a
+transmitter's turn at 3.1 µs, a receiver's at 0.7 µs and the shared part at 0.1 µs. Then:
+- verified entries instead of a time stamp written on every delivery, and the address book as flat
+  arrays rebuilt only when it changes (decision 6): a receiver's turn 0.7 → 0.4 µs;
+- reading the transmitter's input only after a neighbour update (decision 5): a transmitter's turn
+  3.3 → 1.1 µs;
+- each end's decode chance fixed at its turn (decision 4). The first version asked each receiver for it
+  on every delivery (125 per tick here), checking a per-receiver cache with `BlerModel.equals` against a
+  `BlerModel` allocated per message; the final code does it once per turn and compares the two doubles
+  directly. With the timers still in, an intermediate step that ran the record equality once per turn
+  measured the shared part at 0.7 µs instead of 0.1; in isolation (a scratch loop on this machine's
+  JDK 21) a record equality plus an allocation costs about 2 ns once compiled, so that rise is more
+  likely noise or compilation state than the equality itself.
+Together these took the total from 77-88 µs/tick to medians of 27-44; with noise this large the share
+of each change cannot be separated more finely than the per-turn timings above.
+
+The measurement measures itself: the ticker reads `System.nanoTime` twice per served receiver, once
+per batch and three times per tick, about 45 reads per tick here at about 53 ns each on this machine
+(Windows, JDK 21; the same scratch loop), so about 2.4 µs of each figure is the stopwatch.
+
+### Tests
+
+- `BlerModelTest` (9, new): the §3B.4 table within 0.001 (and the exact values); monotonic, strictly
+  falling where not saturated; `success` is the exact complement; the infinities and NaN;
+  `P(deliver)` is the product and symmetric; POOR flaky, FAIR solid; `sinr50` shifts and `slope`
+  steepens the curve, bad parameters refused; the §5 defaults.
+- `SplitMix64Test` (5, new): the reference outputs; the seed is `pos ^ gameTime`; identical across two
+  runs with the same seed; different across ticks and uniform over [0, 1); `nextDouble` is the top 53
+  bits.
+- `RadioLinkMemoryTest` (8, new): follows delivered messages; a lost message is stale, not a toggle;
+  any powered transmitter keeps the output on; forget and clear; what it hears is verified (no lookups
+  in steady state); save and load keep the output and mark everything unverified; verify forgets GONE,
+  confirms PRESENT, keeps UNKNOWN for the next turn; hearing or forgetting settles an unverified entry.
+- `RadioLinkNetworkTest` (11, new): clean links deliver to every receiver on the address and no other;
+  both ends must be served; the delivered fraction matches `P(deliver)` over 20,000 draws; draws are
+  identical for the same seed and differ across ticks; the draw order; an unserved receiver still takes
+  its draw; the address book (idempotent attach, detach by identity, a removed or re-addressed receiver
+  dropped); `transmitterGone`; addresses wrap; a delivery that changes the book mid-send; the snapshot
+  follows every change between sends.
+- `RadioLinkGameTests` (4 game tests, new, one batch each, in the Nether above its roof):
+  - `follows_its_transmitter_holds_when_lost_forgets_a_broken_one`: placed by `setBlock`, registered at
+    once; addresses by use and sneak + use (wrapping); lit when served; the receiver follows within one
+    interval and outputs redstone 15; another address hears nothing; a lever on stone next to the
+    transmitter works too; the cell removed, both go dark and the receiver holds 15 while the
+    transmitter, now unpowered, sends into no service; service back, the unpowered state arrives;
+    breaking the powered transmitter turns the receiver off at once.
+  - `poor_link_drops_updates_fair_link_is_solid`: the BLER check above.
+  - `unloading_stops_it_reloading_resumes_it`: two forced chunks 16 apart. Chunk A (transmitter and
+    receiver) is released and really unloads: both unregistered, both entities removed, no more
+    dispatches, and chunk B's receiver holds the unloaded transmitter's last state. A is forced again
+    and loads from disk: new entities, registered at once, address and memory as saved (unverified),
+    the output held before their first turn; then served, verified, and messages arrive. B is released,
+    the transmitter in A broken (A's receiver goes off at once), B reloaded: its receiver comes back on,
+    as saved, looks the transmitter up on its first turn, finds it gone, and goes off. This closes the
+    3B done-when "reloading resumes them" with a real device block (slice 8's test entity came back as a
+    chest).
+  - `two_hundred_radio_links_in_steady_state`: the measurement above.
+- `FixedReceiverGameTests.chunk_load_registers_and_unload_stops_it` also asserts the `clearRemoved`
+  registration (decision 9).
+- `HarvestGameTests` generated two more tests: both blocks drop themselves when mined with a pickaxe.
+
+### APIs verified against sources (new to this codebase)
+
+- `LevelChunk.setBlockEntity` (1.21.1 patched sources): `setLevel`, then `clearRemoved`, then the old
+  entity's `setRemoved`; `BlockEntity.clearRemoved` is public and not final (NeoForge adds a
+  capability invalidation). `LevelChunk.setBlockState` calls the new state's `onPlace` before it
+  creates the block entity (`addAndRegisterBlockEntity`).
+- `BlockBehaviour.onRemove` (called on the server for every state change; the default removes the
+  entity only when the block changes), `isSignalSource`, `getSignal`; `BaseEntityBlock.getRenderShape`
+  is `INVISIBLE` by default, hence the override.
+- `ServerPlayerGameMode.useItemOn`: with an item in either hand, sneaking skips the block's use unless
+  both items bypass it (`doesSneakBypassUse`), so sneak + use works with empty hands.
+- NeoForge `IBlockExtension.canConnectRedstone(BlockState, BlockGetter, BlockPos, @Nullable Direction)`
+  and `RedStoneWireBlock`'s use of it (`canRedstoneConnectTo`, with a null direction for dust climbing,
+  which the transmitter refuses as vanilla blocks do).
+- `LeverBlock.useWithoutItem` → `pull` → `updateNeighbours` (the lever's and its attached block's
+  neighbours) and `getDirectSignal` (15 towards the attached block), for the lever step of the game test.
+- GameTest: `GameTestSequence` built in a loop (each step returns the sequence).
+
+### Verification
+
+| Check | Result |
+|---|---|
+| `./gradlew build` | **482 passed, 0 failed, 0 skipped** (449 + 9 + 5 + 8 + 11) |
+| `rf` / `util` purity | `PackagePurityTest` passes (`BlerModel`, `SplitMix64` have no Minecraft imports) |
+| `./gradlew runGameTestServer` | "27 tests are now running", "All 27 required tests passed" (21 + 2 generated harvest tests + 4 Radio Link tests), in each of the eight runs of this step |
+| Versions | `PROTOCOL_VERSION` "6", `AntennaBlockEntity.DATA_VERSION` 2, unchanged; the Radio Link entities save their own `DataVersion` 1 |
+| In game | the checks listed in PHASE_3.md, "Slice 9 (Radio Link) checks" |

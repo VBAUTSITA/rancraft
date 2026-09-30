@@ -3,6 +3,7 @@ package dev.rancraft;
 import dev.rancraft.net.CoverageSurveyPayload;
 import dev.rancraft.net.LensLinksPayload;
 import dev.rancraft.net.LocatorFixPayload;
+import dev.rancraft.rf.BlerModel;
 import dev.rancraft.rf.DriveTestLog;
 import dev.rancraft.rf.LocatorParams;
 import dev.rancraft.rf.RfConfig;
@@ -204,6 +205,23 @@ public final class RanCraftConfig {
                     "wait for the next tick. 0.5 ms is 1% of a 50 ms tick.")
             .defineInRange("fixedReceiverTickBudgetMs", 0.5, 0.05, 20.0);
 
+    // ---- Phase 3: Radio Link (§3B.4) ----------------------------------------------------------
+    // The block-error-rate curve. rf code reads it (BlerModel), so it crosses into RfConfig in
+    // snapshot(), as the locator's tunables do. See NOTES.md, Phase 3 slice 9.
+
+    public static final ModConfigSpec.DoubleValue BLER_SINR50_DB = BUILDER
+            .comment("Radio Link: the SINR, in dB, at which half of all messages fail to decode at one end.",
+                    "BLER(sinr) = 1 / (1 + 10^((sinr - blerSinr50Db) / blerSlopeDb)); a message crosses the",
+                    "network with probability (1 - BLER(sender)) x (1 - BLER(receiver)). GAME ABSTRACTION:",
+                    "one generic curve, not a real modulation-and-coding table, and no retransmission (HARQ).")
+            .defineInRange("blerSinr50Db", BlerModel.DEFAULT_SINR50_DB, -20.0, 30.0);
+
+    public static final ModConfigSpec.DoubleValue BLER_SLOPE_DB = BUILDER
+            .comment("Radio Link: dB of SINR per tenfold change in the odds of decoding. Smaller is steeper.",
+                    "At the defaults (0 dB, 2 dB) a link at POOR service (SINR 0-5 dB) loses many updates",
+                    "and one at FAIR (5 dB and up) almost none.")
+            .defineInRange("blerSlopeDb", BlerModel.DEFAULT_SLOPE_DB, 0.1, 20.0);
+
     public static final ModConfigSpec SPEC = BUILDER.build();
 
     // ---- RF Vision Step 3a: the drive-test trail (CLIENT) --------------------------------------
@@ -326,6 +344,8 @@ public final class RanCraftConfig {
                 LOCATOR_MAX_CELLS.get(),
                 LOCATOR_MAX_HDOP.get(),
                 NLOS_BIAS_BLOCKS_PER_DB.get(),
-                LOCATOR_SITE_MERGE_BLOCKS.get());
+                LOCATOR_SITE_MERGE_BLOCKS.get(),
+                BLER_SINR50_DB.get(),
+                BLER_SLOPE_DB.get());
     }
 }

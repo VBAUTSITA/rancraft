@@ -1,0 +1,8 @@
+{
+  "parent": "minecraft:block/cube_bottom_top",
+  "textures": {
+    "top": "minecraft:block/redstone_lamp_on",
+    "side": "minecraft:block/copper_block",
+    "bottom": "minecraft:block/copper_block"
+  }
+}
