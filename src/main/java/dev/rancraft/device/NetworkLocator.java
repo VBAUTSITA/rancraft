@@ -85,6 +85,15 @@ public final class NetworkLocator {
     }
 
     /**
+     * Whether a reading is kept for this player. For {@code LocatorGameTests.dead_player_locator_is_inert},
+     * which checks at runtime that a dead player's Locator stores nothing ({@link #READINGS} is
+     * package-private).
+     */
+    public static boolean hasReading(UUID player) {
+        return READINGS.get(player) != null;
+    }
+
+    /**
      * Which held Locator sends the payload: the one in the main hand, or the offhand one when the main
      * hand holds no Locator. So a player holding one in each hand gets one payload per evaluation, and
      * it matches the HUD, which reads the main-hand Locator's waypoints first. A Locator in the hotbar

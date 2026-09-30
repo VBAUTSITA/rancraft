@@ -1,14 +1,27 @@
 package dev.rancraft.gametest;
 
+import com.mojang.authlib.GameProfile;
 import dev.rancraft.RanCraft;
 import dev.rancraft.RanCraftConfig;
+import dev.rancraft.data.RfDataLoader;
+import dev.rancraft.device.DeviceContext;
+import dev.rancraft.device.DeviceMemory;
 import dev.rancraft.device.EmergencyRecord;
+import dev.rancraft.device.LocatorTracker;
+import dev.rancraft.device.NetworkLocator;
 import dev.rancraft.registry.ModAttachments;
+import dev.rancraft.registry.ModItems;
+import dev.rancraft.rf.BandTable;
+import dev.rancraft.rf.CellSample;
+import dev.rancraft.rf.DeviceRequirement;
 import dev.rancraft.rf.LocatorFix;
 import dev.rancraft.rf.LocatorParams;
 import dev.rancraft.rf.LocatorSolver;
 import dev.rancraft.rf.RangeMeasurement;
 import dev.rancraft.rf.Ranging;
+import dev.rancraft.rf.RfConfig;
+import dev.rancraft.rf.ServiceLevel;
+import dev.rancraft.rf.SignalSample;
 import dev.rancraft.rf.SurfaceProbe;
 import dev.rancraft.world.LevelSurfaceProbe;
 import java.util.ArrayList;
@@ -17,6 +30,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
 import java.util.SplittableRandom;
+import java.util.UUID;
 import net.minecraft.core.BlockPos;
 import net.minecraft.gametest.framework.GameTestGenerator;
 import net.minecraft.gametest.framework.GameTestHelper;
@@ -26,8 +40,10 @@ import net.minecraft.nbt.NbtOps;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.GameType;
 import net.neoforged.neoforge.common.NeoForge;
+import net.neoforged.neoforge.common.util.FakePlayer;
 import net.neoforged.neoforge.event.entity.living.LivingDeathEvent;
 import net.neoforged.neoforge.event.entity.player.PlayerEvent;
 import net.neoforged.neoforge.gametest.GameTestHolder;
@@ -44,6 +60,10 @@ import net.neoforged.neoforge.registries.NeoForgeRegistries;
  *       <em>estimate</em>, never the player's position); NeoForge's own {@code PlayerEvent.Clone}
  *       subscriber then copies it to the respawned player. A fix older than
  *       {@code locatorEmergencyMaxAgeTicks} freezes nothing, and nothing is written.</li>
+ *   <li><b>{@code dead_player_locator_is_inert}</b> (Phase 3A review, round 1): a dead player's
+ *       Locator does nothing. {@code NetworkLocator.onSample} on a player whose health is 0 stores no
+ *       reading and stamps no last fix (which the clone would otherwise carry into the next life);
+ *       the same call alive does both.</li>
  *   <li><b>{@code surface_probe_cost}</b>: the altitude-aiding ground lookups in a real level
  *       ({@link LevelSurfaceProbe}), which slice 3 could only time against a synthetic probe, and a
  *       whole 8-cell solve on them. The numbers are logged ("RANCraft locator cost") and recorded in
@@ -55,7 +75,11 @@ import net.neoforged.neoforge.registries.NeoForgeRegistries;
  * not evaluate them (a mock {@code ServerPlayer} cannot receive the mod's payloads; see PHASE_3.md).
  * The death is the event, not {@code Player.die}, and the respawn is the clone event
  * {@code ServerPlayer.restoreFrom} fires, not a real respawn. What runs is exactly the code those
- * two paths call.
+ * two paths call. {@code dead_player_locator_is_inert} needs a {@code ServerPlayer} (the Locator's
+ * server step takes one), so it builds a NeoForge {@link FakePlayer} directly: not on the player list
+ * either, so the ticker never evaluates it; its connection sends nothing; built with its own random
+ * profile, not through {@code FakePlayerFactory}, so no cached shared fake player is altered. The
+ * sample is hand-built, as the ticker would hand it over.
  */
 @GameTestHolder(RanCraft.MOD_ID)
 public final class LocatorGameTests {
@@ -73,7 +97,88 @@ public final class LocatorGameTests {
                 new TestFunction(BATCH, prefix + "emergency_record_survives_death", HarvestGameTests.EMPTY_TEMPLATE,
                         TIMEOUT_TICKS, 0L, true, LocatorGameTests::emergencyRecordSurvivesDeath),
                 new TestFunction(BATCH, prefix + "surface_probe_cost", HarvestGameTests.EMPTY_TEMPLATE,
-                        TIMEOUT_TICKS, 0L, true, LocatorGameTests::surfaceProbeCost));
+                        TIMEOUT_TICKS, 0L, true, LocatorGameTests::surfaceProbeCost),
+                new TestFunction(BATCH, prefix + "dead_player_locator_is_inert", HarvestGameTests.EMPTY_TEMPLATE,
+                        TIMEOUT_TICKS, 0L, true, LocatorGameTests::deadPlayerLocatorIsInert));
+    }
+
+    // ---- a dead player's Locator ------------------------------------------------------------------
+
+    /**
+     * NOTES.md, slice 5, decision 8: the ticker evaluates every player on the list, one on the death
+     * screen included, and with {@code keepInventory} the dead entity still carries the Locator.
+     * Without the {@code isAlive()} guard in {@code NetworkLocator.onSample} it would stamp a new last
+     * fix into the record death had just cleared, and the clone would carry it into the next life.
+     */
+    private static void deadPlayerLocatorIsInert(GameTestHelper helper) {
+        ServerLevel level = helper.getLevel();
+        long now = level.getGameTime();
+        BlockPos origin = helper.absolutePos(BlockPos.ZERO);
+        SurfaceProbe ground = LevelSurfaceProbe.forLocator(level);
+        int feet = ground.surfaceY(origin.getX(), origin.getZ());
+        if (feet == SurfaceProbe.UNLOADED) {
+            helper.fail("no ground under the test at " + origin);
+            return;
+        }
+
+        // Three well-spread band_900 masts round a receiver standing at the test origin, as the
+        // ticker would hand them over (true distances; the Locator quantises them itself).
+        double rxX = origin.getX() + 0.5;
+        double rxY = feet + LocatorSolver.RECEIVER_EYE_HEIGHT;
+        double rxZ = origin.getZ() + 0.5;
+        int[][] sites = {{0, 40}, {-35, -20}, {35, -20}};
+        List<CellSample> cells = new ArrayList<>();
+        for (int i = 0; i < sites.length; i++) {
+            int x = origin.getX() + sites[i][0];
+            int y = feet + 20;
+            int z = origin.getZ() + sites[i][1];
+            double dx = x + 0.5 - rxX;
+            double dy = y + 0.5 - rxY;
+            double dz = z + 0.5 - rxZ;
+            cells.add(new CellSample(7_000L + i, x, y, z, -70.0, Math.sqrt(dx * dx + dy * dy + dz * dz), 90.0, 0.0,
+                    "band_900", i, 6.0, 0.0, 0.0));
+        }
+        SignalSample sample = new SignalSample(cells, now, cells.get(0).cellId(), 12.0, -95.0, -104.0,
+                ServiceLevel.GOOD, 0);
+        BandTable bands = RfDataLoader.bands();
+        RfConfig config = RanCraftConfig.snapshot();
+        LocatorFix expected = LocatorTracker.update(null, sample, bands, config, ground, now).fix();
+        if (!(expected instanceof LocatorFix.Fix)) {
+            helper.fail("fixture: three well-spread masts gave " + expected + ", not a FIX");
+            return;
+        }
+        DeviceContext ctx = new DeviceContext(sample, DeviceRequirement.Verdict.OK, bands, config, level, now);
+        ItemStack locator = new ItemStack(ModItems.NETWORK_LOCATOR.get());
+
+        FakePlayer player = new FakePlayer(level, new GameProfile(UUID.randomUUID(), "rancraft_dead_locator"));
+        UUID id = player.getUUID();
+        try {
+            player.setHealth(0.0F);
+            if (player.isAlive()) {
+                helper.fail("fixture: a player with 0 health is still alive");
+                return;
+            }
+            NetworkLocator.onSample(player, locator, false, ctx);
+            if (player.hasData(ModAttachments.LOCATOR_EMERGENCY) || NetworkLocator.hasReading(id)) {
+                helper.fail("the dead player's Locator acted: record "
+                        + player.getExistingData(ModAttachments.LOCATOR_EMERGENCY)
+                        + ", reading kept " + NetworkLocator.hasReading(id));
+                return;
+            }
+
+            // Alive, the same call stores the reading and stamps the FIX: the guard is what stopped it.
+            player.setHealth(20.0F);
+            NetworkLocator.onSample(player, locator, false, ctx);
+            Optional<EmergencyRecord> record = player.getExistingData(ModAttachments.LOCATOR_EMERGENCY);
+            if (!NetworkLocator.hasReading(id) || record.isEmpty() || record.get().lastFix().isEmpty()) {
+                helper.fail("alive, the Locator did nothing: record " + record + ", reading kept "
+                        + NetworkLocator.hasReading(id));
+                return;
+            }
+            helper.succeed();
+        } finally {
+            DeviceMemory.forget(id);
+        }
     }
 
     // ---- the emergency record ---------------------------------------------------------------------
