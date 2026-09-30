@@ -58,13 +58,19 @@ every tuning decision, every deviation from spec, and what's honestly modeled vs
 .\gradlew.bat build
 ```
 
-Runs the full `dev.rancraft.rf` unit test suite (pure Java, no Minecraft on the classpath) alongside
-the mod compile.
+Compiles the mod and runs the full unit test suite (382 tests at the end of Phase 3A): the RF maths
+in `dev.rancraft.rf` and `dev.rancraft.util`, which is pure Java and must stay free of Minecraft
+(`PackagePurityTest` fails the build otherwise), plus the payloads, HUD text and device logic.
 
 ```
 .\gradlew.bat runGameTestServer
 ```
 
 Starts a headless game test server, runs the in-game regression tests in `dev.rancraft.gametest`
-(for now: every block drops itself when mined with an iron pickaxe in survival), and exits. The task
-fails if any test fails. It is separate from `build`.
+(for now: every block drops itself when mined with an iron pickaxe in survival; the Network
+Locator's emergency record survives death, a dead player's Locator does nothing, and its ground
+lookups and solve cost are logged), and exits. The task fails if any test fails. It is separate
+from `build`.
+
+Phase 3A's code is complete and every headless check passes; what still needs a person at the
+client is listed step by step at the end of `PHASE_3.md` ("How to test Part 3A in game").

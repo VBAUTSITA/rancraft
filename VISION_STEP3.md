@@ -136,6 +136,16 @@ slice 0):
   back. The log reads handovers off the server's counter between consecutive samples, so it must
   not miss one.
 - Capacity and trail render distance are client config (`config/rancraft-client.toml`).
+- **"Stationary" is measured from where the still period began** (Phase 3A review, round 1), not
+  from the previous sample, which may itself be a replacement. Before, any movement under half a
+  block per sample (a 2-tick interval, sneaking, soul sand, or caching switched off) kept replacing
+  one entry, and a whole walk collapsed into one sliding marker: a 100-block walk at 0.43 blocks per
+  sample gave 1 entry, now 116. The server's sample cache had hidden it, because a cache refresh
+  needs a 0.5-block move.
+
+Status (Phase 3 row 5b): everything headless is done and green; the in-game half is steps 1, 9, 10
+(the slow-walk check) and 11 (the Nether portal) of "How to test Part 3A in game" at the end of
+`PHASE_3.md`.
 
 ### Done when
 
@@ -146,11 +156,14 @@ slice 0):
       unit-tested; the pillars need an in-game look)*
 - [x] Standing still does not pile up duplicate markers *(the log keeps one entry, and exact
       replays of a cached sample are dropped, `DriveTestLogTest`; the renderer draws one marker
-      per entry)*
+      per entry)*. Since review round 1 a slow walk is not collapsed either (0.4 blocks per sample
+      over 100 blocks: 126 entries, pinned in `DriveTestLogTest`)
 - [~] `/rancraftc drivetest export` writes well-formed RFC 4180 CSV whose numbers stay correct on a
       comma-decimal default locale *(the CSV text is unit-tested under `es-PE`; the command writing
       the file needs an in-game run)*
-- [x] `DriveTestLog` is pure and unit-tested — **22 tests green**, in `src/` since Phase 3 slice 0
+- [x] `DriveTestLog` is pure and unit-tested — **25 tests green** (22 at landing, +1 slice 0 gate,
+      +2 review round 1), in `src/` since Phase 3 slice 0; `PackagePurityTest` asserts `rf` has no
+      Minecraft reference
 - [x] Nothing on the trail is computed client-side *(`SignalSamplePayload.toDriveTestSample()` is a
       field-for-field copy, pinned by `SignalSamplePayloadTest`; the renderer only picks colours for
       server-named levels and events)*
@@ -236,5 +249,6 @@ it just must not be discovered by a compile error.
 
 1. **3a pure logic** — `DriveTestLog` + tests. *Done.*
 2. **3a wiring** — payload position, client log, trail renderer, client command, `TRAIL` preset.
-   *Done in Phase 3 slice 0; in-game checks pending.*
+   *Done in Phase 3 slice 0, with its gate fixes, the 0a follow-ups and one review round 1 fix;
+   in-game checks pending (`PHASE_3.md`, "How to test Part 3A in game", steps 1, 9, 10 and 11).*
 3. **3b** — survey KPI fields, metric layer, problem finder + tests, diagnose command.

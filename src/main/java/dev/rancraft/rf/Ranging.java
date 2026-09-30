@@ -20,7 +20,11 @@ import java.util.Objects;
  *       want wideband carriers for positioning, and what makes band_3500 worth deploying here.
  *   <li><b>Quantisation</b>: the true slant distance is rounded to the nearest multiple of that
  *       resolution, and its 1-sigma is reported as {@code resolution / sqrt(12)}, the standard
- *       deviation of a uniform rounding error.
+ *       deviation of a uniform rounding error. <b>Simplified, labelled (NOTES.md, Phase 3 slice
+ *       3):</b> real receivers interpolate a correlation peak to well below one sample and average
+ *       over time; this model does neither. The rounding is deterministic: the same true distance
+ *       always rounds the same way, so a player standing still sees a fixed error, not noise that
+ *       averages out, and the sigma describes the spread over positions, not over time.
  *   <li><b>NLOS bias</b> (the direction is real, the size is a stand-in; see
  *       {@link #nlosBiasBlocks}).
  * </ul>

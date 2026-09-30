@@ -1412,7 +1412,10 @@ the cap at its payload constant. Its minimum is 3, because fewer can never give 
   under overhangs, while flying or on a tower. The reported `y` is that assumption.
 - **Towers in a line** (`LocatorSolver`): exactly collinear towers are PoorGeometry (singular at the
   centroid; the mirror images fit equally). *Nearly* collinear towers can converge on either side
-  of the line; the HDOP there describes local precision, not that ambiguity.
+  of the line; the HDOP there describes local precision, not that ambiguity. *(Measured in the
+  Phase 3A summary: with the middle of three band_900 masts 10 blocks off the line, 32 % of FIX
+  results land on the wrong side with a normal-looking ±. Open follow-up; labelled at the code site
+  since then.)*
 
 ### Measured
 
@@ -1424,7 +1427,7 @@ the cap at its payload constant. Its minimum is 3, because fewer can never give 
 | Test 10 | 35.49 → 8.50 (4.17x) adding band_3500; 9.81 (3.62x) adding band_900 in the same spot. *Weighted "±" (owner decision): 35.49 → 5.12 (6.93x); the band_900 control unchanged.* |
 | Good triangle + one band_3500 | 9.99 → 7.77 (1.29x); + band_900 8.93 (1.12x). *Weighted "±": 9.99 → 7.15 (1.40x); control unchanged.* |
 | Narrow 6° wedge at 300 blocks | HDOP 13.29 → PoorGeometry at the default limit 6.0 |
-| Cost | 18.8 µs per 8-cell mixed-band solve (7 Gauss-Newton runs, synthetic hilly `SurfaceProbe`), 0.38 µs to range 8 cells; JIT-warm, 200,000 repetitions, this PC. The in-game `SurfaceProbe` cost is not in this; slice 5 must measure it (up to 7 x 15 lookups per fix in the worst case). |
+| Cost | 18.8 µs per 8-cell mixed-band solve (7 Gauss-Newton runs, synthetic hilly `SurfaceProbe`), 0.38 µs to range 8 cells; JIT-warm, 200,000 repetitions, this PC. The in-game `SurfaceProbe` cost is not in this; slice 5 must measure it (up to 7 x 15 lookups per fix in the worst case; *corrected in the Phase 3A summary: 7 x 16 + 1 = 113, since each run also reads the ground at its end point and the extra starts once under the centroid*). |
 
 ### Tests
 
@@ -1850,7 +1853,7 @@ not held, the Locator starts at the corner.
 | | |
 |---|---|
 | Ground lookup in a live level | **77.9 ns** per `LevelSurfaceProbe.surfaceY` (105/105 columns within 24 blocks loaded; JIT-warm, 2,000 x 105 lookups; `runGameTestServer`, flat world, this PC) |
-| Worst-case fix | 105 lookups (7 runs x 15 iterations) = **8.2 µs** of ground reads |
+| Worst-case fix | ~~105 lookups (7 runs x 15 iterations) = 8.2 µs~~ **113 lookups (7 runs x (15 iterations + 1 end-point read) + 1 under the centroid) = 8.8 µs** of ground reads. *Corrected in the Phase 3A summary (the slice 5 gate found the undercount; `LocatorTrackerTest` already asserted 113).* |
 | One 8-cell band_1800 solve on live ground | **22.2 µs**, 37 lookups (FIX 6.51 blocks from the truth, ± 3.13, HDOP 0.72) |
 | Replay (player standing still) | no solve, no ground read (`LocatorTrackerTest`) |
 | Evaluations | none added: the Locator is handed the one sample the ticker produced; its API has no `WorldProbe`, so it cannot march a ray. A Locator is a device, so a player carrying only a Locator (hand or hotbar) is evaluated once per interval, like a meter carrier (slice 4). |
@@ -2212,3 +2215,240 @@ patched `PlayerList.getPlayerAdvancements`), `FakePlayerFactory.get / unloadLeve
 | The new tests bite | the game test was run with the guard removed (fails, above). The other new assertions pin behaviour the pre-fix code demonstrably lacked (the "before" runs above: AMBIGUOUS on one site, the wrong-mirror FIX at (100.5, 80.5), 1 drive-test entry for the walk; the 1.0 scale and the fixed 5 s are gone from the code) |
 | Config | `locatorSiteMergeBlocks` is a new COMMON entry; NeoForge adds it to an existing `rancraft-common.toml` at its default (as it did for the slice 3 entries) |
 | In game | not run by the agent (no `runClient`); the checks are in `PHASE_3.md`, "Phase 3A review round 1" |
+
+---
+
+## Phase 3A summary — docs and tracker (row 5b)
+
+Part 3A (the device framework and the Network Locator), with its precondition Vision Step 3a, is
+complete in code. Every check that can run headless passes: `./gradlew build` **382 tests, 0
+failed, 0 skipped**, `runGameTestServer` **5 of 5**. What is left needs a person at the client: the
+route is "How to test Part 3A in game" at the end of `PHASE_3.md`. This section is the one-page view.
+The detail stays in the slice sections above, which this step re-read against the code and the git
+log.
+
+Commits of this step: part 1 `0482a74` (two code-site labels, the lookup bound) and the docs commit
+"Phase 3A: docs and tracker" (two more code-site labels in `LocatorSolver`, one in `Ranging`, these
+notes, the tracker with the in-game checklist, `VISION_STEP3.md`, `README.md`, `MILESTONES.md`). Part
+2 was finished by a second docs agent after the first hit the usage limit with its edits
+uncommitted; it kept them after checking each against the code and the scratch programs, and
+added the review-round detail, the owner-decision table, the follow-up markers and the checked
+checklist numbers.
+
+### Slices and commits
+
+| Row | What | Commits (tracker-only commits in brackets) | Unit tests after |
+|---|---|---|---|
+| 0 | Vision Step 3a: drive-test trail and CSV export | af20bb4 (30e5f23) | 203 |
+| 0 gate | Every evaluation is sent (LINKS-only lens) | 3906418 (7b35d4f) | 210 |
+| 1 | Datapack folders, harvest game test, purity test | 212f86c, 1471bf3 (ac36a74) | 219, 1 skipped |
+| 0a | Trail cleared on logout, export link opens the folder | 0afda73, f2f8453 (4a2aae2) | 224, 1 skipped |
+| 2 | `DeviceRequirement` | 4ab5967 | 231, 1 skipped |
+| 3 | `Ranging`, `LocatorSolver` | 0837945 (99fc694, bd996d6) | 259, 1 skipped |
+| 4 | `SignalDevice`, ticker refactor, meter port | a51e13a, 85bd051, 6558460 (6e1b982) | 299, 1 skipped |
+| 5 | Network Locator (**3A ships**) | bf5eb47, e0fcfcd, 610a79c, 6c5d391 (334edff) | 367 |
+| 3a | Owner decisions: extra starts kept, weighted ± | f61a739, b47bcbf (27a2328) | 369 |
+| 5a | Phase 3A review round 1 fixes | 5221c46, 62fef10, 2f1306f, a755f7f, a998f3f (c54e86f) | 382 |
+| 5b | This step | 0482a74, "Phase 3A: docs and tracker" | 382 |
+
+The one skipped test until slice 5 was `PackagePurityTest.utilIsPure`, waiting for `util` to exist.
+
+### Regression gate (§3A.3): method and result
+
+**Method** (full table in slice 4): a branch-by-branch checklist written from `bd996d6`'s
+`SignalTicker`, the last commit before the refactor; a **differential run**, with the old ticker
+copied into a throwaway test and run side by side with the new one (deleted before committing); and
+the remaining inline decisions extracted unchanged into pure helpers and pinned.
+
+**Result: passed.** The meter payload is byte-identical (3 of 3 stored fixtures, and 20,000 seeded
+random samples through the real `STREAM_CODEC`); who is sent a sample is identical in all 49 lens
+states; the lens link cut is identical on 5,000 random cases; the cache decision is pinned condition
+by condition. Two differences, both intended: a device only in the hotbar now makes its carrier
+evaluated (§3A.3 read literally; 13 of the 49 states with a hotbar-only device), and an armed
+handover candidate older than one interval is dropped (the stale-candidate fix). The in-game half
+(meter HUD, link rays, handover counter) is step 1 of the in-game checklist. A runtime test of the
+ticker's per-player path is still not possible headless (a mock `ServerPlayer` negotiated no
+channels; open follow-up for slice 8).
+
+### Datapack folders (§0 known problem 3): before and after
+
+| | Before (pre-1.21 names) | After (1.21 names) |
+|---|---|---|
+| Folders | `loot_tables/blocks/`, `tags/blocks/mineable/` | `loot_table/blocks/`, `tags/block/mineable/` |
+| `runGameTestServer`, `HarvestGameTests` | 2 of 2 failed, Gradle exit 2 (no tag, bare-hand speed, no harvest, empty loot table) | 2 of 2 passed |
+| Survival, iron pickaxe (computed from `getDestroyProgress`) | 15 s, drops nothing | 0.75 s, drops itself |
+
+Kept as a permanent check (one generated test per block), now next to three Locator game tests.
+
+### Measured numbers (Part 3A)
+
+| What | Number | Where |
+|---|---|---|
+| Ranging resolution (c / BW) | band_700/900 29.98 m, band_1800 14.99 m, band_3500 2.998 m; σ 8.654 / 4.327 / 0.865 blocks | slice 3 |
+| Test 7, 120° triangle | HDOP 1.1547 (2/√3) | slice 3 |
+| Test 10, edge of a network + band_3500 | ± 35.49 → 5.12, **6.93x** (weighted ±; the spec's `HDOP x rms` gave 8.50, 4.17x; band_900 in the same spot 9.81, 3.62x) | owner decisions |
+| Good triangle + one band_3500 cell | ± 9.99 → 7.15, **1.40x** (below 3x, accepted by the owner) | owner decisions |
+| Extra Gauss-Newton starts | wrong FIX outside the footprint, centroid only 10.5-16.7 % → perfect ranges 0 %, band_900 1.3-5.2 % | slice 3 |
+| Sites, not cells | wrong-mirror FIX 921 / 2000 → 0; one site AMBIGUOUS 1938 / 2000 → 0 (all RANGE ONLY); triangle of three-sector sites ± 6.45 vs rms error 10.21 → 10.42 vs 10.44 | review round 1 |
+| Near-collinear towers (open) | middle mast 10 blocks off a 300-block line: **32 %** of FIX results on the wrong side, 139 blocks off, ± 11.6 reported (table below) | this step |
+| Solve cost, synthetic ground | 18.8 µs per 8-cell mixed-band solve; 0.38 µs to range 8 cells | slice 3 |
+| Solve cost, live level (`runGameTestServer`) | ground lookup 77.9 / 80.3 / 36.2 ns (three runs; it varies about 2x); one 8-cell band_1800 solve 22.2 / 29.0 / 29.4 µs, 37 lookups | slice 5, round 1, this step |
+| Worst-case ground lookups per fix | **113** (7 x 16 + 1; slice 5 recorded 105, corrected here) = 4.1-9.1 µs at the measured lookup times | this step |
+| Site grouping | 0.4-0.5 µs at 8-12 measurements, 7 µs at the configurable 64 | review round 1 |
+| Replay (standing still) | no solve, no ground read | slice 5 |
+| Evaluations | none added by the Locator; +1 per interval for a player whose only reason is a device in the hotbar | slices 4, 5 |
+| Wire | `SignalSamplePayload` 425 / 176 / 83 bytes (4 cells / 1 / no service), +25 bytes for v3; `LocatorFixPayload` about 430 bytes (FIX, 8 rings), about 490 with an emergency record, once per interval while held | slice 0 gate, slice 5 |
+| Drive-test walk at 0.43 blocks per sample, 100 blocks | 1 entry → 116 entries | review round 1 |
+| Versions | `PROTOCOL_VERSION` "3" → "4" (slice 0) → "5" (slice 5); `SignalSamplePayload.VERSION` 2 → 3; `LocatorFixPayload` v1; `AntennaBlockEntity.DATA_VERSION` 2 (unchanged); `LensSettings` 5 of 6 codec fields | slices 0, 5 |
+
+#### Near-collinear towers: a confident FIX on the wrong side (slices 2-3 gate finding, measured here)
+
+The slices 2-3 gate reported that towers almost, but not exactly, in a line give a confident FIX on
+the wrong side about a third of the time. Measured in this step with a scratch program compiled
+outside the project against the current `rf` sources (flat ground, band_900 quantisation, default
+parameters; three single masts at x = -150, 0, +150 on one line, the middle one pushed off it;
+receiver anywhere with |x| < 120 and 20-120 blocks from the line, on either side; 4,000 seeded scenes
+per row; "wrong side" is the side of the outer masts' line). Re-run in part 2 of this step,
+recompiled against the `rf` sources as committed: identical to the digit.
+
+| Middle mast off the line | FIX | wrong side (of FIX) | mean error of those | their mean ± reported | their mean HDOP | POOR GEOMETRY |
+|---|---|---|---|---|---|---|
+| 0 | 0 | – | – | – | – | 4000 |
+| 2 blocks | 3949 | 1830 (46.3 %) | 142.4 | 11.4 | 1.31 | 51 |
+| 5 blocks | 3881 | 1570 (40.5 %) | 141.2 | 11.7 | 1.36 | 119 |
+| 10 blocks | 3909 | 1248 (31.9 %) | 139.3 | 11.6 | 1.34 | 91 |
+| 20 blocks | 3854 | 679 (17.6 %) | 120.4 | 11.8 | 1.36 | 146 |
+| 40 blocks | 4000 | 88 (2.2 %) | 84.1 | 12.3 | 1.42 | 0 |
+
+With exact ranges the wrong-side rate is 0 at every offset, so this is measurement ambiguity, not a
+convergence failure: the mirror image fits the 30-block-quantised ranges about as well, and the
+rounding picks the side. Only an exact line is caught (singular from the centroid); the HDOP gate is
+read at the estimate, where the lines of sight fan out. **Not fixed in this step** (a solver change
+and a spec question): an open follow-up in `PHASE_3.md` with a candidate fix (also fit from the
+mirrored start and report AMBIGUOUS or POOR GEOMETRY when both basins fit about equally). Labelled
+at the code site (`LocatorSolver`, honest limits) in this step. How far off a wrong-side FIX lands
+depends on where the receiver stands: roughly its mirror image across the line. One scene from
+the in-game checklist (receiver 50 blocks from the line, middle mast 10 blocks toward it): FIX 70
+blocks off, ± 10.5, HDOP 1.21; with the middle mast 10 blocks away from it, a correct FIX 4 blocks
+off.
+
+### Fidelity notes for Part 3A (§6), and where each is labelled
+
+§6 asks for three lists. Below are the entries that concern Part 3A, and every label the
+implementation added, each checked at its code site in this step.
+
+**Real, modelled faithfully**
+
+| Entry | Code site | Pinned by |
+|---|---|---|
+| Ranging resolution set by bandwidth, c / BW | `Ranging` class javadoc, `resolutionMeters` | `RangingTest` (test 2) |
+| NLOS ranging bias in the right direction (ranges read long behind terrain, the fix moves away) | `Ranging.nlosBiasBlocks` | `LocatorSolverTest` (test 11) |
+| Dilution of precision and the collinear-tower failure | `LocatorSolver` class javadoc, `hdopOf` | tests 6 and 7 |
+| Altitude aiding, and where it breaks (caves, overhangs, flying, the Nether) | `LocatorSolver` honest limits, `LevelSurfaceProbe.forLocator`, `LocatorHudText` ("y ~") | `perfectRangesOnASlope`, `unloadedColumnsFallBack` |
+
+**Abstracted, labelled at the code site**
+
+| Entry | Code site |
+|---|---|
+| NLOS bias as a flat per-dB constant (`nlosBiasBlocksPerDb`, 0.25) instead of a longer reflected first path | `Ranging.nlosBiasBlocks` ("a flat stand-in"), config comment |
+| Absolute ranging instead of time differences (like multi-RTT; no clock error, no positioning reference signals) | `Ranging` class javadoc, `LocatorSolver` honest limits, `NetworkLocatorItem` |
+| "Network Locator", not GPS (E-CID, OTDOA, NR multi-RTT) | `Ranging`, `NetworkLocatorItem`, the item tooltip |
+| The "±" is a reported uncertainty, not a guarantee (quantisation only; no NLOS bias, no mirror ambiguity) | `LocatorFix.Fix`, `LocatorSolver`, `LocatorHudText` |
+| Quantisation is deterministic and not interpolated: a fixed error while standing still, not noise | `Ranging` (**labelled in this step**), `LocatorHudText` |
+| The emergency record is network-derived emergency caller location, and stores the estimate | `EmergencyRecord`, `NetworkLocator.onLivingDeath` |
+| Waypoints store estimates: navigation inherits fix error | `LocatorWaypoints` |
+| Sites by horizontal proximity (`locatorSiteMergeBlocks`, 3.0) stand in for the site identity a real network knows | `LocatorSolver` class javadoc and `siteRepresentatives`, `LocatorParams`, config comment |
+| Slant-range σ used for the horizontal ranges (under-states the ± only almost under a mast) | `LocatorSolver.weightedErrorOf` (**labelled in this step**) |
+| Nearly collinear towers can give a confident wrong-side FIX | `LocatorSolver` honest limits (**labelled in this step**) |
+| A device measures only while carried in a hand or the hotbar (a real UE measures all the time) | `SignalTicker.carried` (**labelled in this step**, 0482a74) |
+| Dropping a stale armed handover candidate is not a 3GPP mechanism | `CellSelector.expireStaleCandidate` (**labelled in this step**, 0482a74) |
+| A replayed sample is the old measurement, not a new one | `SignalDevice`, `DeviceContext` |
+| The drive-test log is only as complete as the evaluations | `DriveTestLog.classify`, `SignalTicker.sendsSample` |
+
+Two deviations from §3A.5 are owner-approved and labelled as such in the code: the extra
+Gauss-Newton starts (`LocatorSolver.leastSquares`) and the weighted-fit ± (`weightedErrorOf`). One
+spec-vs-tree correction is labelled too: `floor`, not `round`, for the altitude-aiding column
+(`LocatorSolver.eyeY`).
+
+**Deliberately absent** (§6; none of them is in Part 3A): load and capacity sharing, a scheduler,
+cell sleep, per-user throughput, height gain in propagation. Also absent from the Locator, and said
+so above: positioning reference signals, receiver clock error, sub-sample interpolation, multipath
+beyond the flat NLOS bias, and averaging over time.
+
+**Server authority** holds: the client never computes a range, a position, an HDOP or a "±". It
+draws the server's payload and does map arithmetic between two server-supplied estimates (the
+waypoint distance and bearing, `util/Navigation`).
+
+### Review rounds
+
+| Review | Reported | Outcome |
+|---|---|---|
+| Slice 0 gate (Vision 3a) | 1 major, 2 minor | Major (a LINKS-only lens evaluated but not sent: false handover pillars) fixed in 3906418; both minors (trail across worlds, export link opening Excel) fixed in 0a. A pre-existing defect found while fixing (the stale armed handover candidate, Phase 2) fixed in slice 4 part 1 |
+| Slices 2-3 gate | 1 minor | Near-collinear wrong-side FIX: measured and labelled in this step, **open** for the owner |
+| Slice 4 gate | 2 minor | The suggested `ReplayGuard` on the emergency stamp would have aged the record out for a player standing still: slice 5 never used one (a replay moves the fix's confirmation tick, and the stamp uses it; checked in the code). Two abstractions not labelled at their code sites: labelled in this step |
+| Slice 5 gate | 4 minor | Dead player's Locator untested, old fix shown after re-selecting, saved ± at a hardcoded 1 m per block: fixed in review round 1 (fixes 8, 4, 5). Worst case 105 lookups undercounted: corrected to 113 in this step |
+| Owner decisions (row 3a) | 2 slice 3 follow-ups | Extra solver starts kept; the ± is the weighted-fit covariance |
+| Phase 3A review, round 1 (row 5a) | **11 reported: 9 confirmed and fixed, 2 rejected** (the 9 are 7 distinct defects: 3 = 7, 5 = 9) | All 9 applied: 1 major (the Locator counted cells, not sites), 6 minor. Three recorded refinements of the review's wording: test (2)'s "within 10 blocks" is not reachable by any correct solver at that spot (asserted within one ranging step instead); `putAway()` instead of `clear()`, to keep the learned cadence; a `FakePlayer` built directly rather than through `FakePlayerFactory`. The 2 rejected: below |
+| Phase 3A review, rounds 2+ | not run | The workflow stopped after round 1 (usage limit), as RF Vision Step 2's review did |
+
+#### Phase 3A review round 1 in one paragraph
+
+Five reviewers, each with one brief: **rf-math** (`DeviceRequirement`, `Ranging`, `LocatorSolver`
+against §3A.1, §3A.4, §3A.5), **ticker-regression** (`SignalTicker` before Phase 3 and after slice
+0 against now: meter payload, link rays, handover counter, the cache skip while a candidate is
+armed, `forget()`, the lens link cap, the stagger, the registry-version cache key, "links are never
+starved", evaluated ⇒ sent, one evaluation per player, replays dispatched, devices idempotent, and
+the stale-candidate fix never suppressing a legitimate handover), **mc-api-lifecycle** (every
+Minecraft/NeoForge API used in Phase 3 against the decompiled sources), **net-protocol** (the new
+and changed payloads) and **spec-conformance** (§0, §3A.1-§3A.6, the 3A tests and done-when, and
+VISION_STEP3.md Part 3a). They reported 11 findings; an independent verifier per finding tried to
+refute each against the code. **9 held** (the ticker-regression reviewer reported none) and were
+fixed in row 5a, sections 1-8 above. **2 were rejected** as not defects in the current tree:
+
+- *net-protocol:* `SignalSamplePayload`'s v3 decoder does not reject a wrong version, a bad cell
+  count, a negative `cellsHeard` or a non-finite receiver position, although `LocatorFixPayload`
+  rejects all of these. The facts were right, but nothing in the tree can make it fail (the list's
+  initial capacity is capped at `MAX_CELLS`, and only the server writes this server-to-client
+  payload): hardening and consistency, not a defect. A slice that changes this payload's format
+  anyway can add the same checks at no extra cost.
+- *rf-math:* the drive-test CSV writes the band id with RFC 4180 quoting only
+  (`DriveTestLog.csvRow`), with no step that neutralises a leading spreadsheet-formula character.
+  On an unmodified server the field is always a loaded band id, and a hostile server gains nothing
+  it could not already do: speculative hardening, not a defect.
+
+The ticker-regression brief also settles the RF Vision Step 2 follow-up (the Step 2 review never
+re-covered the ticker's link path): that path was in its brief, and it found nothing. Recorded in
+`PHASE_3.md` follow-ups as done.
+
+### Owner decisions (Part 3A)
+
+| Decision | Commit | What it changed |
+|---|---|---|
+| Keep the extra Gauss-Newton starts (a deviation from §3A.5's centroid-only start) | b47bcbf | Nothing in the code: labelled a deliberate, owner-approved deviation in `LocatorSolver.leastSquares` and above. Why: from the centroid alone 10.5-16.7 % of fixes outside the cells' footprint are wrong with a small ±, even on perfect ranges; with the extra starts 0 % on perfect ranges, 1.3-5.2 % on band_900 (genuine mirror ambiguity) |
+| `errorBlocks` is the weighted-fit covariance `sqrt(trace((HᵀWH)⁻¹))`, W = diag(1/σ²) (a deviation from §3A.5's `HDOP x rms(σ)`) | f61a739, b47bcbf | Test 10 passes on the weighting (35.49 → 5.12, 6.93x at the edge of a network); a good triangle gains 1.40x (below 3x, accepted); identical to HDOP x σ when every cell has the same σ; HDOP stays unweighted |
+
+Waiting for the owner (open follow-ups): the near-collinear wrong-side FIX; sites vs cells (§3A.5
+says cells; keep the site grouping, and relabel the HUD "Sites N"?).
+
+### Verification of this step
+
+| Check | Result |
+|---|---|
+| `./gradlew build` | succeeds after part 1 and again after part 2; **382 passed, 0 failed, 0 skipped** (comment changes and one game-test constant; no test added or removed) |
+| `rf` / `util` purity | `PackagePurityTest` (only comments changed in `rf`) |
+| `./gradlew runGameTestServer` (after part 1; part 2 changed only comments and docs, no block or game test) | "5 tests are now running", "All 5 required tests passed"; locator cost line: 36.2 ns per ground lookup (113/113 columns loaded), worst case 113 lookups = 4.10 µs, one 8-cell band_1800 solve 29.4 µs with 37 lookups (FIX 6.51 blocks from the truth, ± 3.13, HDOP 0.72) |
+| Near-collinear table | scratch program in the session scratchpad, compiled against the `rf` sources outside the project; nothing added to `src/`. Re-run in part 2: identical |
+| In-game checklist numbers | a second scratch program ran the checklist's layouts through the current solver (flat ground, band_900 unless stated, receiver at the test spot). Step 2: one mast RANGE ONLY radius 89.9 (true about 100); two masts AMBIGUOUS, the near candidate 15 blocks off, `likely` -1; three masts FIX ± 10.53, HDOP 1.22, 1.8 blocks off; over 441 standing spots in a 21 x 21 square, the error was within the ± at 194 (44 %) and within twice it at all 441. Step 3: exact line POOR GEOMETRY (99.9). Step 4: + band_3500 50 north ± 10.53 → 7.18 (1.47x; band_900 there 9.24); wedge ± 35.66, HDOP 4.12 → 5.12 with band_3500 60 south (band_900 there 9.80). Step 5: a 3-block NLOS bias (12 dB) on the east mast moves the FIX 2.0 blocks away from it, 6 blocks (24 dB) 4.1 blocks; the ± stays 10.5-10.6. The first draft of the checklist said "usually within the ±", "about 3 blocks" and "around 140 blocks"; corrected to these numbers |
+| In game | not run by the agent (no `runClient`); the route is at the end of `PHASE_3.md` |
+
+### Open for Part 3A (details in `PHASE_3.md` follow-ups)
+
+Decisions for the owner: the near-collinear wrong-side FIX; sites vs cells (§3A.5 says cells; also
+whether the HUD should say "Sites"). Spec vs tree: EvaluationStats cannot count evaluations. Test
+harness: no runtime test of the ticker's per-player path (fake connection needed; slice 8). Minor:
+waypoint names; AMBIGUOUS marker heights; storing the scale on a waypoint; a same-dimension teleport
+with the Locator in the hotbar can pick "likely" once; the meter's fixed 5 s stale limit; a proxy
+server switch keeps the drive-test trail; a game test run with nothing registered still passes;
+the optional slice 17 CSV columns. Standing rules for later slices: `rf`/`util` purity, and a loot
+table and pickaxe tag for every new block. And every in-game check (`PHASE_3.md`, "How to test
+Part 3A in game", 11 steps).

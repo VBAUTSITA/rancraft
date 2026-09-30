@@ -81,6 +81,14 @@ import java.util.Objects;
  *   <li><b>The "±" is a reported uncertainty, not a guarantee.</b> It is the 1-sigma horizontal
  *       uncertainty of the weighted fit, from the random quantisation error only; the NLOS bias is
  *       systematic and is not in it, and neither is a mirror ambiguity.
+ *   <li><b>Nearly collinear towers can give a confident FIX on the wrong side of the line</b> (open
+ *       follow-up in PHASE_3.md). Only an exact line is caught (singular at the centroid). The HDOP
+ *       gate is read at the estimate, and seen from off the line the lines of sight fan out, so HDOP
+ *       looks good while the mirror image fits the coarse ranges about as well. Measured with
+ *       band_900 quantisation, three masts 300 blocks end to end with the middle one 10 blocks off
+ *       the line and the receiver 20-120 blocks from it: 32 % of FIX results on the wrong side, on
+ *       average 139 blocks from the truth with a reported "±" of about 12 (NOTES.md, Phase 3A
+ *       summary). With exact ranges it does not happen.
  * </ul>
  *
  * <h2>Robustness</h2>
@@ -518,6 +526,12 @@ public final class LocatorSolver {
      * of magnitude above the rest. The sigmas are the quantisation spread {@code res / sqrt(12)}
      * (uniform, not Gaussian, errors: the covariance is still exact for a linear fit; only the
      * "68 %" reading of 1 sigma is approximate). The NLOS bias is systematic and not in it.
+     *
+     * <p><b>Simplification, labelled (NOTES.md, "Owner decisions on the slice 3 follow-ups"):</b>
+     * the fit works on horizontal ranges {@code rho = sqrt(r^2 - dy^2)}, whose error is
+     * {@code sigma * r / rho}, larger than the slant-range sigma close under a high tower. Both the
+     * weights and this "±" use the slant-range sigma, as §3A.5 does. Small at the usual distances; it
+     * under-states the "±" only when the receiver stands almost under a mast.
      *
      * @return {@link Double#POSITIVE_INFINITY} when the weighted matrix is singular or not finite.
      */

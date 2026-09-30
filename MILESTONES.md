@@ -11,7 +11,7 @@ Part A are done. **382 tests** pass. Phase 3 Parts B and C have not started.
 Phase 1 ████████████ done
 Phase 2 ████████████ done
 Vision  ██████████░░ Steps 1, 2, 3a done · 3b designed, not built
-Phase 3 ████░░░░░░░░ Part A done (docs finishing) · Part B not started · Part C not started
+Phase 3 ████░░░░░░░░ Part A done (in-game checks pending) · Part B not started · Part C not started
 ```
 
 ---
@@ -118,7 +118,8 @@ Tests: **161 at the start of Phase 3 → 382 now.**
 ### A. Finish Part A (running now)
 
 - [x] All code, your two decisions, and the 9 review fixes. 382 tests green.
-- [ ] Docs agent: update `PHASE_3.md` / `NOTES.md` and write "How to test 3A in game".
+- [x] Docs: `PHASE_3.md` / `NOTES.md` updated, and "How to test Part 3A in game" written at the end
+      of `PHASE_3.md` ("Phase 3A: docs and tracker").
 - [ ] Push to GitHub.
 
 ### B. Part 3B: towers and fixed devices (4 slices, not started)
