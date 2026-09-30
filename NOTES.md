@@ -2925,3 +2925,233 @@ path, 150 blocks out in a bin that holds neither end, breaks it, and the march r
 | `./gradlew runGameTestServer` | "17 tests are now running", "All 17 required tests passed" (4 new in 4 batches of their own; the 13 existing unchanged); the cost lines above are from these runs |
 | `CoverageSurveyor.java` | no diff |
 | In game | not run by the agent (no `runClient`); the checks are in `PHASE_3.md`, slice 7 |
+
+## Slice 8 — fixed receivers (§3B.3)
+
+Device blocks now get evaluations of their own, without a player. Nothing in the game uses it yet:
+the first fixed device, the Radio Link, is slice 9. Code checkpoint `02d1790`; a flaky slice 7 game
+test found while running this slice's game tests was fixed in `62b54c7`; this section, two javadoc
+corrections and the tracker are in the slice commit "Phase 3 slice 8: fixed receivers".
+
+### What was built
+
+- **`device/FixedDevice`**: `requirement()` and `onSample(ServerLevel, BlockPos, DeviceContext)`, the
+  block-bound counterpart of `SignalDevice` with the same contract (the device never computes RF; it
+  gets the sample with its verdict; a replay is the same sample object and must be handled
+  idempotently).
+- **`block/FixedDeviceBlockEntity`**: an abstract block entity that is a `FixedDevice` and wires
+  lifecycle paths 1 and 2 (`onLoad` registers, `setRemoved` unregisters). Slice 9's Radio Link
+  entities extend it.
+- **`world/FixedReceiverRegistry`**, one per dimension, keyed by `BlockPos.asLong()`: the entries in
+  round-robin order, a parallel `long[]` of due ticks, a per-chunk index for the unload path, a
+  cursor, and a `ReceiverStateStore<Long>` for the handover state (the store made generic in Phase 2
+  for exactly this). The two chunk listeners live here.
+- **`world/FixedReceiverTicker`**: its own `ServerTickEvent.Post` handler with its own budget
+  (separate from the player ticker's). It evaluates each due receiver at the centre of its block with
+  the same `RfEngine.evaluate` call, candidate query, handover state machine and dependency set as a
+  player's eye, or replays the cached sample, and dispatches it to the device with the device's
+  verdict. A device that throws costs only its own dispatch (logged at most every 30 s, counted).
+  `stats()` / `resetStats()` expose counters for the game test.
+- **`RanCraftConfig.fixedReceiverTickBudgetMs`** (COMMON, default 0.5, range 0.05 to 20), as §5 lists
+  it. Server cost, not an engine value, so not in `RfConfig`.
+
+### Where each part of §3B.3 lives
+
+| §3B.3 | Where | Pinned by |
+|---|---|---|
+| `FixedDevice`: `requirement()`, `onSample(ServerLevel, BlockPos, DeviceContext)` | `device/FixedDevice` | game test `evaluated_then_replayed_...` (two devices, their own verdicts, their own block) |
+| Registry per level, keyed by `BlockPos.asLong()` | `world/FixedReceiverRegistry` | `FixedReceiverRegistryTest` (7) |
+| `ReceiverStateStore<Long>` for the handover state | `FixedReceiverRegistry.states` | `unregisterByIdentity` (forgets the state); the ticker's `resume` / `put` |
+| Receiver position = the block centre | `FixedReceiverTicker.serve` | game test: the stone at x + 6 on the ray to the cell reads the stone's loss |
+| Round robin under `fixedReceiverTickBudgetMs`; batches, clock read between batches, rotating start | `FixedReceiverTicker.runTick` (MC-free, fake clock in tests) | `FixedReceiverTickerTest`: `firstBatchAlwaysRuns`, `overBudgetResumesInOrder`, `firstLaneRotates` |
+| At most once per `evaluationIntervalTicks` | `runTick`: served at `t`, next due at `t + interval` | `oncePerInterval`; game test: every dispatch exactly one interval apart; 200 receivers each once per interval |
+| Quiet bins: the cached sample is replayed to the device | `FixedReceiverTicker.canReplay` / `Cached` | `FixedReceiverTickerTest` (3); game test: replay, a far change keeps it, a link-path change does not |
+| Its own stale-candidate threshold (the slice 4 follow-up) | `FixedReceiverTicker.staleCandidateGapTicks(interval, lag)` | `staleThresholdIsIntervalPlusLag`, `overrunKeepsTheCandidateSkipDropsIt`, `gapsMatchTheThreshold` |
+| Lifecycle on all four paths | `FixedDeviceBlockEntity` (1, 2), `FixedReceiverRegistry.onChunkLoad` (3), `.onChunkUnload` (4) | game tests `block_entity_on_load_and_set_removed`, `chunk_load_registers_and_unload_stops_it`; `unregisterChunkIsByPosition` |
+
+### Decisions and deviations
+
+1. **The stale-candidate threshold is the receiver's own gap: `interval + lag`.** The player ticker
+   evaluates everyone exactly once per interval, so it reads a longer gap as a pause and drops an
+   armed handover candidate (`SignalTicker.staleCandidateGapTicks`, slice 4). This ticker cannot
+   promise that: over budget a receiver waits. A receiver served at server tick `s` is next due at
+   `s + interval` and served at `s + interval + lag`; the whole gap is the ticker's doing, so it is
+   the threshold. With the player's threshold, every budget overrun would drop the candidate and
+   delay the handover by one time-to-trigger. Game time moves at most one tick per server tick, so the
+   game-time gap `resume` measures never exceeds it. A turn skipped because the chunk was not FULL is
+   rescheduled one interval on without an evaluation; the next service then sees two intervals with
+   a small lag and drops the candidate, as a player who put the meter away does.
+   `gapsMatchTheThreshold` checks the derivation on the real scheduler (every gap is exactly
+   `interval + lag`).
+2. **Scheduling: due ticks, a cursor, a rotating first dimension.** Each receiver has a due tick
+   (server ticks); a tick looks at every receiver once from where the last tick stopped and serves
+   the due ones, and dimensions take turns one batch at a time, starting one further on each tick. A
+   late service moves the next one later too, never closer, which is what "at most once per interval"
+   needs. A new receiver's first turn is staggered over the interval by a hash of its position (the
+   player ticker staggers by entity id), so a chunk of devices loading at once does not land on one
+   tick. A due tick further off than one interval (the interval was lowered live) is pulled in.
+3. **The first batch always runs.** `CoverageSurveyor` reads the clock before every batch; here the
+   first batch runs whatever the budget, so a tiny budget still makes progress. A tick overshoots by
+   at most one batch.
+4. **Batches of 4 receivers** (`BATCH_RECEIVERS`, a constant like `CoverageSurveyor.BATCH_POINTS`): a
+   batch counts served receivers, not looked-at ones. With 8 the first runs overshot by up to 0.69
+   ms; with 4 a warm tick overshoots by at most about 190 µs (four fresh evaluations), and a clock read
+   every four replays costs about half a percent of them.
+5. **The due ticks are a `long[]` beside the entries**, not a field in each entry: the scan touches an
+   entry only when it is due. With the field, 200 receivers cost about 20 µs of scan per tick (cache
+   misses); with the array, 8 to 12 µs (measured below). The comment at the field now says this; the
+   part 1 commit said "a few nanoseconds per receiver", which the measurement does not support
+   (40-60 ns per receiver, loop and lock included).
+6. **Chunk load registers every block entity that is a `FixedDevice`, or whose block is; chunk unload
+   drops every receiver in the chunk by position, whatever its type.** The load event fires as the
+   chunk becomes FULL, after its block entities exist (`ChunkStatusTasks.full`: `runPostLoad`,
+   `registerAllBlockEntitiesAfterLevelLoad`, then the event), whereas NeoForge defers `onLoad` to the
+   dimension's next block-entity tick, which does not run in a dimension with no player and no forced
+   chunk for 300 ticks. The unload event fires before the chunk is saved and its block entities are
+   removed (`ChunkMap.scheduleUnload`, then `ServerLevel.unload` → `clearAllBlockEntities`, which
+   calls `setRemoved`), so an unloading device is dropped twice over. The ticker also skips a
+   receiver whose chunk is not loaded as FULL (`ServerChunkCache.hasChunk`), which covers a chunk
+   demoted below FULL but not unloaded; it resumes when the chunk is FULL again.
+7. **Spec vs tree (minor):** §3B.3 says "NOTES.md records that sector antennas once missed the chunk
+   paths". The record is in `SignalTicker.onChunkLoad`'s javadoc, not in NOTES.md; the lesson is the
+   same. Here the unload path does not depend on a type check at all.
+8. **Unregistering by a block entity is by identity**: the late `setRemoved` of a replaced entity
+   cannot drop its successor at the same position. Registering a different device at a registered
+   position replaces the device and keeps the position's schedule, handover state and cached sample
+   (all three are properties of where it stands). Unregistering forgets the state and the cache, as a
+   logout does for a player, so a reloaded device starts afresh.
+9. **The replay rule has no move check**: caching on, no armed candidate, the site registry version
+   unchanged, and every dependency bin's epoch unchanged (slice 7). A fixed receiver never moves.
+10. **No version bump and no new block.** No payload, update tag or saved field changed:
+    `PROTOCOL_VERSION` stays "6", `DATA_VERSION` 2. Slice 8 adds no block, so `HarvestGameTests` is
+    unchanged; the Radio Link blocks come in slice 9.
+11. **`62b54c7` fixed a flaky slice 7 game test.** `far_block_keeps_the_cache_link_path_block_does_not`
+    asserted that a 300-block ray crosses exactly 3 bins; it crosses 4 when the receiver stands 84 or
+    more blocks into its bin, and the test's position changes every run. One of this slice's runs hit
+    it. The expected count is now computed from the two ends.
+
+### Known behaviours and limits (honest)
+
+- **A fixed receiver hears as a player does** (label in the `FixedDevice` javadoc): the same 0 dBi
+  receive antenna (`RfMath`), the same evaluation. A real fixed terminal (a rooftop CPE, a telemetry
+  modem) usually has a directional antenna with gain and is mounted for line of sight; height helps
+  here only by clearing obstruction.
+- **An overloaded ticker samples less often** (label in `FixedReceiverTicker.staleCandidateGapTicks`):
+  the time-to-trigger is judged on the evaluations the budget could afford, so a neighbour that dipped
+  and recovered between two late evaluations is not seen to dip. A real UE measures on its own
+  schedule.
+- **Event-less block changes matter more here than for players.** Slice 7's gaps (fluid flow, fire,
+  leaf decay, falling blocks, `/setblock` and `/fill`, other mods) leave a cached sample stale until
+  the next event in one of its bins or the next antenna change. A player's cache also ends when they
+  move half a block; a fixed receiver never moves, so water flowing into a Radio Link's path (15 dB)
+  can stay unseen indefinitely. A maximum replay age would bound it (follow-up, for the owner).
+- **The site registry version is dimension-wide**, as §3B.2 keys it: one antenna placed, broken or
+  reconfigured anywhere re-evaluates every fixed receiver in the dimension once, each on its own turn.
+  For 200 receivers that is one interval at about 200 to 390 µs per tick (the "warm first interval"
+  row below), inside the budget. Backhaul and power (slices 12 and 15) taking cells on and off the air
+  will cause the same once per change.
+- **The scan is linear in the receivers registered**, due or not: 8 to 12 µs per tick at 200. Near
+  2,000 receivers the scan alone would reach about 0.1 ms per tick; a timing wheel would make it
+  proportional to the due ones (follow-up, not needed at the done-when's scale).
+- **A device placed where block entities are not ticking** (a dimension with no player and no forced
+  chunk for over 300 ticks; only a command or another mod can place one there) registers only when
+  block entities tick there again: NeoForge defers `onLoad` (`Level.addFreshBlockEntities`) and no
+  chunk event fires for an already loaded chunk. A player placing it is present, so the dimension
+  ticks. Slice 9's blocks can close it by also registering from the block's server-side `onPlace`.
+- **Slice 7's piston corner applies**: in such a non-ticking dimension a piston's moved blocks land
+  only when block entities tick again, after the deferred bump, so a fixed receiver there can replay
+  a sample taken while they were moving, until the next event in its bins.
+- **Replays are identical to a fresh evaluation, by design**: nothing on screen or in the device can
+  tell them apart except the sample's `timestampTick` (the tick it was evaluated); `DeviceContext.tick()`
+  is the dispatch tick.
+
+### Measured
+
+`FixedReceiverGameTests.two_hundred_receivers_in_steady_state`: 200 receivers in a forced Nether chunk
+at y 200 (open air), one band_900 omni 7 to 20 blocks away, devices that only record (the Radio
+Link's own work comes on top in slice 9), interval 20, budget 0.5 ms. Four `runGameTestServer` runs
+on the committed code (A to C during part 1, D in this step):
+
+| | A | B | C | D |
+|---|---|---|---|---|
+| cold JVM, first interval: per fresh evaluation | 85.1 µs | 95.8 µs | 132.2 µs | 83.6 µs |
+| cold JVM: per tick / slowest tick | 681 / 1,386 µs | 767 / 1,865 µs | 1,058 / 10,692 µs | 619 / 863 µs |
+| evaluation warm-up (interval 1, every receiver due every tick, budget-bound): evaluations per 100 ticks | 2,056 | 2,116 | 1,940 | 2,140 |
+| its slowest tick | 11,304 µs | 910 µs | 942 µs | 954 µs |
+| warm, first interval: per fresh evaluation | 38.68 µs | 20.08 µs | 25.97 µs | 20.81 µs |
+| warm, first interval: per tick / slowest tick | 387 / 640 µs | 201 / 308 µs | 260 / 368 µs | 208 / 328 µs |
+| **steady state, per tick** (without the slowest tick) | **30.90 µs** | **29.16 µs** | **41.96 µs** | **29.63 µs** |
+| of which setup / scan / serving, per tick | 3.1 / 8.8 / 19.3 µs | 3.4 / 8.1 / 17.9 µs | 4.5 / 12.3 / 26.3 µs | 2.8 / 8.9 / 19.2 µs |
+| per replay, dispatch included | 1.93 µs | 1.79 µs | 2.63 µs | 1.92 µs |
+
+Steady state is 100 ticks of replays only (1,000 replays, 0 evaluations, each receiver once per
+interval, asserted), so **200 fixed receivers cost 29 to 42 µs per tick**, under the 3B done-when's
+0.1 ms (asserted at 100 µs). Of that, about 10 replays per tick (200 / 20) at about 2 µs each, the scan
+of all 200 due ticks, and the per-tick setup.
+
+The budget holds to within one batch once warm: in the saturated warm-up 19 to 21 fresh evaluations
+fit per tick. The warm-up's slowest ticks (0.91 to 0.95 ms) are most likely its first ones, when an
+evaluation still cost about 100 µs and one batch of four could overshoot by 0.4 ms; the 11.3 ms and
+10.7 ms ticks in runs A and C are pauses the ticker cannot pre-empt (garbage collection or JIT
+compilation in a JVM that had just started). A fresh evaluation here marches one short open-air ray;
+receivers in built-up ground with more cells in range cost more per evaluation (slice 7 measured 53
+to 92 µs for 6 rays), which the budget absorbs by spreading them over more ticks.
+
+Memory per receiver: one entry (its key, device and cached sample with the full cell list), one
+`long` due tick, one handover state, and one key in the chunk index.
+
+### Tests
+
+- `FixedReceiverRegistryTest` (7, new): registering is idempotent and queries see it; a different
+  device at a registered position keeps the position's schedule, state and cache; unregister is by
+  identity and forgets the handover state; the chunk unload path drops every receiver in that chunk
+  column and nothing else; due ticks follow their receivers through removals and array growth; the
+  cursor cycles in registration order and survives removals.
+- `FixedReceiverTickerTest` (13, new): the replay decision (quiet; each condition that blocks it; an
+  evaluation that marched nothing); the stale threshold (`interval + lag`; an overrun keeps the
+  candidate where the player threshold would drop it, a skipped turn drops it; on the real scheduler
+  every gap is exactly `interval + lag`); the stagger (in range, deterministic, spread); the round
+  robin with a fake clock (once per interval within budget; the first batch always runs; over budget
+  the rest wait and are served next tick in order with their lag; the first dimension rotates; a
+  device unregistering receivers while being served; a lowered interval; a new receiver's stagger).
+- `FixedReceiverGameTests` (4 game tests, new, one batch each, in the Nether above its roof, where
+  nothing else moves the site registry version):
+  - `evaluated_then_replayed_then_reevaluated_on_its_link_path`: the real ticker on the real server
+    tick evaluates two devices at their block centres with their own verdicts (POOR tier 1: OK; POOR
+    tier 3 on band_900: LOW_TIER), replays the same sample exactly one interval later, keeps
+    replaying after a block change 500 blocks away, evaluates afresh after stone on the link path
+    (reading the stone's loss), and stops dispatching once they are unregistered.
+  - `chunk_load_registers_and_unload_stops_it`: a device block entity in a forced chunk is registered
+    by the chunk load event; the chunk is released and really unloads; the unload event drops it, the
+    game removes the entity, and it hears nothing more. Reloading the chunk fires the real load event,
+    which registers nothing, because the test entity borrows the chest's block entity type (a new type
+    cannot be registered once registries are frozen) and is saved and reloaded as a plain chest. That
+    "reloading resumes it" therefore needs a real device block: slice 9.
+  - `block_entity_on_load_and_set_removed`: `onLoad` registers, the ticker serves the device at its
+    block, a successor at the same position takes over and the old entity's late `setRemoved` does not
+    drop it; `setRemoved` unregisters; an entity with no level registers nothing.
+  - `two_hundred_receivers_in_steady_state`: the measurement above.
+
+### APIs verified against sources (new to this codebase)
+
+- `ChunkStatusTasks.full` (1.21.1 patched sources): `runPostLoad`, `setLoaded(true)`,
+  `registerAllBlockEntitiesAfterLevelLoad`, then `ChunkEvent.Load` is posted, so the chunk's block
+  entities exist when the event arrives; `ChunkEvent.Load(ChunkAccess, boolean)`.
+- `LevelChunk.registerAllBlockEntitiesAfterLevelLoad` and `addAndRegisterBlockEntity` →
+  `Level.addFreshBlockEntities`; `Level.tickBlockEntities` calls `onLoad` on fresh entities (NeoForge),
+  inside `ServerLevel.tick`'s `players or forced chunks or emptyTime < 300` guard.
+- `ChunkMap.scheduleUnload`: `ChunkEvent.Unload`, then save, then `ServerLevel.unload` →
+  `LevelChunk.clearAllBlockEntities` (`onChunkUnloaded`, then `setRemoved`, on every entity).
+- `ServerChunkCache.hasChunk(x, z)`: the holder's ticket level at FULL or better.
+- GameTest: `ServerLevel.setChunkForced`, `Level.setBlockEntity`, `TestFunction` with a batch name,
+  `@AfterBatch`, `GameTestSequence.thenExecuteFor`.
+
+### Verification
+
+| Check | Result |
+|---|---|
+| `./gradlew build` | **449 passed, 0 failed, 0 skipped** (429 + 7 + 13) |
+| `rf` / `util` purity | `PackagePurityTest` passes (slice 8 added nothing to either) |
+| `./gradlew runGameTestServer` | "21 tests are now running", "All 21 required tests passed" (4 new in 4 batches of their own); run D above is from this step |
+| Versions | `PROTOCOL_VERSION` "6", `DATA_VERSION` 2, unchanged |
+| In game | nothing to check yet: slice 8 adds no device block. The Radio Link (slice 9) brings the first in-game checks of fixed receivers |

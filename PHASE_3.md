@@ -53,7 +53,7 @@ Legend: `[x]` done and verified · `[~]` partly done / needs a manual in-game ch
 | 5b | Phase 3A docs and tracker: gate findings closed or logged, summary, in-game checklist | 3A | [x] the gate reviews' open findings checked against the code: two abstractions labelled at their code sites (stale candidate, device measures only while carried) plus two more NOTES.md claimed were there (slant σ, near-collinear towers); worst-case ground lookups per fix corrected 105 → 113 (7 × 16 + 1) in the game test and the docs; the near-collinear wrong-side FIX measured (32 % at 10 blocks off the line) and logged open; the review round's 2 rejected findings recorded; every follow-up marked done or open; NOTES.md "Phase 3A summary"; VISION_STEP3.md Part 3a; README; "How to test Part 3A in game" at the end of this file, its numbers checked against the solver with a scratch program. Headless green (382 tests, 0 skipped; `runGameTestServer` 5/5 after part 1) | 0482a74; docs 2cc912f; tracker "PHASE_3.md, NOTES.md: record the Phase 3A docs commit hash" |
 | 6 | ColumnScan + mast columns + lens column/on-air | 3B | [~] `util/ColumnScan` (pure, 12 tests); a contiguous mast column is one cell owned by its base (`cellId = base.asLong()`), radiating from `top.above()`, structure never registers, a sector on the highest mast silences it, any powered mast powers it, `maxMastHeight` 64 caps the signal part; re-scan on `updateShape`/`neighborChanged` refreshes only the mast and the base; fresh PCI plan on promotion; `OnAir` in the update tag (not saved), lens draws one lobe per cell at the top and greys off-air cells; one census log line; `PROTOCOL_VERSION` 6. Headless green (398 tests, 0 skipped; `runGameTestServer` 13/13, 8 new: 624 ns per nine-mast scan); in-game checks below; three recorded deviations in follow-ups | 703c3a1; 5299fb4; tracker "PHASE_3.md, NOTES.md: record slice 6 commit hash" |
 | 7 | BinTraversal + region epochs + cache rework | 3B | [~] `rf/BinTraversal` (pure 2D DDA over bins, both side bins through a corner; the correctness argument in its javadoc); `RfEngine.Evaluation.marched` (appended) and `dependencyBins`; `world/RegionEpochs`: per-bin (128) epochs bumped by break/place (multi-block too), explosions, pistons (at once and after the blocks settle) and tree growth, plus the dimension-wide sum (`CoverageSurveyor` untouched); `canReplay`'s epoch condition is now "every dependency bin unchanged", the rest unchanged; no version bump. Headless green (429 tests, 0 skipped; `runGameTestServer` 17/17, 4 new: a block 500 blocks away keeps the cache, one on the link path does not; +3-7 µs per fresh evaluation, 0.4 µs per replay check); in-game checks below; gaps recorded in follow-ups | 97489e6; e0383ee; 9c6d39f; tracker "PHASE_3.md, NOTES.md: record slice 7 commit hash" |
-| 8 | Fixed receiver registry + ticker | 3B | [ ] | |
+| 8 | Fixed receiver registry + ticker | 3B | [x] `device/FixedDevice` (`requirement()`, `onSample(ServerLevel, BlockPos, DeviceContext)`); `block/FixedDeviceBlockEntity` (paths 1-2); `world/FixedReceiverRegistry` per dimension, keyed by `BlockPos.asLong()`, `ReceiverStateStore<Long>`, chunk load/unload paths (unload by position, not type), unregister by identity; `world/FixedReceiverTicker`: round robin under `fixedReceiverTickBudgetMs` (0.5, new), batches of 4 with the clock read between, rotating first dimension, at most once per interval, block-centre receiver, replay while the site version and every dependency bin are unchanged, its own stale-candidate threshold (interval + lag). Headless green (449 tests, 0 skipped; `runGameTestServer` 21/21, 4 new: 200 receivers 29-42 µs/tick in steady state). No device block yet, so no in-game check until slice 9; the two done-when items it feeds are [~] (below) | 02d1790; 62b54c7 (slice 7 game test fix); slice commit "Phase 3 slice 8: fixed receivers"; tracker "PHASE_3.md: record slice 8 commit hash" |
 | 9 | BlerModel + Radio Link | 3B | [ ] | |
 | 10 | Radio tiers + v3 migration | 3C | [ ] | |
 | 11 | MicrowaveLink + BackhaulGraph + tests | 3C | [ ] | |
@@ -497,6 +497,39 @@ Needs a human in game (`runClient`, meter detailed with a right-click, lens on L
 (A replay is by design indistinguishable from a fresh evaluation on screen, so "a block far away no
 longer invalidates" has no in-game check; it is verified headlessly and at runtime above.)
 
+## Slice 8 (fixed receivers) checks
+
+Headless (verified by `./gradlew build`, 449 tests, 0 skipped, and `./gradlew runGameTestServer`,
+21 of 21; details and numbers in NOTES.md, slice 8):
+
+- [x] `FixedDevice` has `requirement()` and `onSample(ServerLevel, BlockPos, DeviceContext)`; each device
+      gets its own verdict on the same sample (**at runtime**: POOR tier 1 OK, POOR tier 3 LOW_TIER).
+- [x] `FixedReceiverRegistry` is per dimension, keyed by `BlockPos.asLong()`, with a
+      `ReceiverStateStore<Long>`; registering is idempotent, unregistering is by identity and forgets
+      the handover state (`FixedReceiverRegistryTest`, 7).
+- [x] **At runtime** (`FixedReceiverGameTests`, real ticker on the real server tick): evaluated at the
+      block centre, then the same sample replayed exactly one interval later; a block change 500
+      blocks away keeps the replay; stone on the link path makes the next one fresh and it reads the
+      stone's loss; every dispatch exactly one interval apart; unregistered, nothing more.
+- [x] Round robin under `fixedReceiverTickBudgetMs` (0.5, `RanCraftConfig`): batches with the clock read
+      between, the first batch always runs, over budget the rest wait in order and carry their lag,
+      the first dimension rotates, at most once per interval, a staggered first turn
+      (`FixedReceiverTickerTest`, 13, fake clock).
+- [x] Its own stale-candidate threshold, `interval + lag` (the slice 4 follow-up): a budget overrun
+      keeps an armed candidate where the player threshold would drop it; a skipped turn drops it;
+      every gap on the real scheduler is exactly `interval + lag`.
+- [x] Lifecycle on all four paths, **at runtime**: `onLoad` registers and `setRemoved` unregisters
+      (a replaced entity's late removal keeps its successor); the chunk load event registers a device
+      entity; a real chunk unload drops it by position and the game's `setRemoved` follows; an unloaded
+      device hears nothing.
+- [x] Cost measured on the live server: 200 receivers in steady state 29-42 µs/tick (4 runs; replays
+      only, about 2 µs each with the dispatch), asserted under 100 µs; an interval with nothing cached
+      (every receiver evaluated once, as after any antenna change in the dimension) 200-390 µs/tick.
+- [x] No wire or save change (`PROTOCOL_VERSION` "6", `DATA_VERSION` 2); no block added.
+
+Needs a human in game: nothing yet. Slice 8 adds no device block; the Radio Link (slice 9) brings the
+first in-game checks of fixed receivers (place one, unload and reload its chunk, watch it resume).
+
 ## 3B done-when
 
 - [~] The nine-mast column reads as one cell, (0 co-channel), lobe at the top. *One registered cell
@@ -512,9 +545,17 @@ longer invalidates" has no in-game check; it is verified headlessly and at runti
       south and 150 blocks along the link, the snapshot the ticker keeps, and the march reading the
       same obstruction vs 12 dB more). The per-player ticker path itself runs only in game (the
       fake-connection follow-up); the in-game checks for slice 7 cover invalidation.*
-- [ ] 200 radio links on a quiet server cost < 0.1 ms/tick in steady state (measured).
+- [~] 200 radio links on a quiet server cost < 0.1 ms/tick in steady state (measured). *Slice 8: the
+      fixed-receiver ticker's part is measured and asserted at runtime, 200 receivers at 29-42
+      µs/tick in steady state (`FixedReceiverGameTests.two_hundred_receivers_in_steady_state`, devices
+      that only record). The Radio Link's own `onSample` work comes on top: slice 9 re-measures with
+      200 real radio links.*
 - [ ] A radio link drops updates at POOR and is solid at FAIR.
-- [ ] Unloading a chunk stops its fixed devices; reloading resumes them.
+- [~] Unloading a chunk stops its fixed devices; reloading resumes them. *Slice 8: unloading verified
+      at runtime with a real chunk unload (`chunk_load_registers_and_unload_stops_it`: dropped by the
+      unload event, entity removed, no more dispatches); the load path registers a device entity when
+      the load event is posted for its chunk. A real reload needs a real device block (the test entity
+      is saved as a chest): slice 9, with the Radio Link.*
 
 ## 3C done-when
 
@@ -723,8 +764,15 @@ centroid, so 7 × 16 + 1 = 113). (g)
   ticker path with a Locator is still only checked in game. Still open for slice 8.* *(Row 5a added
   a NeoForge `FakePlayer` built directly, not on the list and with a connection that sends nothing,
   to call `NetworkLocator.onSample`: that exercises a device's server step, not the ticker's
-  per-player path, so this stays open.)*
-- **[ ] Open, for slice 8 (from slice 4).** `staleCandidateGapTicks` is derived from the player
+  per-player path, so this stays open.)* *(Slice 8: fixed receivers need no player, so
+  `FixedReceiverGameTests` runs the real `FixedReceiverTicker` on the real server tick with no
+  connection at all. The per-player path of `SignalTicker` is still only checked in game; open.)*
+- **[x] Done in slice 8 (02d1790) (from slice 4).** *`FixedReceiverTicker.staleCandidateGapTicks(interval,
+  lag)` is the receiver's own gap, `interval + lag` (lag = server ticks it was served past its due
+  tick); `ReceiverStateStore.resume` is reused with it. A budget overrun keeps an armed candidate, a
+  skipped turn (chunk not FULL) drops it; `FixedReceiverTickerTest` pins both and checks on the real
+  scheduler that every gap is exactly `interval + lag`. NOTES.md slice 8, decision 1.*
+  `staleCandidateGapTicks` is derived from the player
   ticker's cadence (exactly one interval, guaranteed by the stagger). `FixedReceiverTicker` is
   round-robin under a time budget, "at most once per `evaluationIntervalTicks`", so its gaps can be
   longer while the budget is exhausted. Reuse `ReceiverStateStore.resume` with a threshold derived
@@ -846,7 +894,9 @@ centroid, so 7 × 16 + 1 = 113). (g)
   most of them but fires on every redstone update (a clock would keep its bin invalidated); a
   narrower option per source (`FluidPlaceBlockEvent` for fluid-made blocks, a chunk-section check)
   if one of them matters in play.
-- **[ ] Open, for slice 8 (from slice 7).** Fixed receivers get the region epochs for free: keep a
+- **[x] Done in slice 8 (02d1790) (from slice 7).** *`FixedReceiverTicker.Cached` keeps the snapshot
+  and `canReplay` checks it with the site registry version, no move check. The empty-dimension piston
+  corner stays, recorded in NOTES.md slice 8 (known behaviours).* Fixed receivers get the region epochs for free: keep a
   `RegionEpochs.Snapshot` of `evaluation.dependencyBins(RegionEpochs.BIN_SIZE)` per receiver and
   replay while `RegionEpochs.of(level).unchanged(snapshot)` and the site registry version hold (a
   block never moves, so no move check). One corner to know: in a dimension with no players and no
@@ -857,6 +907,37 @@ centroid, so 7 × 16 + 1 = 113). (g)
   crosses" is `BinTraversal.binsAlong(dishA.x, dishA.z, dishB.x, dishB.z, RegionEpochs.BIN_SIZE)` plus
   a `RegionEpochs.snapshot` / `unchanged`, exactly as the player cache does. Tree growth already
   bumps (above).
+
+- **[x] Decided in slice 8, spec vs tree, minor (NOTES.md, slice 8, decision 7).** §3B.3 says "NOTES.md
+  records that sector antennas once missed the chunk paths". The record is in
+  `SignalTicker.onChunkLoad`'s javadoc, not NOTES.md. No action beyond following the lesson: the
+  fixed receivers' unload path drops by position, with no type check at all.
+- **[ ] Open, for slice 9 (from slice 8).** Two 3B done-when items finish with the Radio Link:
+  (a) "reloading resumes them": add a game test that places a real Radio Link in a forced chunk,
+  releases the chunk, waits for the unload (registry empty for that chunk), loads it again and checks
+  that the load event registered it and the ticker serves it (slice 8's test entity borrows the chest
+  type and comes back as a chest); (b) re-measure "200 radio links < 0.1 ms/tick" with 200 real radio
+  links, whose `onSample` work comes on top of the 29-42 µs/tick measured for the ticker. Also: a
+  device placed by a command in a dimension whose block entities are not ticking (no player, no forced
+  chunk, over 300 ticks) registers only when they tick again (NeoForge defers `onLoad`; no chunk event
+  for a loaded chunk); the Radio Link blocks can close it by also registering from their server-side
+  `onPlace`.
+- **[ ] Open, decision for the owner (from slice 8).** A fixed receiver never moves, so slice 7's
+  event-less block changes (fluid flow above all: water is 15 dB; fire, leaf decay, falling blocks,
+  `/fill`, other mods) can leave its replayed sample stale indefinitely, where a player's ends when
+  they move half a block. Option: a maximum replay age (e.g. `fixedReceiverMaxReplayTicks`, a new
+  `RanCraftConfig` value not in §5), re-evaluating each receiver at least that often: at 600 ticks
+  about 200 x 25 µs / 600 ≈ 8 µs/tick for 200 receivers. Most relevant once the Radio Link exists
+  (slice 9).
+- **[ ] Open, minor (from slice 8).** The round robin scans every registered receiver's due tick every
+  tick: 8-12 µs/tick at 200 (40-60 ns each, loop and lock included), so the scan alone nears 0.1
+  ms/tick around 2,000 receivers. A timing wheel (one bucket per tick of the interval) would make the
+  cost proportional to the due receivers. Not needed at the done-when's scale.
+- **[ ] Open, note for slices 12 and 15 (from slice 8).** The replay key includes the dimension-wide
+  site registry version (§3B.2), so every antenna change, and every cell backhaul or power takes on
+  or off the air, re-evaluates every fixed receiver in the dimension once (one interval at 200-390
+  µs/tick for 200 receivers, within the budget). If a backhaul state flaps (rain fade), keep the
+  flips hysteretic so this stays occasional.
 
 ### Gate review findings (slices 2-5), checked against the code in row 5b
 

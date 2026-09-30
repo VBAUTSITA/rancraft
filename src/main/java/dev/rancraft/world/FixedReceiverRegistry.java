@@ -87,9 +87,10 @@ public final class FixedReceiverRegistry {
     /**
      * Server tick at which {@code order.get(i)} is next due, or {@link #UNSCHEDULED}; ticker only.
      * A primitive array beside the entries rather than a field in them, because the ticker looks at
-     * every receiver every tick to find the few that are due: reading a {@code long[]} front to back
-     * costs a few nanoseconds per receiver, while touching each entry object cost about 100 ns (cache
-     * misses, measured in the slice 8 game test: 20 µs per tick for 200 receivers).
+     * every receiver every tick to find the few that are due: with the due tick in each entry object
+     * the scan cost about 100 ns per receiver (cache misses; 20 µs per tick for 200 receivers in the
+     * slice 8 game test), with this array 8-12 µs per tick for 200, loop and lock included (NOTES.md,
+     * slice 8). The scan is still linear in the receivers registered, due or not.
      */
     private long[] due = new long[16];
     private final Long2ObjectOpenHashMap<LongOpenHashSet> byChunk = new Long2ObjectOpenHashMap<>();

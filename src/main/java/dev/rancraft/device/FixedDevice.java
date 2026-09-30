@@ -18,6 +18,11 @@ import net.minecraft.server.level.ServerLevel;
  * <p><b>Where it receives.</b> At the centre of its block. The ray march skips the receiver's own
  * voxel, so the device block never shadows itself.
  *
+ * <p><b>Honest label (NOTES.md, slice 8):</b> a fixed receiver hears the network exactly as a player's
+ * eye does, through the same 0 dBi receive antenna ({@code rf.RfMath}) and the same evaluation. A real
+ * fixed terminal (a rooftop CPE, a telemetry modem) usually has a directional antenna with gain and is
+ * mounted for line of sight; here height helps only by clearing obstruction, as for masts (slice 6).
+ *
  * <p><b>Replays.</b> A fixed receiver never moves, so while nothing along the rays of its last
  * evaluation changed (no block event in any of its dependency bins, {@code world.RegionEpochs}) and
  * no antenna changed, the ticker replays that evaluation instead of running a new one, and

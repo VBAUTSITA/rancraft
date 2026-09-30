@@ -66,7 +66,7 @@ public final class FixedReceiverTicker {
 
     /**
      * Receivers served between clock checks. Measured in a live level (NOTES.md, slice 8): a warm
-     * fresh evaluation of one short ray costs 23-47 µs, a replay about 2 µs with its dispatch, a clock
+     * fresh evaluation of one short ray costs 20-47 µs, a replay about 2 µs with its dispatch, a clock
      * read about 45 ns. So a tick overshoots its budget by at most four fresh evaluations (up to about
      * 190 µs; eight overshot by up to 690 µs in the first runs), and reading the clock every four
      * replays costs about half a percent of them.
