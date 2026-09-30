@@ -2931,7 +2931,7 @@ path, 150 blocks out in a bin that holds neither end, breaks it, and the march r
 Device blocks now get evaluations of their own, without a player. Nothing in the game uses it yet:
 the first fixed device, the Radio Link, is slice 9. Code checkpoint `02d1790`; a flaky slice 7 game
 test found while running this slice's game tests was fixed in `62b54c7`; this section, two javadoc
-corrections and the tracker are in the slice commit "Phase 3 slice 8: fixed receivers".
+corrections and the tracker are in the slice commit `7866ca9` "Phase 3 slice 8: fixed receivers".
 
 ### What was built
 
