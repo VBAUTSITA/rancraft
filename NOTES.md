@@ -196,7 +196,8 @@ Two types not in the spec's file layout had to exist because `RfEngine.evaluate`
   O(1) reference lookup the spec explicitly asked for.
 - **Unloaded chunks read as air.** `LevelWorldProbe` never force-loads. A mast in an unloaded chunk
   is absent from `SiteRegistry` and does not transmit, as the spec specifies.
-- **Block-change epoch is per dimension**, see the table above.
+- **Block-change epoch is per dimension**, see the table above. *(Replaced in Phase 3 slice 7 by
+  per-bin region epochs: a cached sample now watches only the 128-block bins its rays cross.)*
 - **Placeholder art.** The mast model and meter item reference vanilla textures
   (`minecraft:block/iron_block`, `minecraft:item/iron_ingot`) rather than shipping PNGs, so no art
   is blocking. Swap the `textures` blocks in
@@ -2679,3 +2680,248 @@ slice commit `5299fb4` "Phase 3 slice 6: mast columns".
 | `rf` / `util` purity | `PackagePurityTest` passes with `ColumnScan` in `util` |
 | `./gradlew runGameTestServer` | "13 tests are now running", "All 13 required tests passed" (8 new; the 5 existing unchanged); the scan-cost and census lines above are from that run |
 | In game | not run by the agent (no `runClient`); the checks are in `PHASE_3.md`, slice 6 |
+
+## Slice 7 — region block epochs (§3B.2)
+
+Closes §0 known problem 2: the block-change epoch was dimension-wide, so any block placed or broken
+anywhere in a dimension invalidated every cached sample in it. Now the cache watches only the
+128-block bins its evaluation's rays crossed. Code checkpoints `97489e6` and `e0383ee`; this section
+and the tracker in the slice commit "Phase 3 slice 7: region epochs".
+
+### What was built
+
+- **`rf/BinTraversal`** (pure). `binsAlong(x0, z0, x1, z1, binSize)` is a 2D Amanatides-Woo DDA over
+  bins: the bins a segment crosses, start bin first, each once, in ray order. Through a bin corner
+  (the two crossings within `CORNER_EPSILON` = 1e-9 in the ray parameter) it takes **both** side bins.
+  The start and end bins are always in. Keys pack x high and z low (the same packing as
+  `SiteRegistry`); also `keyOfBlock`, `binOf` (floor division), `union`, `sortedDistinct`. Its class
+  javadoc holds the correctness argument (below).
+- **`RfEngine.MarchedRay`** and **`RfEngine.Evaluation.marched`** (appended; the old four-component
+  constructor is kept). Every ray the engine marched, in march order, whether or not its cell ended
+  up heard. `Evaluation.dependencyBins(binSize)` is the union of `binsAlong` over those rays. The
+  engine stays bin-agnostic: the caller passes the bin size.
+- **`world/RegionEpochs`**, one per dimension: a `Long2LongOpenHashMap` from bin key to epoch plus
+  `total()`, the sum of every bin's epoch. `snapshot(bins)` records the current epochs of a
+  dependency set, `unchanged(snapshot)` checks them. It owns the block-event listeners (moved out of
+  `SignalTicker`):
+  - `BlockEvent.BreakEvent` and `BlockEvent.EntityPlaceEvent`: the block's bin. A multi-block
+    placement (`EntityMultiPlaceEvent`, a bed or a door, delivered to the superclass listener by the
+    event bus) bumps the bin of every block it placed.
+  - `ExplosionEvent.Detonate`: the bin of every block on the explosion's list, and the centre's.
+  - `PistonEvent.Pre`: every bin within 14 blocks in x and z (12 pushed blocks, one gap for a sticky
+    pull, one step), at once and again 4 game ticks later (see decision 4).
+  - `BlockGrowFeatureEvent` (a sapling grows into a tree, a mushroom or fungus into a huge one):
+    every bin within 16 blocks. Beyond §3B.2's list (decision 6).
+  - `LevelTickEvent.Post` runs a dimension's due piston bumps after it has ticked, so they land before
+    the ticker evaluates at the end of the server tick.
+- **`SignalTicker`**: `Cached` keeps a `RegionEpochs.Snapshot dependencies` instead of the long
+  `blockEpoch`. `canReplay` (still the only place the cache decision is made) now requires the site
+  registry version unchanged, every dependency bin's epoch unchanged and the eye moved less than 0.5
+  blocks, plus, unchanged, caching on, no armed candidate, and links not starved. After a fresh
+  evaluation the ticker snapshots `evaluation.dependencyBins(RegionEpochs.BIN_SIZE)`.
+  `blockEpochOf(level)` now returns `RegionEpochs.total()`, so `CoverageSurveyor` is untouched (no
+  diff). Server stop clears the epochs with the caches.
+- **`gametest/RegionEpochGameTests`** (4 game tests, each in its own batch).
+
+### Why the dependency set is exact, not an approximation (the non-obvious part)
+
+This argument is in `BinTraversal`'s class javadoc, with pointers from `RfEngine`, `RegionEpochs`
+and `SignalTicker.Cached`:
+
+1. An evaluation reads the world in one place only: the voxel march of each cell it decided to
+   march.
+2. **Which cells are marched cannot change with blocks.** They are chosen by the distance filter,
+   then by the optimistic RSRP (`Tx + gain - PL(d)`, zero obstruction), then by the
+   `maxCellsEvaluated` cap applied in that optimistic order. None of the three reads a block.
+3. **Cells that were not marched cannot be revived by any block change.** A cell pruned by the
+   budget could not be heard even through open air, and removing blocks only brings the loss down
+   towards that open-air value. A cell cut by the cap loses a ranking no block enters.
+4. So, for a fixed receiver point and fixed cells, the result depends on the world only through the
+   voxels of the marched rays, and every such voxel lies in a bin `binsAlong` returns for its ray
+   (same line, same crossing parameters; both side bins at a corner). A block change in any other
+   bin cannot change the result.
+
+The other inputs are keyed separately: the cells (site registry version) and the receiver point (the
+0.5-block move). A ray that stopped early (a wall above `maxObstructionDb`, or the step cap) still
+lists the bins past the stop: a superset, so at worst a needless re-evaluation. A marched cell that
+ended unheard is still a dependency, because removing its wall would bring it back (pinned by
+`RfEngineDependencyTest.unheardMarchedCellIsADependency`).
+
+### Where each part of §3B.2 lives
+
+| §3B.2 | Where | Pinned by |
+|---|---|---|
+| Per-bin counters, `SiteRegistry.BIN_SIZE` (128) bins | `RegionEpochs` (`BIN_SIZE = SiteRegistry.BIN_SIZE`) | `RegionEpochsTest.binSize`, `.bumpIsLocal` |
+| Break / EntityPlace bump the block's bin | `RegionEpochs.onBlockBroken`, `.onBlockPlaced` | game test `placing_breaking_and_growth_bump_their_bin_only` (a mock player's real placement, a bed, a posted break) |
+| Explosion.Detonate bumps every affected bin | `RegionEpochs.onExplosion`, `explosionBins` | `RegionEpochsTest.explosionBins`; game test `an_explosion_bumps_its_bin` |
+| Piston moves bump | `RegionEpochs.onPistonMove` (`PistonEvent.Pre`), `pistonBins`, the deferred bump | `RegionEpochsTest.pistonBins`, `.pistonBumpsTwice`; game test `a_piston_bumps_now_and_after_the_blocks_settle` (exactly two bumps, the stone landed) |
+| `BinTraversal.binsAlong`, pure, tested | `rf/BinTraversal` | `BinTraversalTest` (axis-aligned, diagonal, negative coordinates, same bin, plus containment in the real `RayMarcher`) |
+| Dependency set = union of bins along every marched ray | `RfEngine.Evaluation.marched`, `.dependencyBins` | `RfEngineDependencyTest` |
+| The argument in the class javadoc | `BinTraversal` | review |
+| Cache validity: site version, every dependency bin, not moved | `SignalTicker.canReplay` / `Cached.isCurrent` | `SignalTickerCacheTest` (14) |
+| A dimension-wide sum for `CoverageSurveyor` | `RegionEpochs.total()` via `SignalTicker.blockEpochOf` | `SignalTickerCacheTest.otherBinsAreNotKeys` (the sum moves on every bump); `CoverageSurveyor.java` has no diff |
+| Record the remaining gaps | `RegionEpochs` class javadoc; below | — |
+
+### Deviations and decisions
+
+1. **The dependency set is computed from the marched rays' endpoints with `binsAlong`, not recorded
+   from the voxels the probe actually read.** The spec asks for "the union of bins along every ray
+   it actually marched" and a pure `binsAlong`; recording probed voxels would be slightly tighter
+   (it would drop bins past an early exit) but would put bin bookkeeping in the per-voxel hot path.
+   `BinTraversalTest.randomRaysMatchTheVoxelMarch` checks, on 1,200 random rays at three bin sizes,
+   that the two agree exactly apart from the two end bins (the marcher skips the antenna's and the
+   receiver's own voxels), and `cornerRaysAreCovered` checks containment on 2,250 rays through exact
+   bin corners.
+2. **Both side bins at a corner.** Where a ray passes (within rounding) exactly through a bin
+   corner, the voxel march steps one axis first, and a rounding difference could make it the other.
+   Taking both is exact whichever it picks. The window (1e-9 in the ray parameter) is about 1.4e-6
+   blocks on a 1400-block ray and thousands of times the rounding either march accumulates.
+3. **`RfEngine.Evaluation` gains a component** (`marched`, appended; the old constructor stays). The
+   engine records a small record per marched ray and knows nothing of bins. `Cached` (package-private
+   in `world`, never sent or saved) replaced its `blockEpoch` with `dependencies`. **No version bump**:
+   no payload, update tag or saved field changed, so `PROTOCOL_VERSION` stays "6" and `DATA_VERSION` 2.
+4. **Pistons bump twice: at `PistonEvent.Pre` and 4 game ticks later.** The moved blocks spend two
+   ticks as `moving_piston`, which is `noOcclusion()` and so 0 dB, and then become themselves again
+   with no event (`PistonMovingBlockEntity.tick`: progress 0.5 per tick, the block placed on the tick
+   after 1.0; the piston's block event runs before block entities tick, so a move started at T is done
+   by T + 2). Without the second bump an evaluation during the move would stay cached with the wall
+   missing. `Pre` rather than `Post`: it fires for extension and retraction before anything moves,
+   and a later listener's cancel leaves only a needless bump. The bins are the box within 14 blocks
+   of the piston rather than `PistonStructureResolver`'s exact list: no re-resolve, and slime or honey
+   side branches are covered; it is one bin unless the piston is within 14 blocks of a bin edge.
+5. **Every listener bumps whether or not a later listener cancels the event**, as the per-dimension
+   epoch did: a needless re-evaluation, never a stale sample.
+6. **Tree growth bumps too (`BlockGrowFeatureEvent`, beyond §3B.2's list).** A tree grown into a link
+   path is the change slice 12's headline test is about ("a tree grown into a microwave path takes
+   three cells off the air"), logs are 4 dB and leaves 1 dB, and the event fires just before the
+   feature is placed, in the same call. Every bin within 16 blocks of the sapling, a generous bound
+   (vanilla's widest canopies, the 2x2 trees and fancy oak, reach a few blocks past the trunk).
+7. **Explosions also bump the centre's bin**, so an explosion that broke nothing (interaction NONE,
+   an empty list) still counts. Harmless and makes the listener testable without breaking blocks.
+8. **The dimension-wide sum now also moves on explosions, pistons and tree growth**, so a coverage
+   painting is also redone after those (still no sooner than `coverageMinIntervalTicks`). That is a
+   correctness gain for the painting; `CoverageSurveyor` itself is unchanged.
+
+### Gaps that remain (a cached sample is not invalidated by these)
+
+Recorded in the `RegionEpochs` class javadoc. None has an event in this slice; the same gaps
+existed with the per-dimension epoch:
+
+- **Fluid flow.** Water is 15 dB (`attenuation.json`), so water spreading into or draining out of a
+  link path is the most noticeable gap.
+- **Fire** spread and burn-out: fire itself is 0 dB (non-occluding), but it removes planks (4 dB),
+  logs (4 dB) and leaves.
+- **Leaf decay** (1 dB), crop and vine growth, grass and mycelium spreading, farmland trampling.
+- **Falling sand and gravel** (6 dB), ice forming and melting, snow layers, frosted ice.
+- **Mob griefing** other than explosions (an enderman picking up or placing a block).
+- **Commands** (`/setblock`, `/fill`, `/clone`) and other mods writing blocks directly.
+- **A piston fired in a dimension with no players and no forced chunks for over 300 ticks.** Block
+  events still run there but block entities stop ticking (`ServerLevel.tick`: `tickBlockEntities` sits
+  inside the `emptyTime < 300` guard), so the moved blocks settle when a player returns, after the
+  deferred bump. Players' caches are cleared on a dimension change anyway; slice 8's fixed receivers
+  in such a dimension could replay a sample that saw the blocks mid-move.
+
+A cached sample is corrected by the next event in any of its bins, the next antenna change, or the
+receiver moving half a block. A catch-all exists (`BlockEvent.NeighborNotifyEvent`, fired from
+`Level.updateNeighborsAt` for most block updates), but it fires on every redstone update, so a
+redstone clock would keep its bin invalidated permanently; not used.
+
+Unchanged from before, and not block changes: a `/reload` of the material or band tables and a live
+config change do not invalidate cached samples (they are not in the cache key).
+
+### Honest-abstraction notes (also at the code sites)
+
+- **The dependency set is exact for the evaluation it belongs to** (`BinTraversal` javadoc): not a
+  heuristic radius. What is incomplete is the list of change *sources* (the gaps above), labelled in
+  the `RegionEpochs` javadoc.
+- **The replayed sample is the evaluation at the cached point** (`SignalTicker.Cached`): the 0.5-block
+  move rule is the one approximation in the cache, unchanged since Phase 1. The dependency bins are
+  those of the cached point's rays; a player 0.4 blocks away across a bin edge replays the sample of
+  where they were.
+- **Bins are a cache granularity, not an RF concept** (`RegionEpochs` javadoc). Nothing about
+  propagation changed: a replay is bit-for-bit the evaluation a fresh one would produce.
+
+### Measured
+
+From `RegionEpochGameTests.far_block_keeps_the_cache_link_path_block_does_not`, 12 cells between 100
+and 1300 blocks round the receiver on live ground (unloaded chunks read as air), 2,000 repetitions
+after a warm-up, three `runGameTestServer` runs (test positions differ per run):
+
+| | run 1 | run 2 | run 3 |
+|---|---|---|---|
+| rays marched (the other 6 cells pruned by the budget, beyond about 700 blocks) | 6 | 6 | 6 |
+| dependency bins | 17 | 19 | 19 |
+| one evaluation (for scale) | 91.5 µs | 53.1 µs | 61.1 µs |
+| `dependencyBins` (per fresh evaluation) | 6.07 µs | 3.13 µs | 2.56 µs |
+| `snapshot` (per fresh evaluation) | 1.11 µs | 0.50 µs | 0.50 µs |
+| replay check `unchanged` (per replay) | 0.45 µs | 0.39 µs | 0.35 µs |
+
+So a fresh evaluation costs about 3-7 µs more (5-8 % of an evaluation in open air, less where
+chunks are loaded and the march reads real blocks), and a replay's block check costs under half a
+microsecond instead of nothing, in exchange for replays surviving every block change away from the
+link paths. Memory: one `long` per bin ever bumped per dimension (a 10,000 x 10,000-block explored
+area is at most about 6,100 bins) plus the queued piston bumps (4 ticks each).
+
+On the 3B done-when (verified headlessly and at runtime): a block placed 500 blocks from the receiver
+leaves the snapshot unchanged and the march reads the same obstruction; stone placed on the link
+path, 150 blocks out in a bin that holds neither end, breaks it, and the march reads 12 dB more.
+
+### Tests
+
+- `BinTraversalTest` (10, new): axis-aligned (both directions, both axes, one block across an edge);
+  diagonal (a generic slope, exactly through a corner both ways, near a corner); negative coordinates
+  (floor division, across zero, -128 vs -129); same bin (incl. zero length); key packing (matches
+  `SiteRegistry`); union and `sortedDistinct`; refusals; a 1400-block ray is short; random rays match
+  the voxel march exactly (bar the end bins) at bin sizes 128, 16 and 5; corner rays at ten slopes
+  are covered whichever axis the march steps first.
+- `RfEngineDependencyTest` (6, new): **a pruned cell contributes no bins**, asserted with a counting
+  probe (it reads no voxel in the pruned cell's bins, and every voxel it reads is in a dependency
+  bin); a cell cut by `maxCellsEvaluated` contributes none either; open air and a world of walls
+  march the same rays; a marched but unheard cell is a dependency; nothing marched, nothing
+  depended on; the ray endpoints are the march's.
+- `RegionEpochsTest` (11, new): the bin size, local bumps and the sum, distinct multi-bin bumps, the
+  snapshot watches its bins only, the empty snapshot, snapshot copies, piston bins (1 in the middle,
+  4 at a corner), the piston's two bumps, the settle margin, tree-growth bins, explosion bins.
+- `SignalTickerCacheTest` (10 → 14): the epoch test became "a block change in any dependency bin
+  re-evaluates", plus "a block change outside every dependency bin does not (the old epoch would
+  have)", "nothing marched: no dependency", and the 3B done-when on a real engine evaluation (a mast
+  300 blocks away: 500 blocks off keeps the entry, the middle bin of the link path invalidates it).
+  Every other condition of `canReplay` is pinned exactly as in slice 4.
+- `RegionEpochGameTests` (4 game tests, new, one batch each): the done-when on live ground (a mock
+  player places the stone through NeoForge's placement hook, far chunks loaded first, removed after,
+  plus the cost measurement); placement, a bed (the multi-block event), a posted break and a posted
+  tree growth each bump the block's bin once and a bin 500 blocks away never moves; an explosion
+  bumps its bin; a piston bumps exactly twice and the stone lands.
+
+### APIs verified against sources (new to this codebase)
+
+- `ExplosionEvent.Detonate.getAffectedBlocks()` (= `Explosion.getToBlow()`), `getExplosion()`,
+  `Explosion.center()`; fired from `Explosion.explode()` before `finalizeExplosion` removes the blocks
+  (NeoForge 21.1.251 and 1.21.1 patched sources).
+- `PistonEvent.Pre` / `Post`, `getPos`, `getDirection`, `getLevel` (a `LevelAccessor`); `Pre` is
+  posted from `PistonBaseBlock.triggerEvent` for both extension (type 0) and retraction (types 1-2)
+  before any block moves; `PistonStructureResolver.MAX_PUSH_DEPTH` = 12;
+  `PistonMovingBlockEntity.tick` (0.5 per tick, placed on the tick after reaching 1.0);
+  `Blocks.MOVING_PISTON` is `noOcclusion()`.
+- `BlockEvent.EntityMultiPlaceEvent` extends `EntityPlaceEvent`; `getReplacedBlockSnapshots()`,
+  `BlockSnapshot.getPos()`. The event bus (`bus` 8.0.5 `ListenerList`) links a subclass's listener
+  list to its parent's, so an `EntityPlaceEvent` listener receives the multi-block event. Placement
+  fires them from `CommonHooks.onPlaceItemIntoWorld` (called by `ItemStack.useOn` on the server).
+- `BlockGrowFeatureEvent` (`getPos`, `getLevel`), fired by `TreeGrower`, `MushroomBlock` and
+  `FungusBlock` just before the feature is placed.
+- `LevelTickEvent.Post` (after the level's own tick, before `ServerTickEvent.Post`); `ServerLevel.tick`
+  runs block events before block entities, and block entities only while players are present, a
+  chunk is forced, or for 300 ticks after.
+- GameTest: `GameTestHelper.makeMockPlayer`, `UseOnContext(Player, InteractionHand, BlockHitResult)`
+  (reads the item from the player's hand), `Level.explode(Entity, x, y, z, float,
+  ExplosionInteraction)`, `GameTestServer` uses the flat preset (cheap far chunks), `level.random`.
+
+### Verification
+
+| Check | Result |
+|---|---|
+| `./gradlew build` | **429 passed, 0 failed, 0 skipped** (398 + 10 + 6 + 11 + 4) |
+| `rf` / `util` purity | `PackagePurityTest` passes with `BinTraversal` in `rf` |
+| `./gradlew runGameTestServer` | "17 tests are now running", "All 17 required tests passed" (4 new in 4 batches of their own; the 13 existing unchanged); the cost lines above are from these runs |
+| `CoverageSurveyor.java` | no diff |
+| In game | not run by the agent (no `runClient`); the checks are in `PHASE_3.md`, slice 7 |

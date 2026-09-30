@@ -52,7 +52,7 @@ Legend: `[x]` done and verified · `[~]` partly done / needs a manual in-game ch
 | 5a | Phase 3A review round 1: fixes (11 reported; 9 confirmed and fixed, 7 distinct; 2 rejected) | 3A | [~] Locator counts sites, not cells (`locatorSiteMergeBlocks` 3.0; wrong-mirror FIX 921/2000 → 0, triangle ± 6.45 vs rms 10.21 → 10.42 vs 10.44); drive-test "stationary" measured from the still period's start; solver prior only while fresh; client drops the reading when no Locator is held, learns the stale limit from the payload cadence, uses the server's scale for a waypoint's ± or none; a dead player's Locator verified inert at runtime. Headless green (382 tests, 0 skipped; `runGameTestServer` 5/5); in-game checks below; spec conflict in follow-ups | 5221c46; 62fef10; 2f1306f; a755f7f; docs a998f3f; tracker c54e86f |
 | 5b | Phase 3A docs and tracker: gate findings closed or logged, summary, in-game checklist | 3A | [x] the gate reviews' open findings checked against the code: two abstractions labelled at their code sites (stale candidate, device measures only while carried) plus two more NOTES.md claimed were there (slant σ, near-collinear towers); worst-case ground lookups per fix corrected 105 → 113 (7 × 16 + 1) in the game test and the docs; the near-collinear wrong-side FIX measured (32 % at 10 blocks off the line) and logged open; the review round's 2 rejected findings recorded; every follow-up marked done or open; NOTES.md "Phase 3A summary"; VISION_STEP3.md Part 3a; README; "How to test Part 3A in game" at the end of this file, its numbers checked against the solver with a scratch program. Headless green (382 tests, 0 skipped; `runGameTestServer` 5/5 after part 1) | 0482a74; docs 2cc912f; tracker "PHASE_3.md, NOTES.md: record the Phase 3A docs commit hash" |
 | 6 | ColumnScan + mast columns + lens column/on-air | 3B | [~] `util/ColumnScan` (pure, 12 tests); a contiguous mast column is one cell owned by its base (`cellId = base.asLong()`), radiating from `top.above()`, structure never registers, a sector on the highest mast silences it, any powered mast powers it, `maxMastHeight` 64 caps the signal part; re-scan on `updateShape`/`neighborChanged` refreshes only the mast and the base; fresh PCI plan on promotion; `OnAir` in the update tag (not saved), lens draws one lobe per cell at the top and greys off-air cells; one census log line; `PROTOCOL_VERSION` 6. Headless green (398 tests, 0 skipped; `runGameTestServer` 13/13, 8 new: 624 ns per nine-mast scan); in-game checks below; three recorded deviations in follow-ups | 703c3a1; 5299fb4; tracker "PHASE_3.md, NOTES.md: record slice 6 commit hash" |
-| 7 | BinTraversal + region epochs + cache rework | 3B | [ ] | |
+| 7 | BinTraversal + region epochs + cache rework | 3B | [~] `rf/BinTraversal` (pure 2D DDA over bins, both side bins through a corner; the correctness argument in its javadoc); `RfEngine.Evaluation.marched` (appended) and `dependencyBins`; `world/RegionEpochs`: per-bin (128) epochs bumped by break/place (multi-block too), explosions, pistons (at once and after the blocks settle) and tree growth, plus the dimension-wide sum (`CoverageSurveyor` untouched); `canReplay`'s epoch condition is now "every dependency bin unchanged", the rest unchanged; no version bump. Headless green (429 tests, 0 skipped; `runGameTestServer` 17/17, 4 new: a block 500 blocks away keeps the cache, one on the link path does not; +3-7 µs per fresh evaluation, 0.4 µs per replay check); in-game checks below; gaps recorded in follow-ups | 97489e6; e0383ee; docs "Phase 3 slice 7: region epochs" |
 | 8 | Fixed receiver registry + ticker | 3B | [ ] | |
 | 9 | BlerModel + Radio Link | 3B | [ ] | |
 | 10 | Radio tiers + v3 migration | 3C | [ ] | |
@@ -447,6 +447,56 @@ with a right-click):
       lobe above the 64th mast, no frame-rate drop; add masts above it: the lobe stays at the 64th
       (the cap); a sector on the very top still silences it.
 
+## Slice 7 (region epochs) checks
+
+Headless (verified by `./gradlew build`, 429 tests, 0 skipped, and `./gradlew runGameTestServer`,
+17 of 17; details and numbers in NOTES.md, slice 7):
+
+- [x] `BinTraversal.binsAlong(x0, z0, x1, z1, binSize)` is pure (in `rf`, `PackagePurityTest` green)
+      and pinned: axis-aligned, diagonal, negative coordinates, start and end in the same bin
+      (`BinTraversalTest`, 10). On 1,200 random rays it returns exactly the bins of the voxels
+      `RayMarcher` reads plus the two end bins; on 2,250 rays through exact bin corners it covers
+      every voxel read whichever axis the march steps first.
+- [x] The dependency set is the union of bins along every marched ray
+      (`RfEngine.Evaluation.dependencyBins`). **A pruned cell contributes no bins**, asserted with a
+      counting probe (no voxel read in its bins); nor does a cell cut by `maxCellsEvaluated`; open air
+      and a world of walls march the same rays; a marched cell that ends unheard is still a
+      dependency (`RfEngineDependencyTest`, 6).
+- [x] The correctness argument (marched cells chosen with no obstruction term; pruned cells cannot
+      be revived by any block change) is in `BinTraversal`'s class javadoc, pointed to from
+      `RfEngine`, `RegionEpochs` and `SignalTicker.Cached`.
+- [x] `canReplay` is still the single cache decision: site registry version unchanged **and** every
+      dependency bin's epoch unchanged **and** moved less than 0.5 blocks, plus the unchanged
+      conditions (caching on, no armed candidate, links not starved), all pinned
+      (`SignalTickerCacheTest`, 14).
+- [x] **At runtime**: a mock player's real placement bumps the block's bin once, a bed (the
+      multi-block event) and a posted break and tree growth once each, and a bin 500 blocks away never
+      moves; an explosion bumps its bin; a piston bumps exactly twice, at once and after the stone
+      lands (`RegionEpochGameTests`).
+- [x] The dimension-wide sum (`SignalTicker.blockEpochOf` = `RegionEpochs.total()`) moves on every
+      bump, so `CoverageSurveyor` works with no diff.
+- [x] Cost measured: +2.6 to 6.1 µs for the dependency bins and 0.5 to 1.1 µs for the snapshot per
+      fresh evaluation (6 rays, 17-19 bins; the evaluation itself 53-92 µs in open air), 0.35 to 0.45
+      µs per replay check.
+- [x] No wire or save change: `PROTOCOL_VERSION` stays "6", `DATA_VERSION` 2.
+
+Needs a human in game (`runClient`, meter detailed with a right-click, lens on LINKS):
+
+- [~] Stand still about 40 blocks from a Signal Mast in open ground with the meter held. Place a row
+      of stone on the link (the lens line shows where): within a second the meter's RSRP drops and
+      the line reddens at the stone. Break it: back within a second. (Unchanged behaviour; this
+      checks the new key still invalidates what it must.)
+- [~] Same spot: light TNT on the link path (away from the mast), or let a creeper blow a hole in
+      a wall on the path: the reading changes within a second of the explosion. Before slice 7 it
+      could stay until you moved (explosions bumped nothing).
+- [~] Same spot: a piston pushing a stone block into the link path (lever-powered): within about a
+      second the reading shows the stone, and it stays showing it (it does not stay at the clear
+      reading taken while the block was moving). Retract: clear again. Before slice 7 neither
+      invalidated anything.
+
+(A replay is by design indistinguishable from a fresh evaluation on screen, so "a block far away no
+longer invalidates" has no in-game check; it is verified headlessly and at runtime above.)
+
 ## 3B done-when
 
 - [~] The nine-mast column reads as one cell, (0 co-channel), lobe at the top. *One registered cell
@@ -454,7 +504,14 @@ with a right-click):
       co-channel)" and the lobe need the client (slice 6 in-game checks, first item).*
 - [x] Adding a mast to the top of a column keeps its PCI. *Verified at runtime in a live server
       level: same cell id and PCI, radiating point up one (`extending_keeps_id_and_pci`).*
-- [ ] A block placed 500 blocks away no longer invalidates a cached sample; one on the link path does.
+- [x] A block placed 500 blocks away no longer invalidates a cached sample; one on the link path does.
+      *Verified headlessly on a real engine evaluation through `canReplay`
+      (`SignalTickerCacheTest.farBlockKeepsTheCacheLinkPathBlockDoesNot`: a mast 300 blocks away, a
+      block 500 blocks off keeps the entry, one in the link's middle bin invalidates it) and at
+      runtime in a live level (`RegionEpochGameTests`: a mock player's real placements 500 blocks
+      south and 150 blocks along the link, the snapshot the ticker keeps, and the march reading the
+      same obstruction vs 12 dB more). The per-player ticker path itself runs only in game (the
+      fake-connection follow-up); the in-game checks for slice 7 cover invalidation.*
 - [ ] 200 radio links on a quiet server cost < 0.1 ms/tick in steady state (measured).
 - [ ] A radio link drops updates at POOR and is solid at FAIR.
 - [ ] Unloading a chunk stops its fixed devices; reloading resumes them.
@@ -673,10 +730,12 @@ centroid, so 7 × 16 + 1 = 113). (g)
   longer while the budget is exhausted. Reuse `ReceiverStateStore.resume` with a threshold derived
   from that ticker's own worst case, or a budget overrun will be read as a pause and delay handovers
   (by at most one TTT each time).
-- **[ ] Open, for slice 7 (from slice 4).** `SignalTicker.canReplay` is now the single place the cache
+- **[x] Done in slice 7 (from slice 4).** `SignalTicker.canReplay` is now the single place the cache
   decision is made, and `SignalTickerCacheTest` pins every current condition. The region-epoch rework
   (§3B.2) replaces the `epoch` condition there; keep the rest, including the armed-candidate skip and
-  "never starve links".
+  "never starve links". *(Slice 7: the epoch condition is now "every dependency bin's epoch
+  unchanged" (`Cached.isCurrent` via `RegionEpochs.unchanged`); every other condition is untouched and
+  still pinned, 10 → 14 tests.)*
 - **[x] Accepted, minor (from slice 4); no action.** A live change of `evaluationIntervalTicks` re-phases the stagger:
   the first gap after it can reach `old + new - gcd(old, new)` ticks, so an armed candidate may be
   dropped once and re-armed (a handover delayed by at most one TTT, never early). Pinned by
@@ -769,6 +828,35 @@ centroid, so 7 × 16 + 1 = 113). (g)
   and power (§3C.5) should feed `isTransmitting()` (or the mast's column rule) and call
   `refreshRegistration()`, not write the flag directly, so the registry and the lens cannot disagree.
   For a column, only the base's entity matters.
+
+- **[x] Decided in slice 7 (NOTES.md, slice 7, decision 1).** The dependency set is the union of
+  `BinTraversal.binsAlong` over the marched rays' endpoints, as §3B.2 words it, not the bins of the
+  voxels the probe actually read. It can include bins past an early exit (a needless re-evaluation,
+  never a stale sample); the random-ray test shows the two agree exactly otherwise. Both side bins are
+  taken where a ray passes through a bin corner.
+- **[x] Decided in slice 7, beyond the spec (NOTES.md, slice 7, decisions 4 and 6).** Pistons bump
+  twice, at `PistonEvent.Pre` and 4 game ticks later, because the moved blocks spend two ticks as
+  0 dB `moving_piston` and land with no event. Tree growth (`BlockGrowFeatureEvent`) also bumps
+  every bin within 16 blocks: §3B.2 does not list it, but slice 12's "tree grown into a link path"
+  needs it.
+- **[ ] Open (from slice 7).** Block changes with no event still do not invalidate a cached sample:
+  fluid flow (water is 15 dB, the biggest one), fire spread and burn-out, leaf decay, falling sand
+  and gravel, ice and snow, an enderman moving a block, `/setblock` / `/fill` / `/clone`, other mods.
+  The same gaps existed with the per-dimension epoch. `BlockEvent.NeighborNotifyEvent` would catch
+  most of them but fires on every redstone update (a clock would keep its bin invalidated); a
+  narrower option per source (`FluidPlaceBlockEvent` for fluid-made blocks, a chunk-section check)
+  if one of them matters in play.
+- **[ ] Open, for slice 8 (from slice 7).** Fixed receivers get the region epochs for free: keep a
+  `RegionEpochs.Snapshot` of `evaluation.dependencyBins(RegionEpochs.BIN_SIZE)` per receiver and
+  replay while `RegionEpochs.of(level).unchanged(snapshot)` and the site registry version hold (a
+  block never moves, so no move check). One corner to know: in a dimension with no players and no
+  forced chunk for over 300 ticks, block entities stop ticking, so a piston's moved blocks settle
+  only when a player returns, after the deferred bump; a fixed receiver there could replay a sample
+  taken mid-move until the next event in its bins.
+- **[ ] Open, note for slice 12 (from slice 7).** §3C.2's "a region epoch moves on any bin a link
+  crosses" is `BinTraversal.binsAlong(dishA.x, dishA.z, dishB.x, dishB.z, RegionEpochs.BIN_SIZE)` plus
+  a `RegionEpochs.snapshot` / `unchanged`, exactly as the player cache does. Tree growth already
+  bumps (above).
 
 ### Gate review findings (slices 2-5), checked against the code in row 5b
 
