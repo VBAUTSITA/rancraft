@@ -16,6 +16,9 @@ package dev.rancraft.rf;
  * the {@code RfConfig} its context already carries. {@code locatorEmergencyMaxAgeTicks} is <em>not</em>
  * here: it is gameplay for the game-side emergency record and no {@code rf} code reads it, so it
  * stays in the mod config only, as the lens settings do.
+ *
+ * <p>The Phase 3A review (round 1) appends {@code locatorSiteMergeBlocks}: which antennas count as
+ * one site for positioning ({@link LocatorParams#siteMergeBlocks()}).
  */
 public record RfConfig(
         double metersPerBlock,
@@ -40,7 +43,9 @@ public record RfConfig(
         double locatorMinRsrpDbm,
         int locatorMaxCells,
         double locatorMaxHdop,
-        double nlosBiasBlocksPerDb
+        double nlosBiasBlocksPerDb,
+        // ---- Phase 3A review, round 1: sites for positioning ----
+        double locatorSiteMergeBlocks
 ) {
     public static final RfConfig DEFAULTS = new RfConfig(
             1.0,
@@ -69,7 +74,8 @@ public record RfConfig(
             LocatorParams.DEFAULT_MIN_RSRP_DBM,
             LocatorParams.DEFAULT_MAX_CELLS,
             LocatorParams.DEFAULT_MAX_HDOP,
-            LocatorParams.DEFAULT_NLOS_BIAS_BLOCKS_PER_DB);
+            LocatorParams.DEFAULT_NLOS_BIAS_BLOCKS_PER_DB,
+            LocatorParams.DEFAULT_SITE_MERGE_BLOCKS);
 
     public SinrCalculator.SinrParams sinrParams() {
         return new SinrCalculator.SinrParams(
@@ -85,6 +91,7 @@ public record RfConfig(
     }
 
     public LocatorParams locatorParams() {
-        return new LocatorParams(locatorMinRsrpDbm, locatorMaxCells, locatorMaxHdop, nlosBiasBlocksPerDb);
+        return new LocatorParams(locatorMinRsrpDbm, locatorMaxCells, locatorMaxHdop, nlosBiasBlocksPerDb,
+                locatorSiteMergeBlocks);
     }
 }

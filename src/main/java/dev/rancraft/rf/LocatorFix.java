@@ -52,7 +52,8 @@ public sealed interface LocatorFix {
      *
      * @param hdop      the horizontal dilution of precision, capped at
      *                  {@link LocatorSolver#HDOP_CEILING}; a singular geometry reports the ceiling.
-     * @param cellsUsed cells that went into the attempt.
+     * @param cellsUsed sites that went into the attempt, one range each (co-sited sectors count once;
+     *                  {@link LocatorSolver#siteRepresentatives}).
      */
     record PoorGeometry(double hdop, int cellsUsed) implements LocatorFix {
     }
@@ -70,7 +71,8 @@ public sealed interface LocatorFix {
      *                    cell has the same sigma). <b>A reported uncertainty, not a guarantee</b>: it
      *                    covers the random quantisation error only. The NLOS bias is systematic and is
      *                    not in it, so behind terrain the true error can be larger.
-     * @param cellsUsed   cells that went into the fit.
+     * @param cellsUsed   sites that went into the fit, one range each (co-sited sectors count once;
+     *                    {@link LocatorSolver#siteRepresentatives}).
      */
     record Fix(double x, double y, double z, double hdop, double errorBlocks, int cellsUsed)
             implements LocatorFix {

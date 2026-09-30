@@ -384,6 +384,169 @@ class LocatorSolverTest {
         assertEquals(List.of(), LocatorSolver.cellsUsed(List.of(), LocatorParams.DEFAULTS));
     }
 
+    // ---- Sites, not cells (Phase 3A review, round 1) -------------------------------------------
+
+    /**
+     * Where the sectors of a three-sector site sit, round a mast column at (mx, mz): each sector is
+     * its own block and its own cell (NOTES.md, Phase 2 "Sector antenna"), one block from the column.
+     */
+    private static final int[][] SECTOR_OFFSETS = {{0, -1}, {1, 0}, {-1, 0}};
+
+    /** The first {@code sectors} sectors of a site round the column (mx, mz), ids from {@code firstId}. */
+    private static List<CellSample> site(long firstId, int mx, int mz, int sectors, Band band, Rx rx) {
+        List<CellSample> cells = new ArrayList<>();
+        for (int i = 0; i < sectors; i++) {
+            cells.add(heard(firstId + i, mx + SECTOR_OFFSETS[i][0], 80, mz + SECTOR_OFFSETS[i][1], band, rx));
+        }
+        return cells;
+    }
+
+    /** Defaults, except that no two antennas count as one site unless stacked: the pre-review rule. */
+    private static final LocatorParams PER_CELL = new LocatorParams(-100.0, 8, 6.0, 0.25, 0.0);
+
+    @Test
+    @DisplayName("Sites: two sectors of one site are one range: RANGE ONLY round one of them, not AMBIGUOUS on a ring")
+    void oneSiteIsOneRange() {
+        for (int k = 0; k < 24; k++) {
+            double bearing = Math.toRadians(15.0 * k + 7.0);
+            double distance = 60.0 + 90.0 * k / 23.0;
+            Rx rx = Rx.standingOn(FLAT, 0.5 + distance * Math.cos(bearing), 0.5 + distance * Math.sin(bearing));
+            List<RangeMeasurement> ranges = measure(site(1L, 0, 0, 2, BAND_900, rx));
+            assertEquals(2, ranges.size(), "fixture: both sectors are heard");
+
+            LocatorFix.RangeOnly ring = assertInstanceOf(LocatorFix.RangeOnly.class,
+                    LocatorSolver.solve(ranges, FLAT, null, LocatorParams.DEFAULTS), "receiver " + rx);
+            // Same band, same sigma: the shorter range represents the site (the first on a tie).
+            RangeMeasurement expected = ranges.get(1).rangeBlocks() < ranges.get(0).rangeBlocks()
+                    ? ranges.get(1) : ranges.get(0);
+            assertEquals(expected.x(), ring.cx(), 0.0);
+            assertEquals(expected.z(), ring.cz(), 0.0);
+            assertEquals(expected.rangeBlocks(), ring.radius(), 0.0);
+            assertEquals(List.of(expected), LocatorSolver.cellsUsed(ranges, LocatorParams.DEFAULTS), "one ring");
+        }
+    }
+
+    /**
+     * The reviewer's example. Before the fix the six sectors were six towers: FIX at z = -64.3, the
+     * mirror image, 145 blocks off with "± 7.8". Two sites are two towers: AMBIGUOUS, exactly what
+     * one cell per site gives. The true-side candidate is 16.5 blocks off here, not closer: both
+     * sites' ranges round down by band_900's 30-block step (that is quantisation, the same with one
+     * cell per site), so it is asserted within one ranging step.
+     */
+    @Test
+    @DisplayName("Sites: two three-sector sites are AMBIGUOUS (two towers), not a confident FIX on the mirror image")
+    void twoThreeSectorSitesAreAmbiguous() {
+        Rx rx = Rx.standingOn(FLAT, 100.5, 80.5);
+        List<CellSample> cells = new ArrayList<>(site(1L, 0, 0, 3, BAND_900, rx));
+        cells.addAll(site(11L, 200, 0, 3, BAND_900, rx));
+        List<RangeMeasurement> ranges = measure(cells);
+
+        LocatorFix.Ambiguous result = assertInstanceOf(LocatorFix.Ambiguous.class,
+                LocatorSolver.solve(ranges, FLAT, null, LocatorParams.DEFAULTS));
+        double step = Ranging.resolutionBlocks(BAND_900.bandwidthMhz(), 1.0);
+        double toA = Math.hypot(result.ax() - rx.x(), result.az() - rx.z());
+        double toB = Math.hypot(result.bx() - rx.x(), result.bz() - rx.z());
+        assertTrue(Math.min(toA, toB) <= step, "a candidate within one ranging step of the truth: " + result);
+        // The other is its mirror image across the line joining the sites (z = -0.5 here).
+        double nearX = toA <= toB ? result.ax() : result.bx();
+        double nearZ = toA <= toB ? result.az() : result.bz();
+        double farX = toA <= toB ? result.bx() : result.ax();
+        double farZ = toA <= toB ? result.bz() : result.az();
+        assertEquals(nearX, farX, 1e-9);
+        assertEquals(-0.5, (nearZ + farZ) / 2.0, 1e-9);
+        assertTrue(nearZ > 0.0 && farZ < 0.0);
+
+        List<RangeMeasurement> sites = LocatorSolver.cellsUsed(ranges, LocatorParams.DEFAULTS);
+        assertEquals(2, sites.size(), "one range per site");
+        assertEquals(result, LocatorSolver.solve(sites, FLAT, null, LocatorParams.DEFAULTS),
+                "exactly what one cell per site gives");
+    }
+
+    @Test
+    @DisplayName("Sites: a triangle of three-sector sites is a 3-site FIX with the one-cell-per-site ±, not a 9-cell one")
+    void triangleOfSectorSitesCountsSites() {
+        Rx rx = Rx.standingOn(FLAT, 12.3, -7.8);
+        List<CellSample> cells = new ArrayList<>();
+        cells.addAll(site(1L, 0, 150, 3, BAND_900, rx));
+        cells.addAll(site(11L, -130, -75, 3, BAND_900, rx));
+        cells.addAll(site(21L, 130, -75, 3, BAND_900, rx));
+        List<RangeMeasurement> ranges = measure(cells);
+
+        LocatorFix.Fix fix = fix(LocatorSolver.solve(ranges, FLAT, null, LocatorParams.DEFAULTS));
+        assertEquals(3, fix.cellsUsed(), "three sites");
+        List<RangeMeasurement> sites = LocatorSolver.cellsUsed(ranges, LocatorParams.DEFAULTS);
+        assertEquals(3, sites.size());
+        LocatorFix.Fix perSite = fix(LocatorSolver.solve(sites, FLAT, null, LocatorParams.DEFAULTS));
+        assertEquals(perSite.errorBlocks(), fix.errorBlocks(), 1e-9, "the ± of one cell per site");
+        assertEquals(perSite.x(), fix.x(), 1e-9);
+        assertEquals(perSite.z(), fix.z(), 1e-9);
+
+        // Counted per cell, three rows per direction would shrink the ± by about sqrt(3): the
+        // over-confidence the grouping removes.
+        LocatorParams perCellAllNine = new LocatorParams(-100.0, 9, 6.0, 0.25, 0.0);
+        LocatorFix.Fix perCell = fix(LocatorSolver.solve(ranges, FLAT, null, perCellAllNine));
+        assertEquals(9, perCell.cellsUsed());
+        assertTrue(perCell.errorBlocks() < 0.7 * fix.errorBlocks(), perCell.errorBlocks() + " vs " + fix.errorBlocks());
+    }
+
+    @Test
+    @DisplayName("Sites: with siteMergeBlocks = 0 every sector counts again (the pre-review behaviour)")
+    void noMergeIsPerCell() {
+        Rx rx = Rx.standingOn(FLAT, 100.5, 80.5);
+        List<CellSample> cells = new ArrayList<>(site(1L, 0, 0, 3, BAND_900, rx));
+        cells.addAll(site(11L, 200, 0, 3, BAND_900, rx));
+        List<RangeMeasurement> ranges = measure(cells);
+        assertEquals(ranges, LocatorSolver.cellsUsed(ranges, PER_CELL));
+        LocatorFix.Fix mirror = fix(LocatorSolver.solve(ranges, FLAT, null, PER_CELL));
+        assertEquals(6, mirror.cellsUsed());
+        assertTrue(mirror.z() < 0.0, "the old answer: a FIX on the mirror image, " + mirror);
+
+        // One site, two sectors: two circles one block apart, crossing on their bisector.
+        Rx near = Rx.standingOn(FLAT, 70.5, 40.5);
+        List<RangeMeasurement> twoSectors = measure(site(1L, 0, 0, 2, BAND_900, near));
+        assertEquals(2, LocatorSolver.cellsUsed(twoSectors, PER_CELL).size());
+        assertInstanceOf(LocatorFix.RangeOnly.class, LocatorSolver.solve(twoSectors, FLAT, null, LocatorParams.DEFAULTS));
+        assertInstanceOf(LocatorFix.Ambiguous.class, LocatorSolver.solve(twoSectors, FLAT, null, PER_CELL));
+    }
+
+    @Test
+    @DisplayName("Sites: grouping is transitive and order-free; the finest band, then the shortest range, represents a site")
+    void siteRepresentativeRule() {
+        RangeMeasurement a = new RangeMeasurement(1L, 0.5, 80.5, 0.5, 100.0, 8.66, "band_900", 0.0);
+        RangeMeasurement b = new RangeMeasurement(2L, 3.0, 80.5, 0.5, 90.0, 8.66, "band_900", 0.0);
+        RangeMeasurement c = new RangeMeasurement(3L, 5.5, 80.5, 0.5, 95.0, 8.66, "band_900", 0.0);
+        // a-b and b-c are 2.5 apart, a-c 5: one site through b, whatever the order.
+        for (List<RangeMeasurement> order : List.of(List.of(a, b, c), List.of(c, a, b), List.of(a, c, b), List.of(c, b, a))) {
+            assertEquals(List.of(b), LocatorSolver.siteRepresentatives(order, LocatorParams.DEFAULTS), order.toString());
+        }
+        // Without b, a and c are two sites, in the order given.
+        assertEquals(List.of(c, a), LocatorSolver.siteRepresentatives(List.of(c, a), LocatorParams.DEFAULTS));
+
+        // The finest band wins over a shorter range; equal sigma and range keep the first given.
+        RangeMeasurement wide = new RangeMeasurement(4L, 1.5, 80.5, 0.5, 120.0, 0.87, "band_3500", 0.0);
+        assertEquals(List.of(wide), LocatorSolver.siteRepresentatives(List.of(a, wide, b), LocatorParams.DEFAULTS));
+        RangeMeasurement twin = new RangeMeasurement(5L, 1.5, 80.5, 0.5, 100.0, 8.66, "band_900", 0.0);
+        assertEquals(List.of(a), LocatorSolver.siteRepresentatives(List.of(a, twin), LocatorParams.DEFAULTS));
+        assertEquals(List.of(twin), LocatorSolver.siteRepresentatives(List.of(twin, a), LocatorParams.DEFAULTS));
+
+        // Sites are listed by their first (strongest) member, and maxCells counts sites.
+        RangeMeasurement far1 = new RangeMeasurement(6L, 100.5, 80.5, 0.5, 40.0, 8.66, "band_900", 0.0);
+        RangeMeasurement far2 = new RangeMeasurement(7L, 100.5, 80.5, 200.5, 40.0, 8.66, "band_900", 0.0);
+        RangeMeasurement far3 = new RangeMeasurement(8L, -100.5, 80.5, 0.5, 40.0, 8.66, "band_900", 0.0);
+        List<RangeMeasurement> mixed = List.of(a, far1, b, far2, far3);
+        assertEquals(List.of(b, far1, far2, far3), LocatorSolver.siteRepresentatives(mixed, LocatorParams.DEFAULTS));
+        LocatorParams three = new LocatorParams(-100.0, 3, 6.0, 0.25);
+        assertEquals(List.of(b, far1, far2), LocatorSolver.siteRepresentatives(mixed, three));
+
+        // Stacked in one column: one site even with no merge distance; a negative or NaN distance merges nothing.
+        RangeMeasurement above = new RangeMeasurement(9L, 0.5, 95.5, 0.5, 105.0, 8.66, "band_900", 0.0);
+        assertEquals(List.of(a), LocatorSolver.siteRepresentatives(List.of(a, above), PER_CELL));
+        for (double off : new double[] {-1.0, Double.NaN}) {
+            LocatorParams none = new LocatorParams(-100.0, 8, 6.0, 0.25, off);
+            assertEquals(List.of(a, above), LocatorSolver.siteRepresentatives(List.of(a, above), none));
+        }
+    }
+
     // ---- Test 10: a wideband cell --------------------------------------------------------------
 
     /**

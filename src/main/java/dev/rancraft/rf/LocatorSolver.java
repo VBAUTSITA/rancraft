@@ -1,17 +1,30 @@
 package dev.rancraft.rf;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
 
 /**
  * Turns measured ranges into a position estimate. Phase 3, §3A.5.
  *
- * <h2>Three or more usable cells: weighted least squares with altitude aiding</h2>
+ * <h2>Sites, not cells (Phase 3A review, round 1)</h2>
+ * §3A.5 counts "usable cells". In this mod a sector is its own cell on its own block, so a
+ * three-sector site is three cells one block apart. Their ranges are near-identical, and on one band
+ * they round the same way, so their errors are perfectly correlated: they add no independent
+ * geometry. Counted as separate towers they made one site AMBIGUOUS on a ring, two sites a confident
+ * FIX on the wrong mirror image, and the "±" of a three-sector network about 1.6x too small. So the
+ * solver first groups the measurements into <b>sites</b> ({@link #siteRepresentatives}: antennas
+ * within {@link LocatorParams#siteMergeBlocks()} of each other horizontally) and each site
+ * contributes exactly one range. Every "cell" below means one such site. <b>Game abstraction:</b> a
+ * real network knows each site's (TRP's) location, and co-sited sectors are one position to range
+ * from; the mod has no site container, so horizontal proximity stands in for that identity.
+ *
+ * <h2>Three or more usable sites: weighted least squares with altitude aiding</h2>
  * <ol>
- *   <li>Take up to {@link LocatorParams#maxCells()} cells, in the order given (strongest first, as
- *       {@link Ranging} emits them).
- *   <li>Start at the centroid of those cells' (x, z).
+ *   <li>Take up to {@link LocatorParams#maxCells()} sites, in the order of each site's strongest
+ *       cell (strongest first, as {@link Ranging} emits them), one representative range each.
+ *   <li>Start at the centroid of those sites' (x, z).
  *   <li><b>Altitude aiding.</b> Assume the receiver stands on the ground:
  *       {@code yRx = ground.surfaceY(x, z) + 1.62} at the current estimate, re-derived every
  *       iteration.
@@ -48,14 +61,14 @@ import java.util.Objects;
  * constrains only one direction, so a single wideband cell inside a good triangle helps less than
  * at the edge of a network; see NOTES.md, Phase 3.)
  *
- * <h2>Two cells: circle intersection</h2>
- * The two horizontal circles (radius {@code rho_i}, altitude-aided at the midpoint of the two cells)
- * cross in 0 or 2 points. None → {@link LocatorFix.RangeOnly} on the nearer cell (smaller measured
+ * <h2>Two sites: circle intersection</h2>
+ * The two horizontal circles (radius {@code rho_i}, altitude-aided at the midpoint of the two sites)
+ * cross in 0 or 2 points. None → {@link LocatorFix.RangeOnly} on the nearer site (smaller measured
  * range). Two → {@link LocatorFix.Ambiguous}; each candidate is then refined with the altitude
  * re-derived under it, and {@code likely} names the one nearer the previous estimate, if any.
  *
- * <h2>One cell</h2>
- * {@link LocatorFix.RangeOnly}: a ring, not a point.
+ * <h2>One site</h2>
+ * {@link LocatorFix.RangeOnly}: a ring, not a point, however many of the site's sectors are heard.
  *
  * <h2>Honest limits (also in NOTES.md)</h2>
  * <ul>
@@ -120,7 +133,8 @@ public final class LocatorSolver {
     }
 
     /**
-     * @param ranges   usable ranges, strongest first ({@link Ranging#measure}).
+     * @param ranges   usable ranges, strongest first ({@link Ranging#measure}); grouped into sites
+     *                 here ({@link #siteRepresentatives}).
      * @param ground   where the ground is, for altitude aiding. An {@link SurfaceProbe#UNLOADED}
      *                 column keeps the last known height (see {@link #initialEyeY}).
      * @param previous the last fix for this receiver, or null. Only picks the likely candidate of an
@@ -132,7 +146,10 @@ public final class LocatorSolver {
         Objects.requireNonNull(ground, "ground");
         Objects.requireNonNull(params, "params");
 
-        List<RangeMeasurement> used = select(ranges, params.maxCells());
+        // One representative range per site (see the class comment): the branch is chosen by the
+        // number of sites, so the centroid, the singular-at-start test, HDOP, the "±" and the extra
+        // starts all see one row per site.
+        List<RangeMeasurement> used = siteRepresentatives(ranges, params);
         return switch (used.size()) {
             case 0 -> new LocatorFix.NoSignal();
             case 1 -> rangeOnly(used.get(0));
@@ -142,16 +159,134 @@ public final class LocatorSolver {
     }
 
     /**
-     * Exactly the measurements {@link #solve} takes from {@code ranges}: the first
-     * {@link LocatorParams#maxCells()} valid ones, in the order given. Phase 3 slice 5 added this so
-     * the Locator can draw a ring for every cell that went into a fix, and only those, without
-     * repeating the selection rule. {@code solve(...).cellsUsed()} equals its size for a
-     * {@link LocatorFix.Fix} and a {@link LocatorFix.PoorGeometry}.
+     * Exactly the measurements {@link #solve} takes from {@code ranges}: one representative per site,
+     * at most {@link LocatorParams#maxCells()} ({@link #siteRepresentatives}). Phase 3 slice 5 added
+     * this so the Locator can draw a ring for every range that went into a fix, and only those,
+     * without repeating the selection rule; since the Phase 3A review that is one ring per site (the
+     * rings of co-sited sectors were near-identical anyway). {@code solve(...).cellsUsed()} equals its
+     * size for a {@link LocatorFix.Fix} and a {@link LocatorFix.PoorGeometry}.
      */
     public static List<RangeMeasurement> cellsUsed(List<RangeMeasurement> ranges, LocatorParams params) {
         Objects.requireNonNull(ranges, "ranges");
         Objects.requireNonNull(params, "params");
-        return List.copyOf(select(ranges, params.maxCells()));
+        return List.copyOf(siteRepresentatives(ranges, params));
+    }
+
+    /**
+     * Groups the valid measurements into sites and keeps one range per site. Phase 3A review, round 1.
+     *
+     * <ol>
+     *   <li>Every valid measurement is kept (non-finite or absurd values are dropped, as always); the
+     *       {@code maxCells} cap comes last, so it counts sites.
+     *   <li>Two measurements whose radiating points are at most
+     *       {@link LocatorParams#siteMergeBlocks()} apart horizontally are the same site, and so is
+     *       anything linked to either (union-find over all pairs: transitive, and independent of the
+     *       input order).
+     *   <li>Each site is represented by its measurement with the smallest sigma (the finest band),
+     *       then the smallest range (the least NLOS-biased), then the first given.
+     *   <li>Sites are listed in the order of each one's first (strongest) measurement, and at most
+     *       {@code maxCells} are kept.
+     * </ol>
+     *
+     * <p><b>Game abstraction, labelled:</b> a real network knows where each transmission point is,
+     * and the sectors of one site are one position to range from; their ranges share the same
+     * geometry and, rounded on the same band, the same error, so counting them separately invents
+     * geometry that is not there. The mod has no site container (a three-sector site is three
+     * blocks, each its own cell), so horizontal proximity stands in for that identity. A negative
+     * or NaN distance groups nothing; 0 groups only antennas stacked in one column.
+     */
+    static List<RangeMeasurement> siteRepresentatives(List<RangeMeasurement> ranges, LocatorParams params) {
+        List<RangeMeasurement> valid = new ArrayList<>(ranges.size());
+        for (RangeMeasurement m : ranges) {
+            if (isValid(m)) {
+                valid.add(m);
+            }
+        }
+        int n = valid.size();
+        int limit = Math.max(0, params.maxCells());
+        if (n == 0 || limit == 0) {
+            return new ArrayList<>(0);
+        }
+
+        int[] parent = new int[n];
+        for (int i = 0; i < n; i++) {
+            parent[i] = i;
+        }
+        double merge = params.siteMergeBlocks();
+        if (merge >= 0.0 && withinBounds(merge)) {
+            // Squared distances: the same test as hypot(dx, dz) <= merge without a square root per
+            // pair (coordinates are within MAX_ABS_BLOCKS, so no square overflows).
+            double mergeSquared = merge * merge;
+            for (int i = 0; i < n; i++) {
+                RangeMeasurement a = valid.get(i);
+                for (int j = i + 1; j < n; j++) {
+                    RangeMeasurement b = valid.get(j);
+                    double dx = a.x() - b.x();
+                    double dz = a.z() - b.z();
+                    if (dx * dx + dz * dz <= mergeSquared) {
+                        union(parent, i, j);
+                    }
+                }
+            }
+        }
+
+        // The representative of each site, indexed by its root; sites in order of first member.
+        int[] representative = new int[n];
+        Arrays.fill(representative, -1);
+        int[] siteOrder = new int[n];
+        int sites = 0;
+        for (int i = 0; i < n; i++) {
+            int root = find(parent, i);
+            int current = representative[root];
+            if (current < 0) {
+                representative[root] = i;
+                siteOrder[sites++] = root;
+            } else if (representsBetter(valid.get(i), valid.get(current))) {
+                representative[root] = i;
+            }
+        }
+
+        List<RangeMeasurement> used = new ArrayList<>(Math.min(limit, sites));
+        for (int s = 0; s < sites && used.size() < limit; s++) {
+            used.add(valid.get(representative[siteOrder[s]]));
+        }
+        return used;
+    }
+
+    /** Smaller sigma, then a shorter range; a tie keeps the one given first. */
+    private static boolean representsBetter(RangeMeasurement candidate, RangeMeasurement current) {
+        double candidateSigma = sigma(candidate);
+        double currentSigma = sigma(current);
+        if (candidateSigma != currentSigma) {
+            return candidateSigma < currentSigma;
+        }
+        return candidate.rangeBlocks() < current.rangeBlocks();
+    }
+
+    private static int find(int[] parent, int i) {
+        int root = i;
+        while (parent[root] != root) {
+            root = parent[root];
+        }
+        while (parent[i] != root) {
+            int next = parent[i];
+            parent[i] = root;
+            i = next;
+        }
+        return root;
+    }
+
+    private static void union(int[] parent, int i, int j) {
+        int a = find(parent, i);
+        int b = find(parent, j);
+        if (a != b) {
+            // The smaller index stays the root: deterministic, and the root is not what orders sites.
+            if (a < b) {
+                parent[b] = a;
+            } else {
+                parent[a] = b;
+            }
+        }
     }
 
     // ---- 3+ cells ------------------------------------------------------------------------------
@@ -517,22 +652,12 @@ public final class LocatorSolver {
         return new LocatorFix.RangeOnly(cell.x(), cell.z(), cell.rangeBlocks());
     }
 
-    /** Valid measurements, in order, at most {@code maxCells}. */
-    private static List<RangeMeasurement> select(List<RangeMeasurement> ranges, int maxCells) {
-        int limit = Math.max(0, maxCells);
-        List<RangeMeasurement> used = new ArrayList<>(Math.min(limit, ranges.size()));
-        for (RangeMeasurement m : ranges) {
-            if (used.size() >= limit) {
-                break;
-            }
-            if (m != null
-                    && withinBounds(m.x()) && withinBounds(m.y()) && withinBounds(m.z())
-                    && m.rangeBlocks() >= 0.0 && withinBounds(m.rangeBlocks())
-                    && !Double.isNaN(m.sigmaBlocks()) && withinBounds(m.sigmaBlocks())) {
-                used.add(m);
-            }
-        }
-        return used;
+    /** A measurement the solver can use: present, finite and not absurd. */
+    private static boolean isValid(RangeMeasurement m) {
+        return m != null
+                && withinBounds(m.x()) && withinBounds(m.y()) && withinBounds(m.z())
+                && m.rangeBlocks() >= 0.0 && withinBounds(m.rangeBlocks())
+                && !Double.isNaN(m.sigmaBlocks()) && withinBounds(m.sigmaBlocks());
     }
 
     /**

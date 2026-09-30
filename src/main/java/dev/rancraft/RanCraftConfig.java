@@ -139,9 +139,10 @@ public final class RanCraftConfig {
             .defineInRange("coverageMinIntervalTicks", 100, 0, 6000);
 
     // ---- Phase 3: Network Locator ------------------------------------------------------------
-    // The first four are read by rf code (Ranging, LocatorSolver), so they cross into RfConfig in
-    // snapshot(). The emergency-record age is gameplay for the game-side record only and stays out
-    // of RfConfig, as the lens settings do. See NOTES.md, Phase 3 slice 3.
+    // The first four, and locatorSiteMergeBlocks (Phase 3A review), are read by rf code (Ranging,
+    // LocatorSolver), so they cross into RfConfig in snapshot(). The emergency-record age is gameplay
+    // for the game-side record only and stays out of RfConfig, as the lens settings do. See NOTES.md,
+    // Phase 3 slice 3.
 
     public static final ModConfigSpec.DoubleValue LOCATOR_MIN_RSRP_DBM = BUILDER
             .comment("Network Locator: a cell is used for ranging only at or above this RSRP.",
@@ -165,6 +166,14 @@ public final class RanCraftConfig {
                     "long behind terrain because a longer reflected path arrives first; RANCraft has",
                     "no reflections. 0 turns the bias off.")
             .defineInRange("nlosBiasBlocksPerDb", LocatorParams.DEFAULT_NLOS_BIAS_BLOCKS_PER_DB, 0.0, 4.0);
+
+    public static final ModConfigSpec.DoubleValue LOCATOR_SITE_MERGE_BLOCKS = BUILDER
+            .comment("Network Locator: antennas within this horizontal distance are one site for positioning.",
+                    "A site gives one range, however many of its sectors are heard: co-sited sectors add",
+                    "no independent geometry. GAME ABSTRACTION: a real network knows each site's location;",
+                    "the mod has no site block, so nearness stands in for it. The widest three-sector site",
+                    "spans 2 blocks. 0 groups only antennas stacked in one column.")
+            .defineInRange("locatorSiteMergeBlocks", LocatorParams.DEFAULT_SITE_MERGE_BLOCKS, 0.0, 16.0);
 
     public static final ModConfigSpec.IntValue LOCATOR_EMERGENCY_MAX_AGE_TICKS = BUILDER
             .comment("Network Locator: on death, the last fix is kept as the emergency record only if",
@@ -225,7 +234,8 @@ public final class RanCraftConfig {
         return COVERAGE_MIN_INTERVAL_TICKS.get();
     }
 
-    // Phase 3, Network Locator. The first four also reach rf through snapshot().locatorParams().
+    // Phase 3, Network Locator. The first four and the site merge distance also reach rf through
+    // snapshot().locatorParams().
 
     public static double locatorMinRsrpDbm() {
         return LOCATOR_MIN_RSRP_DBM.get();
@@ -241,6 +251,10 @@ public final class RanCraftConfig {
 
     public static double nlosBiasBlocksPerDb() {
         return NLOS_BIAS_BLOCKS_PER_DB.get();
+    }
+
+    public static double locatorSiteMergeBlocks() {
+        return LOCATOR_SITE_MERGE_BLOCKS.get();
     }
 
     /** Gameplay only (the emergency record); deliberately not in {@link RfConfig}. */
@@ -271,6 +285,7 @@ public final class RanCraftConfig {
                 LOCATOR_MIN_RSRP_DBM.get(),
                 LOCATOR_MAX_CELLS.get(),
                 LOCATOR_MAX_HDOP.get(),
-                NLOS_BIAS_BLOCKS_PER_DB.get());
+                NLOS_BIAS_BLOCKS_PER_DB.get(),
+                LOCATOR_SITE_MERGE_BLOCKS.get());
     }
 }
