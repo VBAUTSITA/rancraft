@@ -2017,7 +2017,7 @@ Nine confirmed findings from the Phase 3A review (round 1), two pairs of them th
 twice (3 = 7, 5 = 9). All applied; the build is green (**382 unit tests**, 0 skipped) and
 `runGameTestServer` passes **5 of 5**. Commits: part 1 `5221c46` (sites), part 2 `62fef10`
 (drive-test anchor, fresh-only prior), part 3 `2f1306f` (client reading), part 4 `a755f7f`
-(dead-player game test), and the docs commit "Phase 3A review round 1: fixes".
+(dead-player game test), and the docs commit `a998f3f` ("Phase 3A review round 1: fixes").
 
 ### 1. [major] The Locator counts sites, not cells
 
