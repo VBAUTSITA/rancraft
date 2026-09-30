@@ -38,6 +38,7 @@ import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.Vec3;
 import net.neoforged.neoforge.common.NeoForge;
 import net.neoforged.neoforge.event.level.BlockEvent;
+import net.neoforged.neoforge.event.level.BlockGrowFeatureEvent;
 import net.neoforged.neoforge.gametest.GameTestHolder;
 
 /**
@@ -75,7 +76,7 @@ public final class RegionEpochGameTests {
         List<TestFunction> tests = new ArrayList<>();
         tests.add(test(BATCH_CACHE, prefix + "far_block_keeps_the_cache_link_path_block_does_not",
                 RegionEpochGameTests::farBlockVsLinkPath));
-        tests.add(test(BATCH_PLACE, prefix + "placing_and_breaking_bump_their_bin_only",
+        tests.add(test(BATCH_PLACE, prefix + "placing_breaking_and_growth_bump_their_bin_only",
                 RegionEpochGameTests::placeAndBreak));
         tests.add(test(BATCH_EXPLOSION, prefix + "an_explosion_bumps_its_bin", RegionEpochGameTests::explosion));
         tests.add(test(BATCH_PISTON, prefix + "a_piston_bumps_now_and_after_the_blocks_settle",
@@ -230,7 +231,9 @@ public final class RegionEpochGameTests {
 
     /**
      * A placement bumps its block's bin by one (and the dimension-wide sum), a bed (two blocks, the
-     * multi-block event) by one more, and a break by one more; a bin 500 blocks away never moves.
+     * multi-block event) by one more, a break by one more, and a feature growing next to it by one
+     * more; a bin 500 blocks away never moves. The break and the growth are posted on the event bus
+     * (see the class javadoc).
      */
     private static void placeAndBreak(GameTestHelper helper) {
         ServerLevel level = helper.getLevel();
@@ -261,6 +264,12 @@ public final class RegionEpochGameTests {
         BlockState state = level.getBlockState(stone);
         NeoForge.EVENT_BUS.post(new BlockEvent.BreakEvent(level, stone, state, player));
         helper.assertTrue(epochs.epochAtBlock(stone.getX(), stone.getZ()) == beforeBreak + 1, "breaking bumps the bin once");
+
+        // A sapling growing into a tree (posted, not grown: a tree would spill out of the test area).
+        long beforeGrowth = epochs.epochAtBlock(stone.getX(), stone.getZ());
+        NeoForge.EVENT_BUS.post(new BlockGrowFeatureEvent(level, level.random, stone, null));
+        helper.assertTrue(epochs.epochAtBlock(stone.getX(), stone.getZ()) == beforeGrowth + 1,
+                "a feature growing bumps the bins round it once");
 
         helper.assertTrue(epochs.epochAtBlock(farX, stone.getZ()) == farBefore, "a bin 500 blocks away never moved");
         helper.succeed();

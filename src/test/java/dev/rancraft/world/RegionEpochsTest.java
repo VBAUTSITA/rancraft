@@ -140,6 +140,15 @@ class RegionEpochsTest {
     }
 
     @Test
+    @DisplayName("tree growth: every bin within 16 blocks of the sapling, at most four")
+    void featureBins() {
+        assertEquals(16, RegionEpochs.FEATURE_REACH_BLOCKS);
+        assertArrayEquals(new long[] {BinTraversal.key(0, 0)}, RegionEpochs.featureBins(64, 64));
+        assertEquals(4, RegionEpochs.featureBins(-5, 130).length);
+        assertEquals(2, RegionEpochs.featureBins(64, 120).length, "reaches z = 136");
+    }
+
+    @Test
     @DisplayName("explosion: the bin of every listed block and the centre's, each once")
     void explosionBins() {
         List<BlockPos> blown = List.of(

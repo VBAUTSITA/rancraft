@@ -20,6 +20,7 @@ import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.common.util.BlockSnapshot;
 import net.neoforged.neoforge.event.level.BlockEvent;
+import net.neoforged.neoforge.event.level.BlockGrowFeatureEvent;
 import net.neoforged.neoforge.event.level.ExplosionEvent;
 import net.neoforged.neoforge.event.level.PistonEvent;
 import net.neoforged.neoforge.event.tick.LevelTickEvent;
@@ -54,12 +55,15 @@ import net.neoforged.neoforge.event.tick.LevelTickEvent;
  *       second bump is needed because the moved blocks spend two ticks as {@code moving_piston}
  *       (non-occluding, so 0 dB) and only then become themselves again, with no event: an
  *       evaluation during the move would otherwise stay cached with the wall missing.
+ *   <li>{@link BlockGrowFeatureEvent} (a sapling grows into a tree, a mushroom or fungus into a huge
+ *       one): every bin within {@link #FEATURE_REACH_BLOCKS}. Beyond §3B.2's list (see
+ *       {@link #onFeatureGrow}).
  * </ul>
  *
  * <h2>Gaps that remain (NOTES.md, Phase 3 slice 7)</h2>
  * Block changes with no event here do not invalidate a cached sample: fluid flow (water is 15 dB),
- * fire spread and burn-out (fire is 0 dB, but it removes planks and logs), leaf decay (1 dB),
- * sapling and mushroom growth, falling sand and gravel, ice forming and melting, snow, mob griefing
+ * fire spread and burn-out (fire is 0 dB, but it removes planks and logs), leaf decay (1 dB), crop
+ * and vine growth, falling sand and gravel, ice forming and melting, snow, mob griefing
  * other than explosions (an enderman carrying a block), commands ({@code /setblock}, {@code /fill},
  * {@code /clone}) and other mods writing blocks directly. The same gaps existed with the
  * per-dimension epoch. A cached sample is corrected by the next event in any of its bins, the next
@@ -90,6 +94,14 @@ public final class RegionEpochs {
      * same level tick; {@code PistonMovingBlockEntity.tick}, 1.21.1 sources). Two ticks of margin.
      */
     static final int PISTON_SETTLE_TICKS = 4;
+
+    /**
+     * How far from the sapling (or mushroom, fungus, azalea) a grown feature can place blocks, in x
+     * or z. Vanilla's widest are the 2x2 trees (mega jungle, dark oak, mega spruce: canopies about
+     * five blocks out from a trunk that may start one block off the sapling) and fancy oak branches;
+     * 16 is a generous bound, so a growth bumps at most four bins.
+     */
+    static final int FEATURE_REACH_BLOCKS = 16;
 
     private static final Map<ResourceKey<Level>, RegionEpochs> BY_LEVEL = new ConcurrentHashMap<>();
 
@@ -251,6 +263,12 @@ public final class RegionEpochs {
                 x + PISTON_REACH_BLOCKS, z + PISTON_REACH_BLOCKS);
     }
 
+    /** The bins a feature grown at {@code (x, z)} can place blocks in ({@link #FEATURE_REACH_BLOCKS}). */
+    static long[] featureBins(int x, int z) {
+        return binsOverlapping(x - FEATURE_REACH_BLOCKS, z - FEATURE_REACH_BLOCKS,
+                x + FEATURE_REACH_BLOCKS, z + FEATURE_REACH_BLOCKS);
+    }
+
     /** The bins of an explosion: every listed block's, and the centre's. */
     static long[] explosionBins(List<BlockPos> affected, double centreX, double centreZ) {
         LongArrayList keys = new LongArrayList(affected.size() + 1);
@@ -317,6 +335,21 @@ public final class RegionEpochs {
         }
         BlockPos pos = event.getPos();
         of(level).bumpNowAndLater(pistonBins(pos.getX(), pos.getZ()), level.getGameTime() + PISTON_SETTLE_TICKS);
+    }
+
+    /**
+     * A sapling, mushroom, fungus or azalea grows into a feature (a tree). Not in §3B.2's list; added
+     * because a tree grown into a link path is exactly the change a link cares about (logs 4 dB,
+     * leaves 1 dB; slice 12's backhaul reads these epochs too). The event fires just before the
+     * feature is placed, in the same call, so one bump suffices; a cancelled growth leaves a needless
+     * one.
+     */
+    @SubscribeEvent
+    public static void onFeatureGrow(BlockGrowFeatureEvent event) {
+        RegionEpochs epochs = ofServer(event.getLevel());
+        if (epochs != null) {
+            epochs.bumpBins(featureBins(event.getPos().getX(), event.getPos().getZ()));
+        }
     }
 
     /**
