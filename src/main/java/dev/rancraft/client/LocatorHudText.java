@@ -72,7 +72,9 @@ public final class LocatorHudText {
     /**
      * The HUD for one frame.
      *
-     * @param payload   the last {@link LocatorFixPayload}, or {@code null} before the first.
+     * @param payload   the last {@link LocatorFixPayload}, or {@code null} before the first (or since
+     *                  it was dropped, {@link ClientLocatorState#putAway()}). A stale one still
+     *                  supplies the server's scale for the waypoint's saved "±".
      * @param stale     the payload is too old to show as current ({@link ClientLocatorState#isStale}).
      * @param waypoints the held Locator's saved waypoints.
      * @param dimension the dimension the player is in, e.g. {@code minecraft:overworld}.
@@ -81,7 +83,10 @@ public final class LocatorHudText {
         List<Line> lines = new ArrayList<>(5);
         if (payload == null || stale) {
             lines.add(new Line("No reading from the network yet", DIM_ARGB));
-            lines.add(waypointLine(waypoints, null, dimension, 1.0));
+            // The server's scale from the last payload, even a stale one; none before any payload
+            // (the client cannot read COMMON config, so it never assumes 1 m per block).
+            double lastMpb = payload != null ? payload.metersPerBlock() : Double.NaN;
+            lines.add(waypointLine(waypoints, null, dimension, lastMpb));
             return new Screen(TITLE, Kind.NO_SIGNAL.label(), LocatorStyle.stateArgb(Kind.NO_SIGNAL), lines);
         }
 
@@ -136,6 +141,12 @@ public final class LocatorHudText {
     /**
      * The selected waypoint: its number, the "±" it was saved with, and distance and bearing from the
      * current FIX. No FIX, no bearing: a bearing from a guess would look like navigation.
+     *
+     * @param mpb the server's metres per block, from the latest payload (a stale one's too). Not
+     *            finite or not positive means the server has not sent its scale yet (no payload
+     *            since joining, respawning, changing dimension or taking the Locator in hand): the
+     *            "±" is then left out rather than converted at a guessed scale (Phase 3A review,
+     *            round 1; it used to assume 1 m per block and disagree with the save message).
      */
     static Line waypointLine(LocatorWaypoints waypoints, LocatorFix fix, String dimension, double mpb) {
         Optional<LocatorWaypoints.Waypoint> selected = waypoints.selectedWaypoint();
@@ -143,8 +154,11 @@ public final class LocatorHudText {
             return new Line("WP -   sneak + use saves the estimate", DIM_ARGB);
         }
         LocatorWaypoints.Waypoint waypoint = selected.get();
-        String head = String.format(Locale.ROOT, "WP %d/%d (saved ±%s)",
-                waypoints.selected() + 1, waypoints.size(), metres(waypoint.errorBlocks() * mpb));
+        boolean scaleKnown = Double.isFinite(mpb) && mpb > 0.0;
+        String head = scaleKnown
+                ? String.format(Locale.ROOT, "WP %d/%d (saved ±%s)",
+                        waypoints.selected() + 1, waypoints.size(), metres(waypoint.errorBlocks() * mpb))
+                : String.format(Locale.ROOT, "WP %d/%d", waypoints.selected() + 1, waypoints.size());
         if (!waypoint.dimension().equals(dimension)) {
             return new Line(head + "   in " + waypoint.dimension(), DIM_ARGB);
         }

@@ -151,8 +151,42 @@ class LocatorHudTextTest {
         LocatorHudText.Screen elsewhere = LocatorHudText.screen(payload(SPEC_FIX, 4), false, nether, OVERWORLD);
         assertEquals("WP 1/1 (saved ±9.0 m)   in minecraft:the_nether", texts(elsewhere).get(2));
 
+        // No payload at all: the server's scale is unknown, so the saved ± is left out.
         LocatorHudText.Screen stale = LocatorHudText.screen(null, true, here, OVERWORLD);
-        assertEquals("WP 1/1 (saved ±9.0 m)   no FIX, no bearing", texts(stale).get(1));
+        assertEquals("WP 1/1   no FIX, no bearing", texts(stale).get(1));
+    }
+
+    /**
+     * Phase 3A review, round 1: with no current reading the waypoint's saved ± used to be converted
+     * at 1 m per block, so on a server at 2 m per block it read half what the save message said.
+     * Now a stale payload still supplies the server's scale, and with no payload at all the ± is left
+     * out rather than guessed.
+     */
+    @Test
+    @DisplayName("no current reading: the waypoint's saved ± uses the last payload's scale, and is left out before any payload")
+    void waypointScaleWithoutACurrentReading() {
+        LocatorWaypoints nine = new LocatorWaypoints(List.of(new Waypoint(OVERWORLD, 0, 70, 0, 9.0)), 0);
+        LocatorHudText.Screen staleNine = LocatorHudText.screen(
+                payload(SPEC_FIX, List.of(), 2.0, Optional.empty()), true, nine, OVERWORLD);
+        assertEquals("NO SIGNAL", staleNine.state());
+        assertEquals("WP 1/1 (saved ±18 m)   no FIX, no bearing", texts(staleNine).get(1));
+
+        LocatorWaypoints five = new LocatorWaypoints(List.of(new Waypoint(OVERWORLD, 0, 70, 0, 5.0)), 0);
+        LocatorHudText.Screen staleScaled = LocatorHudText.screen(
+                payload(SPEC_FIX, List.of(), 2.0, Optional.empty()), true, five, OVERWORLD);
+        assertEquals("WP 1/1 (saved ±10 m)   no FIX, no bearing", texts(staleScaled).get(1));
+
+        LocatorHudText.Screen none = LocatorHudText.screen(null, true, nine, OVERWORLD);
+        assertEquals("WP 1/1   no FIX, no bearing", texts(none).get(1));
+        assertFalse(texts(none).get(1).contains(" m"), "no metres value from an assumed scale");
+        assertFalse(texts(none).get(1).contains("±"));
+
+        // A scale that makes no sense is treated as unknown too, never printed as "? m".
+        assertEquals("WP 1/1   no FIX, no bearing",
+                LocatorHudText.waypointLine(nine, null, OVERWORLD, 0.0).text());
+        assertEquals("WP 1/1   in minecraft:the_nether", LocatorHudText.waypointLine(
+                new LocatorWaypoints(List.of(new Waypoint("minecraft:the_nether", 0, 70, 0, 9.0)), 0),
+                null, OVERWORLD, Double.NaN).text());
     }
 
     @Test
