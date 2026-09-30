@@ -211,6 +211,41 @@ class LocatorTrackerTest {
         assertEquals(2, next.used().size(), "both cells get a ring");
     }
 
+    /**
+     * Phase 3A review, round 1: the solver's {@code previous} counts only while the reading is fresh
+     * (two intervals, the waypoint rule). An older one means the Locator was put away and the player
+     * may be anywhere; choosing the candidate nearer that old place would be a coin flip drawn as a
+     * preference, and the Ambiguous chain would keep it.
+     */
+    @Test
+    @DisplayName("a previous fix older than two intervals (the Locator was put away) picks no likely candidate; up to two it still does")
+    void stalePreviousPicksNothing() {
+        double rxX = 12.0;
+        double rxZ = -20.0;
+        List<CellSample> three = ring("band_3500", rxX, rxZ).subList(0, 3);
+        Reading fixed = LocatorTracker.update(null, sample(4_000, three), BANDS, CONFIG, new CountingGround(), 4_000);
+        assertInstanceOf(LocatorFix.Fix.class, fixed.fix());
+        assertEquals(40, LocatorTracker.freshForTicks(CONFIG.evaluationIntervalTicks()), "fixture: interval 20");
+
+        for (long tick : new long[] {4_020, 4_040}) {
+            Reading next = LocatorTracker.update(fixed, sample(tick, three.subList(0, 2)), BANDS, CONFIG,
+                    new CountingGround(), tick);
+            LocatorFix.Ambiguous ambiguous = assertInstanceOf(LocatorFix.Ambiguous.class, next.fix());
+            double toA = Math.hypot(ambiguous.ax() - rxX, ambiguous.az() - rxZ);
+            double toB = Math.hypot(ambiguous.bx() - rxX, ambiguous.bz() - rxZ);
+            assertEquals(toA < toB ? 0 : 1, ambiguous.likely(), "fresh at tick " + tick + ": the candidate near the truth");
+        }
+
+        Reading stale = LocatorTracker.update(fixed, sample(4_041, three.subList(0, 2)), BANDS, CONFIG,
+                new CountingGround(), 4_041);
+        LocatorFix.Ambiguous ambiguous = assertInstanceOf(LocatorFix.Ambiguous.class, stale.fix());
+        assertEquals(LocatorFix.Ambiguous.NO_PREFERENCE, ambiguous.likely(), "41 ticks old: no preference");
+        assertEquals(2, stale.used().size());
+
+        // A replay is still recognised whatever its age: that check uses the stored reading as is.
+        assertSame(fixed.fix(), LocatorTracker.update(fixed, fixed.sample(), BANDS, CONFIG, new CountingGround(), 9_000).fix());
+    }
+
     @Test
     @DisplayName("fresh for two intervals: a reading kept while the Locator was put away is not the current answer")
     void freshness() {

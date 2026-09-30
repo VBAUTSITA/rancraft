@@ -142,6 +142,45 @@ class DriveTestLogTest {
         assertEquals(2, log.size());
     }
 
+    /**
+     * Phase 3A review, round 1: "stationary" is measured from where the still period began, not from
+     * the previous (already replaced) sample. Walking at 4.317 blocks/s with a 2-tick interval moves
+     * 0.43 blocks per sample; measured sample to sample, every one replaced the last and a 100-block
+     * walk collapsed into one entry. From the anchor, every second sample is 0.8 blocks on and
+     * appends: 126 entries.
+     */
+    @Test
+    @DisplayName("A slow walk (0.4 blocks per sample) still leaves a trail: distance is measured from where the still period began")
+    void slowWalkStillAppends() {
+        DriveTestLog log = new DriveTestLog(3_600);
+        for (int i = 0; i <= 250; i++) {
+            log.record(at(2L * i, 0.4 * i, CELL_A, 0));
+        }
+        assertTrue(log.size() >= 80, "entries after a 100-block walk: " + log.size());
+        assertEquals(126, log.size(), "every second sample is at least half a block from the anchor");
+        assertEquals(0.4, log.entries().get(0).sample().x(), 1e-9, "the first still period keeps its newest sample");
+        assertEquals(100.0, log.entries().get(log.size() - 1).sample().x(), 1e-9);
+    }
+
+    @Test
+    @DisplayName("Sixty samples at one point (rising ticks) are still one entry, holding the newest")
+    void longStandStillIsOneEntry() {
+        DriveTestLog log = new DriveTestLog(3_600);
+        for (int i = 0; i < 60; i++) {
+            log.record(at(20L * i, 3.0, CELL_A, 0));
+        }
+        assertEquals(1, log.size());
+        assertEquals(20L * 59, log.entries().get(0).sample().tick());
+
+        // After a clear the next sample starts a new still period on its own.
+        log.clear();
+        log.record(at(2_000, 50.0, CELL_A, 0));
+        log.record(at(2_020, 50.3, CELL_A, 0));
+        assertEquals(1, log.size());
+        log.record(at(2_040, 50.6, CELL_A, 0));
+        assertEquals(2, log.size(), "0.6 from where this still period began");
+    }
+
     @Test
     @DisplayName("Standing still but changing service level appends, so the change is not lost")
     void levelChangeAppends() {

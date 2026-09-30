@@ -25,9 +25,16 @@ public final class DriveTestLog {
     public static final int DEFAULT_CAPACITY = 3_600;
 
     /**
-     * Below this movement, in blocks, a sample with the same cell and level replaces the previous one
-     * rather than being appended. Without it, standing still for a minute stacks sixty identical
-     * markers in one voxel.
+     * Below this distance, in blocks, from where the still period began, a sample with the same cell
+     * and level replaces the previous one rather than being appended. Without it, standing still for
+     * a minute stacks sixty identical markers in one voxel.
+     *
+     * <p>Measured from the <em>first</em> sample of the still period (the last appended entry), not
+     * from the previous sample, which may itself be a replacement (Phase 3A review, round 1). Measured
+     * from the previous sample, any movement slower than this per evaluation (walking at a 2-tick
+     * interval, sneaking at 5 ticks, or drifting under 0.5 blocks per second at the default 20) kept
+     * replacing one entry, and a whole walk collapsed into a single moving point in the trail and the
+     * CSV.
      */
     public static final double STATIONARY_EPSILON_BLOCKS = 0.5;
 
@@ -83,6 +90,12 @@ public final class DriveTestLog {
     private final int capacity;
     private final Deque<Entry> entries;
 
+    /** Where the current still period began: the position of the last <em>appended</em> sample. */
+    private double anchorX;
+    private double anchorY;
+    private double anchorZ;
+    private boolean hasAnchor;
+
     public DriveTestLog() {
         this(DEFAULT_CAPACITY);
     }
@@ -100,6 +113,9 @@ public final class DriveTestLog {
      *
      * <p>The sample either replaces the previous entry (stationary, same cell, same level, and
      * neither sample marks an event) or is appended, evicting the oldest entry once the log is full.
+     * "Stationary" is measured from where the still period began, the last appended sample, not from
+     * the previous sample: a replacement keeps the newest sample but does not move that anchor, so a
+     * slow walk still appends an entry every {@link #STATIONARY_EPSILON_BLOCKS}.
      * A replace never swallows an event: if the previous entry marks a handover, the new sample is
      * appended after it so the handover marker stays where it happened.
      *
@@ -118,7 +134,7 @@ public final class DriveTestLog {
 
         if (previous != null && isStationaryRepeat(previous, entry)) {
             entries.pollLast();
-            entries.addLast(entry);
+            entries.addLast(entry);      // the newest sample is kept; the anchor does not move
             return entry;
         }
 
@@ -126,6 +142,10 @@ public final class DriveTestLog {
             entries.pollFirst();
         }
         entries.addLast(entry);
+        anchorX = sample.x();
+        anchorY = sample.y();
+        anchorZ = sample.z();
+        hasAnchor = true;
         return entry;
     }
 
@@ -171,6 +191,7 @@ public final class DriveTestLog {
     /** Forgets everything. The next sample is compared against nothing and so marks no event. */
     public void clear() {
         entries.clear();
+        hasAnchor = false;
     }
 
     // ---- classification -----------------------------------------------------
@@ -208,7 +229,12 @@ public final class DriveTestLog {
         return Event.NONE;
     }
 
-    private static boolean isStationaryRepeat(Entry previous, Entry current) {
+    /**
+     * Same cell and level as the previous entry, no event on either, and within
+     * {@link #STATIONARY_EPSILON_BLOCKS} of where the still period began (the anchor), not of the
+     * previous sample.
+     */
+    private boolean isStationaryRepeat(Entry previous, Entry current) {
         if (previous.event() != Event.NONE || current.event() != Event.NONE) {
             return false;
         }
@@ -217,9 +243,12 @@ public final class DriveTestLog {
         if (a.servingCellId() != b.servingCellId() || a.level() != b.level()) {
             return false;
         }
-        double dx = a.x() - b.x();
-        double dy = a.y() - b.y();
-        double dz = a.z() - b.z();
+        if (!hasAnchor) {
+            return false;
+        }
+        double dx = anchorX - b.x();
+        double dy = anchorY - b.y();
+        double dz = anchorZ - b.z();
         return dx * dx + dy * dy + dz * dz < STATIONARY_EPSILON_BLOCKS * STATIONARY_EPSILON_BLOCKS;
     }
 

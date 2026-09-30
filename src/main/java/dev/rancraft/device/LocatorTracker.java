@@ -49,7 +49,8 @@ public final class LocatorTracker {
      *
      * @param sample               the evaluation the fix came from. Kept to recognise a replay of it.
      * @param fix                  the solver's answer ({@link LocatorSolver#solve}).
-     * @param used                 the ranges that went into it, strongest first: the Locator's rings.
+     * @param used                 the ranges that went into it, one per site, strongest first: the
+     *                             Locator's rings ({@link LocatorSolver#cellsUsed}).
      * @param bestResolutionMeters the finest timing resolution among {@code used}, {@code c / BW} in
      *                             metres (0 when none was used): what the HUD's "best res" names.
      * @param bestResolutionBandId the band that resolution belongs to ({@code ""} when none).
@@ -85,8 +86,17 @@ public final class LocatorTracker {
 
     /**
      * One dispatch: a replay reuses the stored fix, anything else is ranged and solved afresh with
-     * the previous fix as the solver's {@code previous} (which picks the likely candidate of an
-     * ambiguous answer).
+     * the previous fix, if still fresh ({@link #isFresh} / {@link #freshForTicks}), as the solver's
+     * {@code previous} (which picks the likely candidate of an ambiguous answer and seeds the height
+     * when the first column is unloaded).
+     *
+     * <p>Only a fresh reading counts (Phase 3A review, round 1). One older than
+     * {@link #freshForTicks} means the Locator was put away (a chest, the main inventory) and the
+     * player may have travelled since; a "likely" candidate chosen by nearness to where they were
+     * would be a coin flip drawn as a preference, and the Ambiguous-to-Ambiguous chain would then
+     * keep that wrong choice. The same rule as saving a waypoint. Known limit: a same-dimension
+     * teleport while the Locator stays in the hotbar keeps a fresh but far-away previous for one
+     * evaluation.
      *
      * @param previous     what this receiver's Locator last worked out, or {@code null}.
      * @param dispatchTick the game time of this dispatch ({@code DeviceContext.tick()}).
@@ -101,7 +111,13 @@ public final class LocatorTracker {
         LocatorParams params = config.locatorParams();
         List<RangeMeasurement> ranges = Ranging.measure(sample.cells(), bands, config);
         List<RangeMeasurement> used = LocatorSolver.cellsUsed(ranges, params);
-        LocatorFix fix = LocatorSolver.solve(ranges, ground, previous == null ? null : previous.fix(), params);
+        // A reading older than freshForTicks means the Locator was put away and the player may have
+        // moved: it is no longer an estimate of where they are, so it must not pick the likely
+        // candidate or seed the height (same rule as saving a waypoint). isReplay above still uses
+        // `previous`.
+        LocatorFix prior = isFresh(previous, dispatchTick, freshForTicks(config.evaluationIntervalTicks()))
+                ? previous.fix() : null;
+        LocatorFix fix = LocatorSolver.solve(ranges, ground, prior, params);
 
         double bestMeters = 0.0;
         String bestBand = "";
