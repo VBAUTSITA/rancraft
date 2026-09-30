@@ -2452,3 +2452,230 @@ server switch keeps the drive-test trail; a game test run with nothing registere
 the optional slice 17 CSV columns. Standing rules for later slices: `rf`/`util` purity, and a loot
 table and pickaxe tag for every new block. And every in-game check (`PHASE_3.md`, "How to test
 Part 3A in game", 11 steps).
+
+---
+
+## Slice 6 — mast columns (§3B.1)
+
+Part 3B's first slice closes §0 known problem 1: nine Signal Masts in one column were nine
+co-channel cells shouting over each other (VISION.md's "(9 co-channel)" incident). Now a
+contiguous column is one cell. Code checkpoint `703c3a1`; this section and the tracker land in the
+slice commit "Phase 3 slice 6: mast columns".
+
+### What was built
+
+- **`util/ColumnScan`** (pure). `bounds(y, isMast, maxHeight)` walks down from `y` to the lowest
+  contiguous mast (the base), then up to the highest, and returns `Bounds(baseY, topY, highestY)`:
+  `topY` is the top of the signal part (at most `maxHeight` masts), `highestY` the top of the whole
+  run, `radiatingY() = topY + 1`. Also `isBase(y, isMast)` (two reads), `mountingPole(bounds,
+  isAntenna)` (an antenna directly above `highestY`) and `any(bounds, test)` (the power gate). Each
+  walk is capped at 4096 steps, so a predicate that never says "no" cannot hang it.
+  `PackagePurityTest.utilIsPure` checks it.
+- **`block/MastColumn`**: `ColumnScan` applied to a `BlockGetter` (server level or client level),
+  one x/z column, `MutableBlockPos` reads; `ownsCell` (base and not a pole) and
+  `refresh(ServerLevel, pos)` (the re-scan).
+- **`SignalMastBlock`**: `updateShape` for `UP`/`DOWN` and `neighborChanged` (after updating the
+  mast's own `POWERED`) call `MastColumn.refresh`, on a server level only (never on the client or in
+  a `WorldGenRegion`).
+- **`SignalMastBlockEntity`**: `isTransmitting()` is true only for a column's base with no sector on
+  top (and, with `requireRedstone`, any mast of the column powered); `radiatingPoint()` is the
+  column's `top.above()` for a base; PCI planning waits until the mast is a base; a structure mast
+  promoted to base gets a fresh plan; a base loaded from saved data reports its column to the
+  census.
+- **`AntennaBlockEntity`**: an `onAir` flag, set by `refreshRegistration` and pushed with
+  `syncToClients()` when it changes; `OnAir` appended to the update tag only and read back on the
+  client; a `readyForPciPlan()` hook (true except for a structure mast).
+- **`RanCraftConfig.maxMastHeight`** (COMMON, default 64, range 1-4096), with an accessor that falls
+  back to the default because the client's lens reads it too. Not in `RfConfig`: no `rf` code uses
+  it.
+- **RF Lens**: `LensRenderer` skips structure masts and mounting poles, draws one lobe per cell at
+  its radiating point (the same scan the server does), and greys an off-air cell
+  (`LensStyle.lobeRgb` / `lobeAlpha`: `OFF_AIR_RGB` 0x8C8C8C at half opacity).
+- **`world/MastColumnCensus`**: the one-line log §3B.1 asks for.
+- **`ModPayloads.PROTOCOL_VERSION` 5 → 6** (decision 6).
+- **`gametest/MastColumnGameTests`** (8 game tests) on a new empty 3x14x3 template
+  (`data/rancraft/structure/gametest/empty_3x14x3.nbt`: the 3x3x3 one with a taller size). No block
+  was added, so no loot table or pickaxe tag changes.
+
+### The rule, and where each part of §3B.1 lives
+
+| §3B.1 | Where | Pinned by |
+|---|---|---|
+| A contiguous run is one site; a gap ends it | `ColumnScan.bounds` | `ColumnScanTest.nineStack`, `.gapInTheColumn`; game test `gaps_split_and_a_new_bottom_mast_takes_over` |
+| The base owns the cell (`cellId = base.asLong()`) | only the base registers, and `cellId()` is still the entity's own position | game tests `nine_masts_are_one_cell`, `extending_keeps_id_and_pci` |
+| Radiating point = `top.above()` | `SignalMastBlockEntity.radiatingPoint` | the same |
+| Only the base registers | `SignalMastBlockEntity.isTransmitting` (structure: false) | `nine_masts_are_one_cell` (8 structure masts not transmitting, `OnAir` false) |
+| A sector on top silences the column | `ColumnScan.mountingPole`, above `highestY` | `ColumnScanTest.antennaOnTop`; game test `sector_on_top_silences_the_column` |
+| `requireRedstone`: any mast powered | `MastColumn.powered` (`ColumnScan.any`) | `ColumnScanTest.anyMastPowersTheColumn`; game test `any_powered_mast_powers_the_column` (only the top mast powered) |
+| Height cap `maxMastHeight` | `ColumnScan.bounds` | `ColumnScanTest.heightCap`; game test `height_cap_limits_the_radiating_point` (cap 3, six masts) |
+| Re-scan on `updateShape` / `neighborChanged`, refresh the base | `SignalMastBlock`, `MastColumn.refresh` | every game test that edits a column |
+| Breaking the base promotes the next mast | follows from the rule; fresh PCI plan | `ColumnScanTest.breakingTheBasePromotesTheNextMast`; game test `breaking_the_base_promotes_the_next_mast` |
+| Lens: one lobe per transmitting cell, at the new point | `LensRenderer` via `SignalMastBlockEntity.ownsColumnCell` | in game only (`PHASE_3.md`, slice 6) |
+| `OnAir` in the update tag, off-air cells greyed | `AntennaBlockEntity.getUpdateTag`, `LensStyle` | `nine_masts_are_one_cell` (tag true / false, never saved); `LensStyleTest.offAirLobesAreGreyed` |
+| Log once: "N stacked masts now form M columns; N−M masts stopped transmitting." | `MastColumnCensus` | `MastColumnCensusTest`; game test `saved_stack_is_logged_once` |
+
+### Deviations and decisions
+
+1. **`ColumnScan.bounds` returns a third value, `highestY`** (the spec writes `(baseY, topY)`).
+   With the cap in play, `topY` is the top of the signal part, but "a sector antenna directly above
+   the top mast" has to look above the *highest* mast (a sector cannot sit on a mast in the middle
+   of the structure), and the power gate covers the whole column. The record is new, so nothing
+   else is affected.
+2. **The power gate and the pole test cover the whole run, structure above the cap included.**
+   §3B.1 says "any mast in it"; the masts above the cap are still part of the tower, only not of its
+   signal part. A sector on the highest mast of a capped column therefore still silences it (pinned
+   by the cap game test).
+3. **The re-scan refreshes two entities, not one**: the mast that received the shape or neighbour
+   update, and its column's base. §3B.1 says "call refreshRegistration() on the base's block entity
+   only", meaning not on every mast. But when a mast is placed *under* a base, the old base gets the
+   update and must unregister (it is structure now) while the new base registers. Refreshing a
+   structure mast costs its two-read `isBase` check and an unregister that does nothing, so the
+   rule's intent (no per-mast work) holds. No other mast is touched.
+4. **PCI planning waits until a mast is a base.** A mast placed on top of a column is structure:
+   planning it would log a plan for a cell that never transmits, and the plan would be stale by the
+   time (if ever) it became a base. `AntennaBlockEntity.readyForPciPlan()` holds the plan back; a
+   transient `seenAsStructure` flag spots a structure mast that became a base while loaded (base
+   broken, column split) and plans it then, so §3B.1's "it gets a fresh PCI plan" is literally true.
+   Consequences, all intended: a base is planned on its first refresh, which while building a column
+   by hand is when the second mast goes on (the plan uses the radiating point at that moment, a block
+   or two below the final top: irrelevant against a 500-block planning radius); a base loaded from
+   disk keeps its saved PCI. Sectors are planned exactly as before.
+5. **Only extending upward keeps the cell.** A mast placed under the base becomes the new base: a
+   new `cellId` (its position) and a fresh PCI plan, and the old base stops transmitting. That is
+   §3B.1's design ("using the top as owner would re-plan the PCI every time someone adds a block"),
+   applied to the downward case. Pinned by the gaps game test.
+6. **`PROTOCOL_VERSION` 5 → 6, although §4 lists no bump for the update tag.** The update tag is
+   part of the wire format, and the client reads it differently now: a slice 5 client on a slice 6
+   server would draw a lobe on every stacked mast (none greyed), and a slice 6 client on a slice 5
+   server one lobe where nine cells transmit. The project rule is one bump per wire change; this is
+   one. No payload changed shape. `DATA_VERSION` stays 2: nothing persisted changed (`OnAir` is
+   written in `getUpdateTag`, not `saveAdditional`; the game test checks the saved tag has no
+   `OnAir`).
+7. **`OnAir` starts true** on a new entity. On the server `refreshRegistration` sets it before any
+   chunk is sent (the chunk-load refresh runs first); on the client an absent flag (a tag from a
+   server that never sends it) draws the antenna as before. A crafted `block_entity_data` value is
+   overwritten by the server's next refresh. Structure masts carry `OnAir` false; the lens does not
+   draw them anyway.
+8. **The census line is written per server run, per batch of loads.** Nothing persisted records
+   that a world was already converted (slice 6 changes no save data), so a world saved after this
+   slice logs the same line on every start: it describes the rule, not a migration step. A column is
+   counted when its base loads *from saved data*, once per base position and dimension per run, and
+   the line is written after 100 quiet ticks with the running total (chunks load a few at a time; a
+   line per tower is the spam the spec asks to avoid). Mounting poles stopped transmitting
+   altogether, the base included, so they get a second sentence ("K masts under P sector antennas
+   are mounting poles now and stopped transmitting.") instead of distorting N−M. Singulars are
+   handled ("1 column"). Caveat: a mast placed with copied data (creative pick-block with Ctrl) at
+   the bottom of a column counts as loaded from data.
+9. **`maxMastHeight` is COMMON, so it is not synced to clients** (NeoForge syncs SERVER configs
+   only). The lens reads the client's own copy. In single player both sides read the same value; on
+   a dedicated server whose admin changed the cap, a column taller than the lower of the two caps is
+   drawn with its lobe at the client's cap. Recorded as a follow-up; a fix would send the server's
+   value, or put the radiating point in the update tag.
+10. **A config change applies at the next re-scan.** Changing `maxMastHeight` (or `requireRedstone`,
+    as before) re-registers nothing by itself; the next block change at the column or the chunk's
+    next load does.
+
+### Known behaviours (not bugs)
+
+- **Breaking the base promotes the next mast up**, which gets a new cell id and a fresh PCI plan
+  (§3B.1). Neighbours see a new cell; the planner may or may not pick the old PCI again.
+- **A single mast with a sector antenna directly on it is now a mounting pole and silent.** In a
+  Phase 2 world both transmitted. The census names these. A sector *under* a mast does not count:
+  the mast above it starts a column of its own.
+- **The radiating point of a capped column sits inside a structure mast.** Masts are
+  `noOcclusion()`, which the material table resolves to 0 dB, so the structure above the cap does
+  not attenuate the column's own rays.
+- A mast placed by a tool that skips shape updates (block flag 16) leaves its column stale until the
+  next update at the column or the chunk's next load, which re-scans every antenna
+  (`SignalTicker.onChunkLoad`).
+
+### Honest-abstraction notes (also at the code sites)
+
+- **No height term in the propagation model** (`ColumnScan` class javadoc). Log-distance path loss
+  has no antenna-height term; Okumura–Hata does (a taller base-station antenna lowers the loss at
+  every distance). In RANCraft a taller column helps only by lifting the radiating point clear of
+  obstruction and, for a sector on its own mast, through the vertical pattern (its downtilt is aimed
+  from higher up). In a voxel world obstruction is the dominant effect, so this is the right
+  first-order behaviour, but it is not the whole story. It stays on §6's "deliberately absent" list
+  (height gain in propagation).
+- **A column is one site, and its masts are structure** (`SignalMastBlock` javadoc): a real tower is
+  steel plus one antenna system per sector; here the tower is built from the same block that
+  radiates, and only the base's entity carries the cell's configuration.
+- **The mounting-pole rule is a game rule** (`SignalMastBlock` javadoc): a real pole can carry more
+  than one antenna; here the sector on top replaces the omni, which keeps one cell per column.
+- **The lens works the column out itself** (`LensRenderer` and `MastColumn` javadocs), from the
+  blocks, which are public world data like the antenna's declared pattern. It never computes what
+  anyone receives. `OnAir` (`AntennaBlockEntity.onAir`) is the antenna's own public state, like a lit
+  furnace: the client learns *that* a cell is off the air, not why.
+- **The height cap is a game rule** (the `maxMastHeight` config comment): a structural limit, not RF.
+
+### Measured
+
+- **Scan cost on live ground** (`MastColumnGameTests.nine_masts_are_one_cell`, 20,000 repetitions
+  after a warm-up): **624 ns** per full scan of the nine-mast column from its base (11 block reads),
+  **812 ns** from the sixth mast (16 reads), **124 ns** per `isBase` (2 reads): about 57 ns per
+  read, so a 64-mast column (about 66 reads) costs roughly 4 µs per scan. A scan runs on a block
+  change next to a mast (a handful per placement), on a chunk load (one full scan per base; a
+  structure mast stops after two reads) and, on the client, about twice per drawn column per frame.
+  Never per evaluation: the ticker reads the registry. Wall-clock in a shared JVM, an order of
+  magnitude only.
+- **Registry**: the nine-mast column registers **1 cell instead of 9**, so the tower is no longer a
+  co-channel interferer to itself (VISION.md's "(9 co-channel)" from that tower becomes 0).
+- **Census line** as logged in the game test run: "9 stacked masts now form 1 column; 8 masts
+  stopped transmitting."
+
+### Tests
+
+- `ColumnScanTest` (12, new): single block; 9-stack seen from every mast; extending keeps the base;
+  gap; breaking the base; antenna on top (and one block higher, and a pole of one mast); height cap
+  (at, over and under it, cap 1, a nonsense cap, a huge cap); negative heights; the power gate over
+  the whole run; no mast at y is an error; the walk is bounded; the read count (15 for a scan from
+  the middle of a 9-stack, 2 for `isBase`).
+- `MastColumnCensusTest` (3, new): §3B.1's sentence, a lone mast not counted, mounting poles named
+  apart, singulars.
+- `LensStyleTest` (+1): off-air lobes grey at half opacity, never fully transparent.
+- `MastColumnGameTests` (8 game tests, new): `nine_masts_are_one_cell` (one cell, owned by the base,
+  radiating from above the ninth mast; `OnAir` true on the base and false on the eight structure
+  masts, in the update tag and never in the save; the scan cost); `extending_keeps_id_and_pci`;
+  `sector_on_top_silences_the_column` (and back on the air without it);
+  `breaking_the_base_promotes_the_next_mast`; `gaps_split_and_a_new_bottom_mast_takes_over` (two
+  cells across a gap, one again when it is filled, a mast under the base takes over);
+  `any_powered_mast_powers_the_column` (a redstone block beside the top mast only);
+  `height_cap_limits_the_radiating_point` (cap 3; a sector on the highest mast still silences); and
+  `saved_stack_is_logged_once`. The redstone and cap tests set the COMMON value in memory
+  (`ConfigValue.set`, never `save`, so the file is untouched: afterwards it still reads
+  `requireRedstone = false`, `maxMastHeight = 64`) and put it back, also on a failed assertion, in
+  batches of their own because the value is global. The census test labels its harness abstraction
+  in its javadoc: it hands each placed mast its own saved data before `onLoad`, the order a chunk
+  load uses, because there is no Phase 2 save to load.
+
+### APIs verified against sources (new to this codebase)
+
+- `BlockBehaviour.updateShape(BlockState, Direction, BlockState, LevelAccessor, BlockPos, BlockPos)`
+  (1.21.1 patched sources). `Level.markAndNotifyBlock` calls the neighbours' `updateShape` through
+  `updateNeighbourShapes` unless flag 16 (`UPDATE_KNOWN_SHAPE`) is set, so a `POWERED` change with
+  `UPDATE_CLIENTS` (2) also reaches the masts above and below (harmless: an idempotent re-scan).
+- `LevelChunk.setBlockEntity` sets the entity's level before the neighbours are notified, and
+  `addAndRegisterBlockEntity` defers `onLoad` through `Level.addFreshBlockEntities` (NeoForge) to the
+  next block-entity tick. That is why a new bottom mast can be refreshed from its old base's
+  `updateShape` before its own `onLoad`, and why the game tests wait a few ticks.
+- `ChunkStatusTasks.full` (NeoForge patch): `GenerationChunkHolder.currentlyLoading` is set around
+  `registerAllBlockEntitiesAfterLevelLoad` and the `ChunkEvent.Load` post, so the load-time refresh
+  reading the loading chunk's own blocks does not wait on that chunk's future. A column never leaves
+  its chunk.
+- `ServerChunkCache.blockChanged` → `ChunkHolder.blockChanged` does nothing while the chunk is not
+  ticking, so an `OnAir` sync during a chunk load sends nothing (the chunk packet carries the tag).
+- `ModConfigSpec.ConfigValue.set` (NeoForge 21.1.251 sources): in memory, and in the cache for a
+  no-restart value; written to the file only by `save()`.
+- `BlockEntity.loadWithComponents` / `saveWithoutMetadata` (public final), `GameTestSequence`
+  (`thenIdle`, `thenExecute`, `thenWaitUntil`, `thenSucceed`), `GameTestHelper.destroyBlock`
+  (`destroyBlock(pos, false, null)`: no drops).
+
+### Verification
+
+| Check | Result |
+|---|---|
+| `./gradlew build` | **398 passed, 0 failed, 0 skipped** (382 + 12 + 3 + 1) |
+| `rf` / `util` purity | `PackagePurityTest` passes with `ColumnScan` in `util` |
+| `./gradlew runGameTestServer` | "13 tests are now running", "All 13 required tests passed" (8 new; the 5 existing unchanged); the scan-cost and census lines above are from that run |
+| In game | not run by the agent (no `runClient`); the checks are in `PHASE_3.md`, slice 6 |

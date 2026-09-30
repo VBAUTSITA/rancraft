@@ -4,9 +4,10 @@ package dev.rancraft.rf;
  * A transmitting cell.
  *
  * <p>{@code x}/{@code y}/{@code z} are the <em>radiating point</em> in block coordinates, not the
- * block the player placed. For a Signal Mast that is {@code pos.above()} -- the top face of the
- * mast. Phase 3 stacks masts for height, so the radiating point must stay decoupled from the
- * block position.
+ * block the player placed. For a single Signal Mast that is {@code pos.above()} -- the top face of
+ * the mast. For a column of stacked masts (Phase 3 slice 6) the cell is owned by the lowest mast
+ * ({@code cellId} is its position) but radiates from above the top one, which is why the radiating
+ * point is decoupled from the block position.
  *
  * <p>{@code azimuthDeg}, {@code tiltDeg}, {@code hBeamwidthDeg}, {@code vBeamwidthDeg} and
  * {@code pci} are Phase 2 seams: they are persisted and round-tripped through save/load, but the

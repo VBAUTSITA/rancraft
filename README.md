@@ -47,6 +47,11 @@ To run a headless dedicated server instead: `.\gradlew.bat runServer`
   ± and HDOP, or RANGE ONLY / AMBIGUOUS / POOR GEOMETRY / NO SIGNAL), draws the range rings in the
   world, saves waypoints of the *estimate* (sneak + use; use cycles them) and keeps a "last fix
   before death". Creative tab only for now (recipes come in Phase 3C).
+- **Phase 3B, in progress** — mast columns: Signal Masts stacked in one column are one cell, owned
+  by the lowest mast (so adding masts on top keeps its PCI) and radiating from above the top one
+  (at most `maxMastHeight`, default 64, masts count). A Sector Antenna on top turns the column into a
+  mounting pole: the column goes quiet and the sector is its own cell. The lens draws one lobe per
+  cell, and greys a cell the server reports off the air.
 
 See `VISION.md` for the full design of the vision feature, `VISION_STEP3.md` for Step 3 (the
 drive-test log, and the planned automatic problem diagnosis), and `NOTES.md` for the full build log,
@@ -58,9 +63,10 @@ every tuning decision, every deviation from spec, and what's honestly modeled vs
 .\gradlew.bat build
 ```
 
-Compiles the mod and runs the full unit test suite (382 tests at the end of Phase 3A): the RF maths
-in `dev.rancraft.rf` and `dev.rancraft.util`, which is pure Java and must stay free of Minecraft
-(`PackagePurityTest` fails the build otherwise), plus the payloads, HUD text and device logic.
+Compiles the mod and runs the full unit test suite (382 tests at the end of Phase 3A, 398 after
+Phase 3B's mast columns): the RF maths in `dev.rancraft.rf` and `dev.rancraft.util`, which is pure
+Java and must stay free of Minecraft (`PackagePurityTest` fails the build otherwise), plus the
+payloads, HUD text and device logic.
 
 ```
 .\gradlew.bat runGameTestServer
@@ -69,8 +75,9 @@ in `dev.rancraft.rf` and `dev.rancraft.util`, which is pure Java and must stay f
 Starts a headless game test server, runs the in-game regression tests in `dev.rancraft.gametest`
 (for now: every block drops itself when mined with an iron pickaxe in survival; the Network
 Locator's emergency record survives death, a dead player's Locator does nothing, and its ground
-lookups and solve cost are logged), and exits. The task fails if any test fails. It is separate
-from `build`.
+lookups and solve cost are logged; stacked masts form one cell per column, and extending,
+breaking, splitting, redstone and the height cap behave as specified), and exits. The task fails
+if any test fails. It is separate from `build`.
 
 Phase 3A's code is complete and every headless check passes; what still needs a person at the
 client is listed step by step at the end of `PHASE_3.md` ("How to test Part 3A in game").

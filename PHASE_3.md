@@ -51,7 +51,7 @@ Legend: `[x]` done and verified · `[~]` partly done / needs a manual in-game ch
 | 5 | Locator item, payload, HUD, rings, waypoints, emergency record | 3A | [~] `rancraft:network_locator` ("Network Locator", a `SignalDevice`, requirement NONE); fix from the full cell list every dispatch, replays reuse it; `LocatorFixPayload` v1 only while held; HUD top-left stacked under the meter's detailed readout; rings, FIX marker + error circle, AMBIGUOUS markers; 8 waypoints of the estimate; `copyOnDeath` emergency record; `PROTOCOL_VERSION` 5. Headless green (367 tests, 0 skipped; `runGameTestServer` 4/4, incl. death/clone of the record and the live-level cost: 22 µs per 8-cell solve); in-game checks below. **3A ships here** | bf5eb47; e0fcfcd; 610a79c; 6c5d391; tracker 334edff |
 | 5a | Phase 3A review round 1: fixes (11 reported; 9 confirmed and fixed, 7 distinct; 2 rejected) | 3A | [~] Locator counts sites, not cells (`locatorSiteMergeBlocks` 3.0; wrong-mirror FIX 921/2000 → 0, triangle ± 6.45 vs rms 10.21 → 10.42 vs 10.44); drive-test "stationary" measured from the still period's start; solver prior only while fresh; client drops the reading when no Locator is held, learns the stale limit from the payload cadence, uses the server's scale for a waypoint's ± or none; a dead player's Locator verified inert at runtime. Headless green (382 tests, 0 skipped; `runGameTestServer` 5/5); in-game checks below; spec conflict in follow-ups | 5221c46; 62fef10; 2f1306f; a755f7f; docs a998f3f; tracker c54e86f |
 | 5b | Phase 3A docs and tracker: gate findings closed or logged, summary, in-game checklist | 3A | [x] the gate reviews' open findings checked against the code: two abstractions labelled at their code sites (stale candidate, device measures only while carried) plus two more NOTES.md claimed were there (slant σ, near-collinear towers); worst-case ground lookups per fix corrected 105 → 113 (7 × 16 + 1) in the game test and the docs; the near-collinear wrong-side FIX measured (32 % at 10 blocks off the line) and logged open; the review round's 2 rejected findings recorded; every follow-up marked done or open; NOTES.md "Phase 3A summary"; VISION_STEP3.md Part 3a; README; "How to test Part 3A in game" at the end of this file, its numbers checked against the solver with a scratch program. Headless green (382 tests, 0 skipped; `runGameTestServer` 5/5 after part 1) | 0482a74; docs 2cc912f; tracker "PHASE_3.md, NOTES.md: record the Phase 3A docs commit hash" |
-| 6 | ColumnScan + mast columns + lens column/on-air | 3B | [ ] | |
+| 6 | ColumnScan + mast columns + lens column/on-air | 3B | [~] `util/ColumnScan` (pure, 12 tests); a contiguous mast column is one cell owned by its base (`cellId = base.asLong()`), radiating from `top.above()`, structure never registers, a sector on the highest mast silences it, any powered mast powers it, `maxMastHeight` 64 caps the signal part; re-scan on `updateShape`/`neighborChanged` refreshes only the mast and the base; fresh PCI plan on promotion; `OnAir` in the update tag (not saved), lens draws one lobe per cell at the top and greys off-air cells; one census log line; `PROTOCOL_VERSION` 6. Headless green (398 tests, 0 skipped; `runGameTestServer` 13/13, 8 new: 624 ns per nine-mast scan); in-game checks below; three recorded deviations in follow-ups | 703c3a1; slice commit "Phase 3 slice 6: mast columns" |
 | 7 | BinTraversal + region epochs + cache rework | 3B | [ ] | |
 | 8 | Fixed receiver registry + ticker | 3B | [ ] | |
 | 9 | BlerModel + Radio Link | 3B | [ ] | |
@@ -390,10 +390,70 @@ the step numbers point into "How to test Part 3A in game" at the end of this fil
       runtime through the real death and clone events (`LocatorGameTests`); the HUD after a real
       respawn needs the client (step 8).*
 
+## Slice 6 (mast columns) checks
+
+Headless (verified by `./gradlew build`, 398 tests, 0 skipped, and `./gradlew runGameTestServer`,
+13 of 13; details and numbers in NOTES.md, slice 6):
+
+- [x] `ColumnScan.bounds(y, isMast, maxHeight)` is pure (in `util`, `PackagePurityTest` green) and
+      pinned with a fake predicate: single block, 9-stack (the same column from every mast), gap,
+      antenna on top, height cap, plus negative heights, the power gate, a bounded walk and the read
+      count (`ColumnScanTest`, 12).
+- [x] **At runtime** (`MastColumnGameTests`, live server level): nine stacked masts register one
+      cell, id = the base's position, radiating from above the ninth mast; the eight others are not
+      transmitting and their `OnAir` is false.
+- [x] **At runtime**: a mast added on top keeps the cell's id and PCI and lifts the radiating point
+      by one; breaking the base promotes the next mast (new id, same radiating point, freshly
+      planned); a gap makes two cells and filling it one again; a mast placed under the base takes
+      over and the old base goes quiet.
+- [x] **At runtime**: a sector antenna on the highest mast silences the column (only the sector's
+      cell is registered) and removing it puts the column back; with `maxMastHeight` 3, six masts
+      radiate from above the third and a sector on the sixth still silences them.
+- [x] **At runtime**: with `requireRedstone` on, a redstone block beside the top mast only puts the
+      column on the air (base itself unpowered), and removing it takes it off (`OnAir` follows).
+- [x] `OnAir` is in the update tag (true for a transmitting base, false for structure) and never in
+      the saved data (`nine_masts_are_one_cell`); no `DATA_VERSION` change. `PROTOCOL_VERSION` 5 → 6
+      (see follow-ups).
+- [x] Off-air lobes are grey at half opacity whatever the band (`LensStyleTest`).
+- [x] The census line, logged once per settled batch of loads: "9 stacked masts now form 1 column; 8
+      masts stopped transmitting." (`saved_stack_is_logged_once`, which feeds each mast its saved data
+      before `onLoad`, as a chunk load does; the sentence rules in `MastColumnCensusTest`).
+- [x] Cost measured on live ground: 624 ns per nine-mast scan from the base (11 reads), 812 ns from
+      the sixth mast (16), 124 ns per two-read base check; never per evaluation.
+
+Needs a human in game (`runClient`, creative tab "RANCraft", lens on Antennas or ALL, meter detailed
+with a right-click):
+
+- [~] Build a column of nine Signal Masts in open ground, no other band_900 cell nearby. Lens: **one**
+      lobe, just above the top mast (before: nine overlapping lobes). Meter beside it: "Serving: PCI n
+      @ x, top+1, z" and "(0 co-channel)" (before: "(8 co-channel)" or so).
+- [~] Add a tenth mast on top: the lobe moves up one block, the meter's "@ ... y" goes up by one and
+      its PCI stays the same; the server log shows no new "PCI plan" line.
+- [~] Put a Sector Antenna on the top mast: the column's lobe disappears and the sector's lobe
+      appears on top of it; the meter now serves from the sector. Break the sector: the column's lobe
+      comes back at the top.
+- [~] Break the lowest mast: the lobe stays where it was (same top); the server log shows a new "PCI
+      plan" for the mast above it (a fresh plan: known behaviour).
+- [~] Set `requireRedstone = true` (config, game closed), rebuild a column: its lobe is **grey**
+      (off the air) and the meter says NO SERVICE near it. Place a Block of Redstone touching any one
+      mast of the column (a middle one will do; a lever cannot hang on the thin mast): the lobe turns
+      band-coloured and the meter reads the column; break it: grey again. Restore
+      `requireRedstone = false`.
+- [~] Save and quit with a stacked column in the world, reopen: the server log has "RANCraft mast
+      columns (Phase 3, loaded this run): N stacked masts now form M columns; N-M masts stopped
+      transmitting." about 5 s after the world loads. (A Phase 2 world with stacks shows the same
+      line the first time; the column's lowest mast keeps its old PCI.)
+- [~] A 64-mast column (`/fill` a 1x64x1 pillar of `rancraft:signal_mast`) with the lens on: one
+      lobe above the 64th mast, no frame-rate drop; add masts above it: the lobe stays at the 64th
+      (the cap); a sector on the very top still silences it.
+
 ## 3B done-when
 
-- [ ] The nine-mast column reads as one cell, (0 co-channel), lobe at the top.
-- [ ] Adding a mast to the top of a column keeps its PCI.
+- [~] The nine-mast column reads as one cell, (0 co-channel), lobe at the top. *One registered cell
+      radiating from the top is verified at runtime (`nine_masts_are_one_cell`); the meter's "(0
+      co-channel)" and the lobe need the client (slice 6 in-game checks, first item).*
+- [x] Adding a mast to the top of a column keeps its PCI. *Verified at runtime in a live server
+      level: same cell id and PCI, radiating point up one (`extending_keeps_id_and_pci`).*
 - [ ] A block placed 500 blocks away no longer invalidates a cached sample; one on the link path does.
 - [ ] 200 radio links on a quiet server cost < 0.1 ms/tick in steady state (measured).
 - [ ] A radio link drops updates at POOR and is solid at FAIR.
@@ -483,7 +543,8 @@ came from.
   not name any other `dev.rancraft` package (the root package included), because every other
   package is game code and NeoForge is on the test classpath, so the unit tests would not catch
   Minecraft arriving one step removed. `rf` and `util` may use each other. Pure code must live in
-  one of the two (e.g. ColumnScan in `util`, as §2 says).
+  one of the two (e.g. ColumnScan in `util`, as §2 says). *Slice 6 complied: `util/ColumnScan` names
+  no other package; the Minecraft side is `block/MastColumn`.*
 - **[ ] Open, standing rule for every slice that adds a block (slices 6-16).** (from slice 1)
   `HarvestGameTests` generates one test per `ModBlocks.BLOCKS` entry
   and requires each block to be pickaxe-mineable and to drop itself. A new block needs a loot table
@@ -654,6 +715,9 @@ centroid, so 7 × 16 + 1 = 113). (g)
   real site identity later (slice 6's mast columns are a related grouping). `locatorSiteMergeBlocks`
   0 restores per-cell counting except for antennas stacked in one column. *(Row 5b: the RANGE ONLY
   line's "(one cell heard)" also means one site now; a relabel would change it with "Cells N".)*
+  *(Slice 6: a column of stacked masts is now one cell, so the Locator's grouping no longer has to
+  collapse stacks; a sector on a mounting pole is its own cell, as before, and sectors round one
+  mast are still grouped only by `locatorSiteMergeBlocks`. Nothing changed in the solver.)*
 - **[x] Done in row 5a (62fef10).** (from the Phase 3A review round 1) Drive-test de-duplication
   compared each sample with the previous, already replaced, sample, so any movement under 0.5 blocks
   per evaluation collapsed a whole walk into one moving entry in the trail and the CSV (a 100-block
@@ -675,6 +739,36 @@ centroid, so 7 × 16 + 1 = 113). (g)
   server that changes the scale after saving shows a different ± than the save message did. More
   robust: store the scale (or the ± in metres) on the waypoint, an appended optional field of
   `LocatorWaypoints.Waypoint` plus a stream-codec change and a `PROTOCOL_VERSION` bump.
+
+- **[x] Decided in slice 6, spec vs tree (recorded in NOTES.md, slice 6, decision 1).**
+  §3B.1 writes `ColumnScan.bounds(...) → (baseY, topY)`. The record also carries `highestY`, the top
+  of the whole run: with the height cap, "a sector antenna directly above the top mast" must look
+  above the highest mast, not above the capped top, and the power gate covers the whole column. The
+  cap only limits where the cell radiates from.
+- **[x] Decided in slice 6, spec vs tree (NOTES.md, slice 6, decision 3).** §3B.1: "call
+  refreshRegistration() on the base's block entity only". The re-scan also refreshes the mast that
+  received the update, because a base that just became structure (a mast was placed under it) must
+  unregister, and only it gets the update. That costs a two-read check on one structure mast; no
+  other mast is touched, which is the rule's intent.
+- **[x] Decided in slice 6, spec vs tree (NOTES.md, slice 6, decision 6).** §4 lists `+ OnAir` for the
+  update tag with no `PROTOCOL_VERSION` change. Bumped 5 → 6 anyway: the update tag is wire format
+  and the client now reads it (and collapses columns itself), so a slice 5 client on a slice 6
+  server would draw a lobe per stacked mast and the reverse one lobe where nine cells transmit. No
+  payload changed shape; `DATA_VERSION` stays 2.
+- **[ ] Open, minor (from slice 6).** `maxMastHeight` is COMMON, which NeoForge does not sync. The lens
+  applies the client's own copy, so on a dedicated server whose cap differs from the client's, a
+  column taller than the smaller cap is drawn with its lobe at the client's cap (the server radiates
+  from its own). Single player is unaffected. Fixes: move the value to a SERVER config (synced), or
+  append the base's radiating y to the update tag and let the lens prefer it.
+- **[ ] Open, minor (from slice 6).** The census line ("N stacked masts now form M columns...") is
+  logged on every server start, not only the first after the upgrade: slice 6 persists nothing that
+  would mark a world converted (§3B.1: no persisted field changes in 3B). If once-per-world is
+  wanted, the next save-format change (slice 10's `DATA_VERSION` 3) could carry a marker.
+- **[ ] Open, note for slices 12 and 15 (from slice 6).** `AntennaBlockEntity.onAir` is set only by
+  `refreshRegistration`, from `isTransmitting()`. Backhaul (§3C.2 "Unregister and set OnAir false")
+  and power (§3C.5) should feed `isTransmitting()` (or the mast's column rule) and call
+  `refreshRegistration()`, not write the flag directly, so the registry and the lens cannot disagree.
+  For a column, only the base's entity matters.
 
 ### Gate review findings (slices 2-5), checked against the code in row 5b
 

@@ -228,6 +228,8 @@ Carried over from the rest of the project: label abstractions, never teach a wro
 2. **Should the mast stack collapse into one cell?** Independent of this feature, but the lens will
    make the current N-cells-per-stack behaviour very visually obvious (nine overlapping spheres).
    Phase 3's "stack masts for height" needs to address it.
+   *Resolved in Phase 3 slice 6 (§3B.1): yes. A contiguous column is one cell, owned by its lowest
+   mast and radiating from above its top, and the lens draws one lobe there (NOTES.md, slice 6).*
 3. **Lobe size units.** Currently a flat configurable world radius. An alternative is scaling by
    actual computed range per band, which would make band choice visible in the geometry — but it
    would also make the lobe enormous for band_700 and tiny for band_3500.
