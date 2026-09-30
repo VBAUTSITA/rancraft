@@ -45,6 +45,7 @@ Legend: `[x]` done and verified · `[~]` partly done / needs a manual in-game ch
 | 3a | Owner decisions on the slice 3 follow-ups: keep the extra solver starts; weighted-fit `errorBlocks` | 3A | [x] extra starts kept and labelled a deliberate deviation; `errorBlocks = sqrt(trace((HᵀWH)⁻¹))`, HDOP unchanged; test 10 6.93x, triangle 1.40x pinned; equal-σ equivalence pinned (369 tests, 0 skipped) | f61a739; b47bcbf |
 | 4 | SignalDevice + ticker refactor + meter port (regression gate) | 3A | [~] `device/` (`SignalDevice`, `DeviceContext` per §3A.2, `DeviceMemory`, `ReplayGuard`); ticker scans carried devices, dispatches every sample (replays too), keeps "evaluated ⇒ sent"; meter ported (payload byte-identical to bd996d6, checked against the old code); stale armed candidate dropped after a gap of more than one interval. Regression gate passed headless (299 tests, 1 skipped; `runGameTestServer` 2/2); in-game checks below | a51e13a; 85bd051; 6558460 |
 | 5 | Locator item, payload, HUD, rings, waypoints, emergency record | 3A | [~] `rancraft:network_locator` ("Network Locator", a `SignalDevice`, requirement NONE); fix from the full cell list every dispatch, replays reuse it; `LocatorFixPayload` v1 only while held; HUD top-left stacked under the meter's detailed readout; rings, FIX marker + error circle, AMBIGUOUS markers; 8 waypoints of the estimate; `copyOnDeath` emergency record; `PROTOCOL_VERSION` 5. Headless green (367 tests, 0 skipped; `runGameTestServer` 4/4, incl. death/clone of the record and the live-level cost: 22 µs per 8-cell solve); in-game checks below. **3A ships here** | bf5eb47; e0fcfcd; 610a79c; 6c5d391 |
+| 5a | Phase 3A review round 1: fixes (9 findings, 7 distinct) | 3A | [~] Locator counts sites, not cells (`locatorSiteMergeBlocks` 3.0; wrong-mirror FIX 921/2000 → 0, triangle ± 6.45 vs rms 10.21 → 10.42 vs 10.44); drive-test "stationary" measured from the still period's start; solver prior only while fresh; client drops the reading when no Locator is held, learns the stale limit from the payload cadence, uses the server's scale for a waypoint's ± or none; a dead player's Locator verified inert at runtime. Headless green (382 tests, 0 skipped; `runGameTestServer` 5/5); in-game checks below; spec conflict in follow-ups | 5221c46; 62fef10; 2f1306f; a755f7f; docs: see NOTES.md |
 | 6 | ColumnScan + mast columns + lens column/on-air | 3B | [ ] | |
 | 7 | BinTraversal + region epochs + cache rework | 3B | [ ] | |
 | 8 | Fixed receiver registry + ticker | 3B | [ ] | |
@@ -246,8 +247,11 @@ Headless (verified by `./gradlew build`, 367 tests, 0 skipped, and `./gradlew ru
 - [x] A cached replay reuses the stored fix (no solve, no ground read); under `/tick freeze` a fresh
       evaluation with other cells is still solved; the previous fix marks the likely candidate
       (`LocatorTrackerTest`).
-- [x] Per-player reading in a `DeviceMemory` (cleared by `forget()`); a dead player's Locator does
-      nothing.
+- [x] Per-player reading in a `DeviceMemory` (cleared by `forget()`) (`DeviceMemoryTest`).
+- [x] *(Phase 3A review round 1: was marked here without a test.)* A dead player's Locator does
+      nothing: **at runtime**, `LocatorGameTests.dead_player_locator_is_inert` (a NeoForge
+      `FakePlayer` with 0 health keeps no reading and gets no emergency stamp from a FIX sample;
+      alive, the same call does both; fails with the `isAlive()` guard removed).
 - [x] `LocatorFixPayload`: version first, every fix type round-trips, at most 8 rings, band ids
       clamped to `MAX_BAND_ID_LENGTH`, counts checked before allocation, malformed input rejected
       (`LocatorFixPayloadTest`); one payload per evaluation, only from a held Locator, main hand
@@ -301,6 +305,57 @@ Needs a human in game (`runClient`, creative tab "RANCraft"):
 - [~] Carrying the Locator costs no extra evaluation: with the meter out, adding the Locator to the
       other hand or the hotbar changes nothing in the meter's update rate or the server's tick time
       (`/tick query`). See the follow-up on the EvaluationStats log.
+
+## Phase 3A review round 1 (row 5a) checks
+
+Headless (verified by `./gradlew build`, 382 tests, 0 skipped, and `./gradlew runGameTestServer`,
+5 of 5; details and numbers in NOTES.md, "Phase 3A review, round 1"):
+
+- [x] Sites, not cells: `LocatorSolver.siteRepresentatives` groups antennas within
+      `locatorSiteMergeBlocks` (default 3.0; new in `LocatorParams`, `RfConfig`, `RanCraftConfig`)
+      by union-find, one range per site (smallest sigma, then range, then first given), `maxCells`
+      counts sites; `solve` and `cellsUsed` share it. One two-sector site → RANGE ONLY; two
+      three-sector sites → AMBIGUOUS, identical to one cell per site; a triangle of three-sector
+      sites → FIX with `cellsUsed` 3 and the one-cell-per-site ±; `siteMergeBlocks` 0 → the old
+      per-cell answers (`LocatorSolverTest`, +5). Scratch before/after: wrong-mirror FIX 921 → 0 of
+      2000, triangle ± 6.45 vs rms 10.21 → 10.42 vs 10.44.
+- [x] Drive-test log: "stationary" is measured from the still period's first sample; 0.4 blocks per
+      sample over 100 blocks gives 126 entries (was 1), standing still stays 1 entry
+      (`DriveTestLogTest`, +2).
+- [x] The solver's `previous` only while fresh (`freshForTicks`): 4020 and 4040 mark the candidate
+      near the truth, 4041 gives `NO_PREFERENCE` (`LocatorTrackerTest.stalePreviousPicksNothing`).
+- [x] Client: the Locator reading is dropped every tick no Locator is held (`ClientEvents.onClientTick`
+      → `ClientLocatorState.putAway`, keeps the learned cadence); the stale limit is 2.5 payload gaps
+      in [5 s, 30 s] (a 10 s cadence gives 25 s) (`ClientLocatorStateTest`, 4, new).
+- [x] HUD: with no current reading a waypoint's saved ± uses the last payload's scale ("saved ±18 m"
+      at 2 m/block), and is left out before any payload (`LocatorHudTextTest`).
+- [x] A dead player's Locator does nothing, at runtime (`LocatorGameTests.dead_player_locator_is_inert`;
+      fails with the guard removed).
+
+Needs a human in game:
+
+- [~] A three-sector site (sectors on three sides of one mast column), stand 60-150 blocks away
+      hearing two or three of its sectors and no other cell: RANGE ONLY, one ring, "Cells 1" (before:
+      AMBIGUOUS with two markers on a line through the site).
+- [~] Two such sites about 200 blocks apart, stand between and to one side: AMBIGUOUS, one yellow
+      marker on your side (before: a green FIX on the far side with a small ±).
+- [~] Three such sites round you: FIX with a ± comparable to three single masts (about ± 10 m on
+      band_900 at 1 m per block), not smaller.
+- [~] Set `evaluationIntervalTicks` to 2 and `enableSampleCaching` to false, lens on TRAIL, walk
+      slowly (or sneak) in a straight line: markers keep appearing along the path about every
+      0.5-1 block, and the CSV has one row per such step (before: one marker sliding along with you).
+      Restore both settings afterwards.
+- [~] With a FIX, switch to another hotbar item, walk 20 blocks, switch back: "No reading from the
+      network yet" and no rings until the next update (at most one interval), never the old FIX at
+      the old place. Same with F1 (hidden HUD): no old rings drawn after switching back.
+- [~] Set `evaluationIntervalTicks` to 200 and hold the Locator with a FIX: the HUD and rings stay on
+      between updates (no NO SIGNAL blink every 5 s) once two updates have arrived.
+- [~] Set `metersPerBlock` to 2.0, save a waypoint under a FIX: the chat's "±N m" and the HUD's
+      "saved ±N m" agree, also in the first second after taking the Locator back into the hand
+      (then the ± is either the same number or left out, never half of it).
+- [~] Put the Locator in a chest, travel far (or `/tp` with it outside the hotbar), take it out
+      where only two cells are heard: AMBIGUOUS with "No last estimate to choose between them", both
+      markers alike.
 
 ## 3A done-when
 
@@ -561,4 +616,38 @@ came from.
 - **[ ] Open, for slice 17 (from slice 5).** The optional `fix_x, fix_z, fix_err` CSV columns can now
   read the client's `ClientLocatorState.latest()`, but only while the Locator is held (the payload is
   not sent from the hotbar). Either document that the columns are blank then, or send the payload
-  whenever a lens shows the trail.
+  whenever a lens shows the trail. *(Review round 1: the client now drops the reading every tick no
+  Locator is held (`ClientLocatorState.putAway`), so read from the client state the columns are
+  blank then, which matches the first option.)*
+- **[ ] Spec conflict, deviation for the owner (from the Phase 3A review round 1, row 5a).** §3A.5
+  says "3 or more usable **cells**" (and "2 cells", "1 cell"). In this tree a sector is its own cell
+  on a neighbouring block (NOTES.md, Phase 2 "Sector antenna": no site container), so a three-sector
+  site is three cells one block apart. Counted as cells they gave one site AMBIGUOUS on a ring, two
+  sites a confident FIX on the wrong mirror image (921 of 2000 scenes) and an over-confident ± (6.45
+  against an rms error of 10.21). The solver now counts **sites**: antennas within
+  `locatorSiteMergeBlocks` (3.0) horizontally are one site with one range, a labelled abstraction
+  for the site identity a real network knows. `LocatorFix.cellsUsed`, the rings and the HUD's
+  "Cells N" count sites. Decide: keep (and perhaps relabel the HUD "Sites N"), or give the mod a
+  real site identity later (slice 6's mast columns are a related grouping). `locatorSiteMergeBlocks`
+  0 restores per-cell counting except for antennas stacked in one column.
+- **[x] Done in row 5a (62fef10).** (from the Phase 3A review round 1) Drive-test de-duplication
+  compared each sample with the previous, already replaced, sample, so any movement under 0.5 blocks
+  per evaluation collapsed a whole walk into one moving entry in the trail and the CSV (a 100-block
+  walk at 0.43 blocks per sample: 1 entry). Now measured from the still period's first sample (an
+  anchor moved only on append): 116 entries. The server's sample cache used to hide it, but only
+  with caching enabled and the dimension's block epoch not changing.
+- **[ ] Open, minor (from the Phase 3A review round 1).** The meter's `ClientSignalState` (NO SERVICE)
+  still treats a sample as stale after a fixed 5 s, so above 100-tick evaluation intervals (or under
+  `/tick rate` below 4) the meter HUD flickers to NO SERVICE between samples. The Locator now uses
+  the learned cadence (`ClientLensState.staleAfterMillis`); the same change fits the meter. Its
+  payload is also a sample the drive-test log reads, so check that path when changing it.
+- **[ ] Open, minor (from the Phase 3A review round 1).** The solver's `previous` is dropped once
+  older than two intervals, but a same-dimension teleport (`/tp`, an ender pearl) while the Locator
+  stays in the hotbar keeps a fresh, far-away previous for one evaluation, which can mark an
+  AMBIGUOUS candidate "likely" once. Optional guard: drop the previous when its (x, z) is farther
+  from both new candidates than the larger measured range.
+- **[ ] Open, minor (from the Phase 3A review round 1).** A waypoint's saved ± is converted with the
+  server's current `metersPerBlock` (from the latest payload), not the scale it was saved under. A
+  server that changes the scale after saving shows a different ± than the save message did. More
+  robust: store the scale (or the ± in metres) on the waypoint, an appended optional field of
+  `LocatorWaypoints.Waypoint` plus a stream-codec change and a `PROTOCOL_VERSION` bump.

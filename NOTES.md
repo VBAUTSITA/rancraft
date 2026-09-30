@@ -1757,6 +1757,19 @@ not held, the Locator starts at the corner.
    slack for a live interval change) and must be a FIX. Otherwise the save is refused with a
    message naming the fix type. A waypoint saved from a stale reading would not even be the estimate
    of where the player stands.
+   5a. *(Phase 3A review, round 1.)* **The solver's `previous` is used only while the reading is
+   fresh, the same rule as saving a waypoint** (`LocatorTracker.update`: `isFresh(previous,
+   dispatchTick, freshForTicks(interval))`, else `null`). The reading is a `DeviceMemory`, cleared
+   only on logout, dimension change and respawn, so before this a Locator put in a chest, carried
+   1 km and taken out where only two cells are heard marked whichever candidate was nearer the old
+   place as "likely" (a coin flip drawn brighter), seeded the height from there, and the
+   Ambiguous-to-Ambiguous chain then kept that choice. Slice 3's rule (decision 5 there) is that
+   `likely` is `NO_PREFERENCE` without a previous estimate, so the Locator never claims a
+   preference it does not have; a stale estimate broke it. The replay check still uses the stored
+   reading at any age. **Known limit:** a same-dimension teleport (`/tp`, an ender pearl) while the
+   Locator stays in the hotbar keeps a fresh but far-away previous for one evaluation, which can
+   pick the likely candidate once. An optional extra guard, not implemented: drop the previous when
+   its (x, z) is farther from both new candidates than the larger measured range.
 6. **Only a FIX stamps the emergency record**, with the game time the Locator last *reported* it
    (a replay confirms it, so a player standing still keeps a young fix). RANGE ONLY, AMBIGUOUS,
    POOR GEOMETRY and NO SIGNAL say nothing new about where you are, so the last known position
@@ -1772,6 +1785,9 @@ not held, the Locator starts at the corner.
    evaluates every player on the list, including one on the death screen, and with
    `keepInventory` the dead entity still carries the Locator. Without the guard it would stamp a new
    last fix into the record death had just cleared, and the clone would carry it into the next life.
+   *(Phase 3A review, round 1: slice 5 marked this verified, but no test covered the guard. It is
+   now checked at runtime by `LocatorGameTests.dead_player_locator_is_inert`, a NeoForge
+   `FakePlayer` with 0 health, which fails with the guard removed; see "Phase 3A review, round 1".)*
 9. **Rings: where they are sliced, and where they are drawn.** A measured range is a slant distance,
    a sphere round the cell. The ring is its horizontal cross-section `sqrt(r^2 - dy^2)`, taken at
    the FIX's own assumed eye height (so the rings cross at the marker: the picture of what the
@@ -1787,6 +1803,14 @@ not held, the Locator starts at the corner.
     as "somewhere on this column". With no preference (`likely` = -1) both are drawn alike.
 11. **Follow-up (g) from slice 3 closed:** `locatorMaxCells`'s upper bound is now
     `LocatorFixPayload.MAX_RINGS` (8), so every cell in a fix gets its ring.
+11a. *(Phase 3A review, round 1.)* **The client's reading.** It is dropped every client tick no
+    Locator is held (`ClientEvents.onClientTick` → `ClientLocatorState.putAway()`), because the
+    server sends only while one is held: re-selecting the Locator shows "No reading from the network
+    yet" until the next payload instead of an old fix and its rings. Its stale limit is learned from
+    the gaps between payloads (2.5 gaps in [5 s, 30 s], the lens's rule) instead of a fixed 5 s that
+    blinked the HUD at intervals over 100 ticks. With no current reading the waypoint's saved "±"
+    uses the last payload's `metersPerBlock`, or is left out before any payload, never an assumed
+    1 m per block. Details in "Phase 3A review, round 1".
 12. **The client does map arithmetic only.** Distance and bearing from the estimate to a waypoint
     (`util/Navigation`) are computed on the client between two server-supplied estimates; slicing a
     ring and placing the markers is drawing. No range, position, HDOP or "±" is computed there.
@@ -1984,3 +2008,207 @@ the "±"'s trace by `1/σ` instead of `1/σ²` fails all five, including the equ
 | `rf` purity | `PackagePurityTest` (`LocatorSolver`, `LocatorFix`: `java.util` only) |
 | `./gradlew runGameTestServer` | not rerun: nothing game-side changed, and the game test's solve is single-band (band_1800), where the "±" is identical by construction |
 | In game | the slice 5 check "add a band_3500 sector nearby: the ± shrinks" in `PHASE_3.md` now expects about 1.4x inside a good triangle and much more at the edge of the network |
+
+---
+
+## Phase 3A review, round 1 — fixes
+
+Nine confirmed findings from the Phase 3A review (round 1), two pairs of them the same defect found
+twice (3 = 7, 5 = 9). All applied; the build is green (**382 unit tests**, 0 skipped) and
+`runGameTestServer` passes **5 of 5**. Commits: part 1 `5221c46` (sites), part 2 `62fef10`
+(drive-test anchor, fresh-only prior), part 3 `2f1306f` (client reading), part 4 `a755f7f`
+(dead-player game test), and the docs commit "Phase 3A review round 1: fixes".
+
+### 1. [major] The Locator counts sites, not cells
+
+**The defect.** `LocatorSolver` chose its branch (1 → RANGE ONLY, 2 → circle crossing, 3+ → least
+squares) by the number of *cells*. In this tree a sector is its own cell on its own block (Phase 2,
+"Sector antenna": "Independent cell per block — no 'site' container"), so a three-sector site is three
+cells one block apart, and the solver took them for three towers. Their ranges are near-identical,
+and on one band they round the same way, so their errors are perfectly correlated, yet each added an
+independent weighted row. The only co-location guard (`MIN_DIRECTION_BLOCKS`, 1e-6) catches sectors
+stacked in one column, not sectors on neighbouring blocks.
+
+**Reproduced before the fix** (the reviewer's scratch programs, re-run on the pre-fix classes;
+flat ground, sectors at (0,-1), (1,0), (-1,0) round a mast column):
+
+| Scene | band_900 | band_1800 | band_3500 |
+|---|---|---|---|
+| One site, two sectors heard, receiver 60-150 away (2000 scenes) | AMBIGUOUS 1938 (1944 in the per-band run), the nearer candidate over 50 blocks off in 1295 | AMBIGUOUS 1892 | AMBIGUOUS 1403 |
+| Two three-sector sites 200 apart, 6 cells (2000 scenes) | **FIX 1997, 921 on the wrong mirror** (per-band run: 911, mean error 180) | FIX 2000, 851 wrong mirror | FIX 2000, 425 wrong mirror |
+| The example: receiver (100.5, 80.5) | `Fix[z = -64.3, hdop 0.90, ± 7.76]`, 145 blocks off; one cell per site: `Ambiguous(z = +64 / -65)` | | |
+| Three three-sector sites in a triangle | **mean ± 6.45 against an rms true error of 10.21** (3000 scenes); one cell per site ± 10.43 vs 10.67 | ± 3.21 vs 4.69 | ± 0.64 vs 0.63 |
+
+**The fix.** `LocatorSolver.siteRepresentatives(ranges, params)` replaces the old `select`, in
+both `solve()` and `cellsUsed()`: (i) keep every valid measurement (the validity checks are
+unchanged, no cap yet); (ii) union-find over all pairs, merged when the horizontal distance between
+radiating points is at most `siteMergeBlocks` (transitive, independent of input order); (iii) one
+representative per site: smallest sigma, then smallest range (the least NLOS-biased), then the
+first given; (iv) sites in the order of each one's first (strongest) member; (v) at most `maxCells`
+sites. `solve()` switches on the number of sites, so the centroid, `SINGULAR_AT_START`, HDOP, the
+"±" and the extra starts all see one row per site. `cellsUsed()` returns the same list, so
+`solve(...).cellsUsed() == cellsUsed(...).size()` still holds and the Locator draws one ring per
+site (co-sited rings were near-identical anyway).
+
+**Tunable.** `LocatorParams.siteMergeBlocks` (appended; `DEFAULT_SITE_MERGE_BLOCKS = 3.0`, the
+widest three-sector site spans 2 blocks, (1,0) to (-1,0)); the four-argument constructor is kept
+and defaults it. `RfConfig.locatorSiteMergeBlocks` (appended; `DEFAULTS`, `snapshot()` and the one
+test helper updated, still no legacy constructor) and `RanCraftConfig.locatorSiteMergeBlocks`
+(`defineInRange(3.0, 0.0, 16.0)`, "antennas within this horizontal distance are one site for
+positioning"). 0 groups only antennas stacked in one column (distance 0); a negative or NaN value
+groups nothing. `Band`, the payload and the saves are untouched: no protocol bump.
+
+**Honest-abstraction note (also at the code site, `LocatorSolver` class javadoc and
+`siteRepresentatives`, and in the config comment).** A real network knows each site's (TRP's)
+location, and co-sited sectors are one position to range from: they add no independent geometry.
+The mod has no site container, so **horizontal proximity stands in for that identity**. Two
+consequences, stated plainly: two genuinely separate masts closer than 3 blocks count as one site
+(no real planner puts sites that close); and on band_3500, whose 3-block step is comparable to the
+sector spacing, co-sited sectors round *partly* independently, so one range per site discards a
+little real information there (the ± becomes slightly conservative, below).
+
+**After the fix** (same programs, same seeds):
+
+| Scene | band_900 | band_1800 | band_3500 |
+|---|---|---|---|
+| One site, two sectors | **RANGE ONLY 2000 / 2000**, AMBIGUOUS 0 | RANGE ONLY 2000 | RANGE ONLY 2000 |
+| Two three-sector sites | **FIX 0, wrong-mirror FIX 0**; AMBIGUOUS 1999 (1 other), a candidate within one ranging step of the truth in 1984 | AMBIGUOUS 2000, 1978 within a step | AMBIGUOUS 2000, 2000 within a step |
+| The example (100.5, 80.5) | `Ambiguous(z = +63.99 / -64.99)`, identical to one cell per site | `Ambiguous(+88.8 / -89.8)` | `Ambiguous(+79.5 / -80.5)` |
+| Triangle of three-sector sites | **mean ± 10.42 against rms 10.44** (3000 scenes); per-band run ± 10.41 vs 10.43 | ± 5.21 vs 5.07 | ± 1.04 vs 0.93 |
+
+**Cost:** the grouping is 0.4-0.5 µs for 8-12 measurements (default `maxCellsEvaluated` 12) and
+7 µs at the configurable maximum of 64 (scratch benchmark, JIT-warm), run twice per fresh fix
+(`solve` and `cellsUsed`). Squared distances are compared (no square root per pair).
+
+**Tests** (`LocatorSolverTest`, +5; all flat ground, band_900, quantised): `oneSiteIsOneRange` (24
+receiver positions round a two-sector site: RANGE ONLY on the shorter range's sector, one ring);
+`twoThreeSectorSitesAreAmbiguous` (the example; AMBIGUOUS, mirror images across the sites' line,
+identical to solving the two representatives alone); `triangleOfSectorSitesCountsSites` (FIX with
+`cellsUsed` 3 and the one-cell-per-site ± to 1e-9; per cell the ± drops below 0.7x);
+`noMergeIsPerCell` (`siteMergeBlocks` 0: the old per-cell answers, including the wrong-mirror FIX);
+`siteRepresentativeRule` (transitive chain in four orders, finest band then shortest range then
+first given, site order, `maxCells` counts sites, stacked column, negative/NaN). The existing
+`twoCellsThatDoNotMeet` concentric case stays green through the shortest-range tie-break; test 12 and
+both random sweeps stay green.
+
+**Deviation from the review's test (2):** it asked for "one candidate within 10 blocks of the
+truth" at (100.5, 80.5). There both sites' ranges round down by band_900's 30-block step, so the
+true-side candidate is 16.5 blocks off: that is quantisation, identical with one cell per site. The
+test asserts within one ranging step (29.98 blocks), the mirror across the sites' line, and
+equality with the one-cell-per-site answer.
+
+**Spec conflict, recorded for the owner (`PHASE_3.md` follow-ups).** §3A.5 says "3 or more usable
+cells". In this tree a sector is its own cell on a neighbouring block, so the solver now counts
+sites. `LocatorFix.cellsUsed` and the HUD's "Cells N" therefore count sites (one representative
+cell each); a player next to a three-sector site hears three cells and reads "Cells 1".
+
+### 2. [minor] Drive-test log: "stationary" is measured from where the still period began
+
+`DriveTestLog.record` compared each sample with the previous entry, which may itself be a
+replacement, so any movement under `STATIONARY_EPSILON_BLOCKS` (0.5) per evaluation kept replacing
+one entry and a whole walk collapsed into one moving point in the trail and the CSV. Reproduced
+before the fix: a 100-block straight walk at 4.317 b/s with a 2-tick interval (0.43 blocks per
+sample) gave **1 entry, at x = 99.72**; the same happens to sneaking at 5 ticks and to any drift
+under 0.5 b/s at the default 20 ticks (soul sand, honey). Now the log keeps an anchor (the position
+of the last *appended* sample): a replacement keeps the newest sample but does not move the anchor,
+and "stationary" is the distance from the anchor. The same walk now gives **116 entries**; the
+exact-replay check, the event checks and the cell/level checks are unchanged (against the previous
+sample); `clear()` drops the anchor. Tests (`DriveTestLogTest`, +2): 0.4 blocks per sample over
+100 blocks gives 126 entries (at least 80 required), 60 samples at one point stay 1 entry with the
+newest tick, and a clear starts a new still period; `stationaryReplaces` (0, 0.1, 0.2) still passes.
+
+Why nobody saw it: **the server's sample cache hid it, but only while caching was enabled and the
+block epoch was not changing.** A cached replay carries the position of the evaluation it replays,
+and the cache is only refreshed after a 0.5-block move, so the replays were exact duplicates
+(ignored) and every fresh sample was at least 0.5 blocks from the last one: the cache's own move
+threshold acted as the anchor. With `enableSampleCaching` off, or any block placed or broken in the
+dimension every interval (the epoch is dimension-wide until slice 7), every evaluation is fresh and
+the collapse happened.
+
+### 3 (= 7). [minor] The solver's `previous` is used only while the reading is fresh
+
+See slice 5, "Deviations and decisions", item 5a. `LocatorTracker.update` passes the stored fix to
+`LocatorSolver.solve` only if `isFresh(previous, dispatchTick, freshForTicks(interval))`; the replay
+check still uses the stored reading as is. Tests (`LocatorTrackerTest.stalePreviousPicksNothing`):
+a FIX at tick 4000, the two-cell sample at 4020 and at exactly 4040 (the boundary, fresh) still
+marks the candidate near the truth; at 4041 `likely` is `NO_PREFERENCE`; a replay is still
+recognised at any age.
+
+### 4. [minor] The client drops the Locator reading when no Locator is held
+
+The server sends `LocatorFixPayload` only while a Locator is held, but the client kept the last one
+for 5 s of wall-clock time: switching to a sword, sprinting 20 blocks and switching back showed
+"FIX Est x/z = A" with the marker, error circle and rings at A, and the waypoint distance and
+bearing measured from A, for up to one interval. `ClientEvents.onClientTick` (`ClientTickEvent.Post`,
+already used by `LensKeys`) now calls `ClientLocatorState.putAway()` every tick no Locator is held
+(`LocatorHudOverlay.heldLocator`), so re-selecting it shows "No reading from the network yet" until
+the first payload sent after it is held again. It is a tick handler, not in the HUD layer, because
+the layer returns early under F1 (`hideGui`) while `LocatorRenderer` would still draw the old
+rings. **Refinement of the review's text:** the review had the handler call `clear()`, which with
+fix 6 would also forget the learned send cadence every time the Locator is put away (so a slow
+server's first interval after taking it back would blink). `putAway()` drops the reading and keeps
+the cadence; `clear()` (logout, respawn, dimension change) still forgets both. Consequence for the
+slice 17 CSV follow-up: `fix_x/fix_z/fix_err` read from the client state are blank whenever the
+Locator is not held, which matches that follow-up's "document that the columns are blank then"
+option.
+
+### 5 (= 9). [minor] With no current reading, the waypoint's saved "±" uses the server's scale or none
+
+`LocatorHudText.screen` converted the saved "±" at a hardcoded 1 m per block whenever it had no
+current reading, so on a server at `metersPerBlock` 2.0 the same waypoint read "saved ±10 m" in the
+save message and while readings arrived, and "saved ±5.0 m" just after taking the Locator in hand or
+once the payload was stale. Now it uses **the last payload's `metersPerBlock`** (a stale payload
+still carries the server's scale), and **with no payload at all the "±" is left out** ("WP 1/1   no
+FIX, no bearing"): the client cannot read COMMON config, so it never assumes 1 m per block, and a
+"? m" would read as a fault. Tests (`LocatorHudTextTest`, +1 and one changed expectation): stale at
+2.0 m/block with ± 9 blocks reads "saved ±18 m" and with ± 5 "saved ±10 m"; no payload prints no
+metres value; a zero or NaN scale is treated as unknown. The more robust option (store the scale
+on the waypoint when it is saved, an appended optional field plus a protocol bump) was not needed
+for this defect and is not done.
+
+### 6. [minor] The Locator HUD's stale limit is learned from the payload cadence
+
+`ClientLocatorState` treated a payload as stale after a fixed 5 s, while the server counts a reading
+fresh for two evaluation intervals (`LocatorTracker.freshForTicks`). At `evaluationIntervalTicks`
+200 (10 s), or under `/tick rate` below 4, the HUD said NO SIGNAL and the rings blinked off for
+about half of every interval while the server still saved waypoints from that fix. Now
+`accept` learns the last gap between payloads (0 < gap ≤ 30 s) and `isStale` uses the lens's rule,
+`ClientLensState.staleAfterMillis(gap)`: 2.5 gaps, clamped to [5 s, 30 s], slightly longer than
+the server's two-interval window, which is the intended slack. No wire change, no version bump.
+Tests (`ClientLocatorStateTest`, 4, new; the wall clock is passed in): a 10 s cadence gives a 25 s
+limit (6 s after a payload is no longer stale, as it was at 5 s); the 1 s default keeps the 5 s
+floor; the 30 s cap and a longer gap is not learned; `putAway()` keeps the cadence, `clear()`
+forgets it. The meter's `ClientSignalState` still has the same pre-existing fixed 5 s (open
+follow-up in `PHASE_3.md`).
+
+### 8. [minor] A dead player's Locator does nothing: now verified at runtime
+
+`PHASE_3.md` marked "a dead player's Locator does nothing" `[x]` under the headless checks, but no
+test covered the `isAlive()` guard in `NetworkLocator.onSample`. Option (a) of the review, a
+runtime check: `LocatorGameTests.dead_player_locator_is_inert` builds a NeoForge `FakePlayer`
+directly (`new FakePlayer(level, new GameProfile(randomUUID, "rancraft_dead_locator"))`: not on the
+player list, so the ticker never evaluates it; its connection sends nothing; not through
+`FakePlayerFactory`, so no cached shared fake player is altered), sets its health to 0
+(`isAlive()` is `!isRemoved() && health > 0`), and calls `NetworkLocator.onSample` with a
+hand-built sample of three well-spread band_900 masts that solves to a FIX: no reading is kept and
+no emergency record is written. With health 20 the same call keeps both. **It bites:** with the
+guard removed temporarily, `runGameTestServer` fails with "the dead player's Locator acted: record
+Optional[EmergencyRecord[lastFix=...]], reading kept true" (1 required test failed; restored,
+5 of 5 pass). `NetworkLocator.hasReading(UUID)` is the small public test hook (`READINGS` is
+package-private). APIs checked in the NeoForge 21.1.251 sources jar: `FakePlayer(ServerLevel,
+GameProfile)` (public; `FakePlayerNetHandler` as its connection; `FakePlayerAdvancements` via the
+patched `PlayerList.getPlayerAdvancements`), `FakePlayerFactory.get / unloadLevel`; decompiled
+1.21.1: `ServerPlayer`'s constructor, `LivingEntity.setHealth` (clamped to [0, max]) and `isAlive`.
+
+### Verification
+
+| Check | Result |
+|---|---|
+| `./gradlew build` | succeeds |
+| Unit tests | **382: 382 passed, 0 failed, 0 skipped** (369 + 5 `LocatorSolverTest` + 2 `DriveTestLogTest` + 1 `LocatorTrackerTest` + 1 `LocatorHudTextTest` + 4 `ClientLocatorStateTest`) |
+| `rf` / `util` purity | `PackagePurityTest` (`LocatorSolver`, `LocatorParams`, `RfConfig`, `DriveTestLog`: `java.util` only) |
+| `./gradlew runGameTestServer` | "5 tests are now running", "All 5 required tests passed" (2 harvest + 3 locator); the locator cost line on this run: 80.3 ns per ground lookup, one 8-cell band_1800 solve on live ground 29.0 µs (FIX 6.51 blocks off, ± 3.13, HDOP 0.72) |
+| Before/after numbers | the reviewer's scratch programs (flat ground, seeded), run on the pre-fix classes and on the fixed `rf` package; tables above |
+| The new tests bite | the game test was run with the guard removed (fails, above). The other new assertions pin behaviour the pre-fix code demonstrably lacked (the "before" runs above: AMBIGUOUS on one site, the wrong-mirror FIX at (100.5, 80.5), 1 drive-test entry for the walk; the 1.0 scale and the fixed 5 s are gone from the code) |
+| Config | `locatorSiteMergeBlocks` is a new COMMON entry; NeoForge adds it to an existing `rancraft-common.toml` at its default (as it did for the slice 3 entries) |
+| In game | not run by the agent (no `runClient`); the checks are in `PHASE_3.md`, "Phase 3A review round 1" |
