@@ -2686,7 +2686,7 @@ slice commit `5299fb4` "Phase 3 slice 6: mast columns".
 Closes §0 known problem 2: the block-change epoch was dimension-wide, so any block placed or broken
 anywhere in a dimension invalidated every cached sample in it. Now the cache watches only the
 128-block bins its evaluation's rays crossed. Code checkpoints `97489e6` and `e0383ee`; this section
-and the tracker in the slice commit "Phase 3 slice 7: region epochs".
+and the tracker in the slice commit `9c6d39f` "Phase 3 slice 7: region epochs".
 
 ### What was built
 
