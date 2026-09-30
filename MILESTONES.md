@@ -119,7 +119,7 @@ Tests: **161 at the start of Phase 3 → 382 now.**
 
 - [x] All code, your two decisions, and the 9 review fixes. 382 tests green.
 - [x] Docs: `PHASE_3.md` / `NOTES.md` updated, and "How to test Part 3A in game" written at the end
-      of `PHASE_3.md` ("Phase 3A: docs and tracker").
+      of `PHASE_3.md` (`2cc912f`).
 - [ ] Push to GitHub.
 
 ### B. Part 3B: towers and fixed devices (4 slices, not started)

@@ -2228,7 +2228,7 @@ The detail stays in the slice sections above, which this step re-read against th
 log.
 
 Commits of this step: part 1 `0482a74` (two code-site labels, the lookup bound) and the docs commit
-"Phase 3A: docs and tracker" (two more code-site labels in `LocatorSolver`, one in `Ranging`, these
+`2cc912f` "Phase 3A: docs and tracker" (two more code-site labels in `LocatorSolver`, one in `Ranging`, these
 notes, the tracker with the in-game checklist, `VISION_STEP3.md`, `README.md`, `MILESTONES.md`). Part
 2 was finished by a second docs agent after the first hit the usage limit with its edits
 uncommitted; it kept them after checking each against the code and the scratch programs, and
@@ -2249,7 +2249,7 @@ checklist numbers.
 | 5 | Network Locator (**3A ships**) | bf5eb47, e0fcfcd, 610a79c, 6c5d391 (334edff) | 367 |
 | 3a | Owner decisions: extra starts kept, weighted ± | f61a739, b47bcbf (27a2328) | 369 |
 | 5a | Phase 3A review round 1 fixes | 5221c46, 62fef10, 2f1306f, a755f7f, a998f3f (c54e86f) | 382 |
-| 5b | This step | 0482a74, "Phase 3A: docs and tracker" | 382 |
+| 5b | This step | 0482a74, 2cc912f (the hash-recording commit after it) | 382 |
 
 The one skipped test until slice 5 was `PackagePurityTest.utilIsPure`, waiting for `util` to exist.
 
