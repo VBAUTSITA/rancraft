@@ -114,6 +114,13 @@ public final class CellSelector {
      * <p>The serving cell and the handover tally are kept ({@link ReceiverState#withoutCandidate}):
      * the pause is not an outage and not a handover.
      *
+     * <p><b>Game abstraction, labelled (NOTES.md, Phase 3 slice 4): this is not a 3GPP mechanism.</b>
+     * A real UE never stops measuring, so its time-to-trigger is never left running across a gap in
+     * observation and the situation does not arise. It exists only because RANCraft evaluates a
+     * receiver only while something needs it (a carried device, or a lens that needs evaluations).
+     * The closest real analogue is a phone switched off and on again: after it resumes,
+     * time-to-trigger restarts from what is observed now.
+     *
      * <p>A negative gap (the clock went backwards, which the game clock never does) cannot vouch
      * for the timer either, so it drops the candidate too.
      *

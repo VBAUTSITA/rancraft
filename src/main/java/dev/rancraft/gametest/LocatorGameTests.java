@@ -265,8 +265,14 @@ public final class LocatorGameTests {
 
     // ---- altitude aiding in a live level ---------------------------------------------------------
 
-    /** A fix's worst case: 7 Gauss-Newton runs of at most 15 iterations, one lookup each. */
-    private static final int LOOKUPS_PER_WORST_FIX = 7 * 15;
+    /**
+     * A fix's worst case: 7 Gauss-Newton runs (the centroid plus at most 6 extra starts), each one
+     * lookup per iteration (at most {@link LocatorSolver#MAX_ITERATIONS}) plus one at its end point
+     * for the residual, and one more under the centroid to cross the circles for the extra starts:
+     * 7 x 16 + 1 = 113, the bound {@code LocatorTrackerTest} asserts. (Slice 5 recorded 7 x 15 = 105,
+     * an undercount found by its gate review; corrected in the Phase 3A docs step.)
+     */
+    private static final int LOOKUPS_PER_WORST_FIX = 7 * (LocatorSolver.MAX_ITERATIONS + 1) + 1;
 
     private static void surfaceProbeCost(GameTestHelper helper) {
         ServerLevel level = helper.getLevel();

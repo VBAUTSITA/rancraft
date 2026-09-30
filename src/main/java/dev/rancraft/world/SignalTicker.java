@@ -332,6 +332,13 @@ public final class SignalTicker {
      * The devices this player carries: main hand, offhand, then hotbar slots 0-8, each stack once.
      * Replaces Phase 2's {@code holdsMeter()}. Armour and the rest of the inventory do not count:
      * the lens is not a device, and a device packed away in the backpack is switched off.
+     *
+     * <p><b>Game abstraction, labelled (NOTES.md, Phase 3 slice 4): a device measures only while
+     * carried</b> in a hand or the hotbar. A real UE measures all the time, switched on in a pocket
+     * or a bag alike. Here a device anywhere else is off: it is not evaluated, gets no sample, and
+     * its state (a Locator's emergency record, for one) stops updating. That is what keeps the
+     * server's cost bounded to the receivers someone is using. The drive-test log is therefore only
+     * as complete as the evaluations.
      */
     static List<CarriedDevice> carried(ServerPlayer player) {
         Inventory inventory = player.getInventory();
