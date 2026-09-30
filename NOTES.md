@@ -2459,8 +2459,8 @@ Part 3A in game", 11 steps).
 
 Part 3B's first slice closes §0 known problem 1: nine Signal Masts in one column were nine
 co-channel cells shouting over each other (VISION.md's "(9 co-channel)" incident). Now a
-contiguous column is one cell. Code checkpoint `703c3a1`; this section and the tracker land in the
-slice commit "Phase 3 slice 6: mast columns".
+contiguous column is one cell. Code checkpoint `703c3a1`; this section and the tracker in the
+slice commit `5299fb4` "Phase 3 slice 6: mast columns".
 
 ### What was built
 
