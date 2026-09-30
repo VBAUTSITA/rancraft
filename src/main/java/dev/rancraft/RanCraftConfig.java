@@ -193,6 +193,17 @@ public final class RanCraftConfig {
                     "its chunk loads.")
             .defineInRange("maxMastHeight", 64, 1, 4096);
 
+    // ---- Phase 3: fixed receivers (§3B.3) -------------------------------------------------------
+    // Server cost, not an engine parameter, so it stays out of RfConfig (as coverageTickBudgetMs).
+
+    public static final ModConfigSpec.DoubleValue FIXED_RECEIVER_TICK_BUDGET_MS = BUILDER
+            .comment("Server-thread time per tick spent evaluating fixed receivers (device blocks such as",
+                    "the Radio Link), shared by every dimension. Receivers are served round-robin, each at",
+                    "most once per evaluationIntervalTicks; one whose surroundings did not change is",
+                    "replayed its last sample, which costs about a microsecond. Over budget, the rest",
+                    "wait for the next tick. 0.5 ms is 1% of a 50 ms tick.")
+            .defineInRange("fixedReceiverTickBudgetMs", 0.5, 0.05, 20.0);
+
     public static final ModConfigSpec SPEC = BUILDER.build();
 
     // ---- RF Vision Step 3a: the drive-test trail (CLIENT) --------------------------------------
@@ -281,6 +292,14 @@ public final class RanCraftConfig {
      */
     public static int maxMastHeight() {
         return SPEC.isLoaded() ? MAX_MAST_HEIGHT.get() : MAX_MAST_HEIGHT.getDefault();
+    }
+
+    /**
+     * The fixed-receiver ticker's per-tick budget (§3B.3), in milliseconds. Falls back to the default
+     * if read before the config has loaded, rather than throwing.
+     */
+    public static double fixedReceiverTickBudgetMs() {
+        return SPEC.isLoaded() ? FIXED_RECEIVER_TICK_BUDGET_MS.get() : FIXED_RECEIVER_TICK_BUDGET_MS.getDefault();
     }
 
     /** Immutable snapshot handed to the engine, so the engine never touches a config API. */

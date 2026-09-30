@@ -339,7 +339,9 @@ public final class SignalTicker {
      * neighbour only at T.
      *
      * <p>Config-free: it derives from {@code evaluationIntervalTicks}. A receiver on another cadence
-     * (Phase 3's fixed receivers, evaluated round-robin under a time budget) must derive its own.
+     * (Phase 3's fixed receivers, evaluated round-robin under a time budget) must derive its own:
+     * slice 8's is {@link FixedReceiverTicker#staleCandidateGapTicks(int, long)}, the interval plus
+     * how late the budget made that receiver.
      */
     static long staleCandidateGapTicks(int interval) {
         return Math.max(1, interval);
