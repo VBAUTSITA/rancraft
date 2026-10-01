@@ -3904,7 +3904,7 @@ steps).
 
 The first slice of Part 3C: `capacityTier` now gates which bands an antenna may be set to, and the
 Wideband Radio Unit is the first progression item. Code in `71288f0` (part 1 of 2); these notes and
-the tracker in the commit "Phase 3 slice 10: radio tiers".
+the tracker in `4b3ce10` "Phase 3 slice 10: radio tiers".
 
 ### What was built
 
