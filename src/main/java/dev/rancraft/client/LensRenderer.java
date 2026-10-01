@@ -47,7 +47,10 @@ import org.joml.Matrix4f;
  * stacked masts is one cell, so only its base gets a lobe, drawn at the column's radiating point (just
  * above the top mast), and a column with a sector antenna on top (a mounting pole) gets none. The
  * client applies the server's rule ({@code util.ColumnScan}, through {@code MastColumn}) to the blocks
- * it can see; that is public world data, not a measurement. A cell the server reports off the air
+ * it can see; that is public world data, not a measurement. The height of the radiating point is the
+ * server's ({@code RadiatingY} in the base's update tag, Phase 3B review fix 4), because
+ * {@code maxMastHeight} is not synced; the client's own scan is only the fallback until it arrives
+ * ({@code SignalMastBlockEntity.radiatingPoint}). A cell the server reports off the air
  * ({@code OnAir} in the antenna's update tag) is drawn greyed, never hidden.
  */
 @EventBusSubscriber(modid = RanCraft.MOD_ID, value = Dist.CLIENT)

@@ -4,14 +4,15 @@ A map of the whole project: where it started, every landmark crossed, and what s
 between here and "Phase 3 done". Detailed engineering notes live in `NOTES.md`; the Phase 3
 checklist lives in `PHASE_3.md`.
 
-**Where we are (2026-09-29):** Phases 1 and 2, RF Vision Steps 1–3a, and all the code for Phase 3
-Part A are done. **382 tests** pass. Phase 3 Parts B and C have not started.
+**Where we are (2026-10-01):** Phases 1 and 2, RF Vision Steps 1–3a, and all the code for Phase 3
+Parts A and B are done, reviewed and documented. **485 unit tests** and **30 game tests** pass.
+Phase 3 Part C has not started.
 
 ```
 Phase 1 ████████████ done
 Phase 2 ████████████ done
 Vision  ██████████░░ Steps 1, 2, 3a done · 3b designed, not built
-Phase 3 ████░░░░░░░░ Part A done (in-game checks pending) · Part B not started · Part C not started
+Phase 3 ████████░░░░ Parts A and B done (in-game checks pending) · Part C not started
 ```
 
 ---
@@ -103,7 +104,30 @@ Real bugs caught along the way, each now fixed and tested:
 
 Tests: **161 at the start of Phase 3 → 382 now.**
 
-### 8. Process lessons
+### 8. Phase 3, Part B: towers and fixed devices (2026-09-30 → 10-01)
+
+| Slice | What it gave you | Commit |
+|---|---|---|
+| 6 | **Mast columns**: nine stacked masts are one cell, radiating from the top; adding a mast keeps its PCI; a sector on top makes a mounting pole; the lens draws one lobe per cell | `5299fb4` |
+| 7 | **Region epochs**: a block placed far from your link paths no longer forces everyone to recalculate; explosions and pistons now do invalidate | `9c6d39f` |
+| 8 | **Fixed receivers**: blocks that listen to the network, evaluated in the background under a time budget | `7866ca9` |
+| 9 | **Radio Link**: remote redstone over the network. About half the updates get lost at POOR service (SINR about 1 dB), none at FAIR. 200 links cost 0.03-0.06 ms per tick | `10c1de7` |
+| — | Review round: 4 findings, **all 4 real and fixed**, 0 rejected | `48e4da8` |
+| — | Docs, labels and the "How to test Part 3B in game" list | this step |
+
+Real bugs the review caught, each now fixed and tested:
+
+- A chunk loading or unloading on a cached link path did not invalidate the cache, so a fixed
+  receiver could keep a reading that saw a hill as air, forever.
+- A Radio Link receiver in a chunk at the edge of the loaded area forced that chunk back to full
+  load whenever a message arrived.
+- Phase 1 masts in an old world could pick their PCI before their neighbours had loaded.
+- On a dedicated server with a different height cap, the lens drew a tall column's lobe at the wrong
+  height.
+
+Tests: **382 → 485** unit tests, **5 → 30** game tests.
+
+### 9. Process lessons
 
 - The account **usage limit** stopped the agents several times, and the internet dropped twice.
   Nothing was lost: work is committed in small green steps and resumed from the last one.
@@ -120,16 +144,19 @@ Tests: **161 at the start of Phase 3 → 382 now.**
 - [x] All code, your two decisions, and the 9 review fixes. 382 tests green.
 - [x] Docs: `PHASE_3.md` / `NOTES.md` updated, and "How to test Part 3A in game" written at the end
       of `PHASE_3.md` (`2cc912f`).
-- [ ] Push to GitHub.
+- [x] Pushed to GitHub (`phase-3`, through the Part B review fixes, `980e858`).
 
-### B. Part 3B: towers and fixed devices (4 slices, not started)
+### B. Part 3B: towers and fixed devices (done; in-game checks pending)
 
-- [ ] **6 · Mast columns:** a stack of masts becomes **one** cell, radiating from the top. Adding a
+- [x] **6 · Mast columns:** a stack of masts becomes **one** cell, radiating from the top. Adding a
       block keeps its PCI. Fixes the "(9 co-channel)" problem for good.
-- [ ] **7 · Region epochs:** a block placed far away stops forcing everyone to recalculate.
-- [ ] **8 · Fixed receivers:** blocks that listen to the network, evaluated cheaply in the
+- [x] **7 · Region epochs:** a block placed far away stops forcing everyone to recalculate.
+- [x] **8 · Fixed receivers:** blocks that listen to the network, evaluated cheaply in the
       background.
-- [ ] **9 · Radio Link:** remote redstone over the network. Flaky at POOR service, solid at FAIR.
+- [x] **9 · Radio Link:** remote redstone over the network. Flaky at POOR service, solid at FAIR.
+- [x] Review (4 findings, all fixed) and docs: "How to test Part 3B in game" at the end of
+      `PHASE_3.md`.
+- [ ] Push the docs commits to GitHub.
 
 ### C. Part 3C: infrastructure and progression (7 slices, not started; the biggest part)
 
@@ -151,6 +178,8 @@ Tests: **161 at the start of Phase 3 → 382 now.**
 
 ### Plan to get there
 
-One lean run does **3B and 3C back to back**. It starts as soon as Part A's docs finish. If the
-usage limit or the internet stops it, say **"continue"** and it picks up from the last green
-commit.
+Part C is next: seven slices, the biggest part. If the usage limit or the internet stops a run,
+say **"continue"** and it picks up from the last green commit. Two small decisions from Part B can
+wait for you (both in `PHASE_3.md` follow-ups): whether fixed devices should re-measure at least
+every so often even when nothing nearby changed, and whether a Radio Link receiver should forget a
+transmitter whose chunk has been unloaded for a long time.

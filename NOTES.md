@@ -3672,3 +3672,228 @@ capped height, not the uncapped one a default-cap client would scan. The drawing
 | Costs, same runs | 200 fixed receivers in steady state 18.6-27.4 µs/tick (slice 8: 29-42); 200 radio links (400 blocks), median of three windows 26.1, 29.3 and 45.3 µs/tick in the three final runs (47.5 in one earlier run, before `syncOutput` checked the chunk last; slice 9 recorded medians of 27-44 and up to a factor of two between runs of the same code). All under the 100 µs assertions |
 | Versions | `PROTOCOL_VERSION` "7"; `AntennaBlockEntity.DATA_VERSION` 2, unchanged |
 | In game | not run by the agent (no `runClient`); checks in PHASE_3.md, "Phase 3B review (row 9a) checks" |
+
+---
+
+## Phase 3B summary — docs and tracker (row 9b)
+
+Part 3B (towers and fixed devices) is complete in code, review fixes included. Every check that can
+run headless passes: `./gradlew build` **485 tests, 0 failed, 0 skipped**, `runGameTestServer` **30
+of 30** in each of two runs in this step. What is left needs a person at the client: the route is
+"How to test Part 3B in game" at the end of `PHASE_3.md`. This section is the one-page view; the
+detail stays in the slice sections above (slices 6-9 and "Phase 3B review, round 1"), which this
+step re-read against the code and the git log.
+
+Commits of this step: part 1 `6d99b43` (code-site labels, comments only) and the docs commit "Phase
+3B: docs and tracker" (one more label in `LensRenderer`, these notes, the tracker with the in-game
+checklist, `README.md`, `MILESTONES.md`). An earlier attempt at this step was interrupted with two of
+the label edits uncommitted (`SignalMastBlock`, `RanCraftConfig`); this step checked them against the
+code, kept them and added the rest.
+
+### Slices and commits
+
+| Row | What | Commits (tracker-only commits in brackets) | Unit tests after | Game tests after |
+|---|---|---|---|---|
+| 6 | Mast columns: `ColumnScan`, one cell per column, lens one lobe per cell, `OnAir` | 703c3a1, 5299fb4 (1b8e253) | 398 | 13 |
+| 7 | Region epochs: `BinTraversal`, per-bin epochs, cache rework | 97489e6, e0383ee, 9c6d39f (8f0325a) | 429 | 17 |
+| 8 | Fixed receivers: `FixedDevice`, registry, ticker | 02d1790, 62b54c7, 7866ca9 (2bc36cc) | 449 | 21 |
+| 9 | `BlerModel`, `SplitMix64`, Radio Link (**3B ships**) | 10c1de7 (f3948b4) | 482 | 27 |
+| 9a | Phase 3B review round 1 fixes | 8b42665, 48e4da8 (980e858) | 485 | 30 |
+| 9b | This step | 6d99b43, "Phase 3B: docs and tracker" (the hash-recording commit after it) | 485 | 30 |
+
+Part 3B took the unit tests from 382 to 485 (+103) and the game tests from 5 to 30 (+25: 9 mast
+column, 4 region epoch, 5 fixed receiver, 5 Radio Link, 2 generated harvest tests).
+
+### What Part 3B added, in one paragraph each
+
+- **Mast columns (§3B.1).** A contiguous vertical run of Signal Masts is one cell, owned by its
+  lowest mast (`cellId = base.asLong()`, so extending the tower keeps the id and the PCI), radiating
+  from above the top mast, at most `maxMastHeight` (64) masts up. The other masts are structure and
+  never register; a sector antenna on the highest mast makes the column a mounting pole and silences
+  it; with `requireRedstone`, any powered mast powers the column. The lens draws one lobe per cell at
+  the server's radiating height (`RadiatingY`, review fix 4) and greys a cell the server reports off
+  the air (`OnAir`). A census line reports the collapse of saved stacks once per server run.
+- **Region epochs (§3B.2).** The per-dimension block epoch is now one epoch per 128-block bin, bumped
+  by breaks and placements (multi-block too), explosions, pistons (at once and after the blocks
+  land), tree growth and, since review fix 1, chunks reaching or leaving FULL. A cached evaluation
+  depends only on the bins its marched rays cross (`BinTraversal`), so a block far from every link
+  path no longer invalidates it. `CoverageSurveyor` still reads the dimension-wide sum, unchanged.
+- **Fixed receivers (§3B.3).** Device blocks get evaluations of their own, at the block centre, round
+  robin under `fixedReceiverTickBudgetMs` (0.5 ms), at most once per interval, replaying the cached
+  sample while the site registry version and every dependency bin are unchanged. Registered and
+  unregistered on all four lifecycle paths (`onLoad` / `clearRemoved`, `setRemoved`, chunk load, chunk
+  unload by position).
+- **Radio Link (§3B.4).** A transmitter and a receiver block (POOR, tier 1; address 0-15; `LIT` while
+  served) carry redstone through the cell network about once a second. Each message crosses with
+  probability `(1 - BLER(tx)) x (1 - BLER(rx))` from a sigmoid in SINR (`blerSinr50Db` 0,
+  `blerSlopeDb` 2), drawn from SplitMix64 seeded with the transmitter's `pos.asLong() ^ gameTime`. A
+  receiver remembers, per transmitter, the state in the last delivered message, so a lost message is
+  a stale state, never a toggle.
+
+The four new config values are §5's names and defaults: `maxMastHeight` 64, `fixedReceiverTickBudgetMs`
+0.5, `blerSinr50Db` 0.0, `blerSlopeDb` 2.0 (the last two appended to `RfConfig`, as engine-facing).
+
+### Deviations from the spec, in one list (each argued in its slice section)
+
+| Where | Deviation | Why |
+|---|---|---|
+| Slice 6, decision 1 | `ColumnScan.bounds` also returns `highestY` | with the cap, the pole test and the power gate must see the whole run |
+| Slice 6, decision 3 | the re-scan refreshes the updated mast and the base, not the base only | a base that just became structure must unregister, and only it gets the update |
+| Slice 6, decision 6; row 9a | `PROTOCOL_VERSION` 5 → 6 → 7 although §4 lists no bump for the update tag | the update tag is wire format and the client reads it differently each time |
+| Slice 6, decision 8 | the census line is logged per server run, not once per world | §3B.1 allows no persisted field change in 3B, so nothing can mark a world converted |
+| Slice 7, decisions 1, 2 | dependency bins from the rays' endpoints, both side bins at a corner | keeps bins out of the per-voxel hot path; exact on 1,200 random and 2,250 corner rays |
+| Slice 7, decisions 4, 6 | pistons bump twice; tree growth bumps too | moved blocks land with no event; slice 12's tree test needs growth |
+| Slice 8, decision 1 | fixed receivers drop a stale candidate after `interval + lag`, not one interval | the budget can delay a turn; the player threshold would read every overrun as a pause |
+| Slice 8, decision 7 | the "sectors once missed the chunk paths" record is in a javadoc, not NOTES.md | spec wording; the lesson is followed (unload by position, no type check) |
+| Slice 9, decision 1 | the receiver's output rule is per transmitter | read literally, §3B.4's rule never turns a receiver off |
+| Slice 9, decisions 3, 12 | one draw stream per message; "200 radio links" = 400 blocks, median of three windows asserted | §3B.4 fixes the seed, not the stream; the conservative reading of the done-when; run-to-run noise |
+| Slice 9, decision 9 | `clearRemoved` registers a device, not `onPlace` | `onPlace` runs before the block entity exists |
+| Row 9a, finding 1 | no chunk-unload hook; chunk bumps not counted in `total()` | a chunk leaves FULL (bumped) before it unloads; coverage painting must not redo itself on every chunk border |
+
+No logistics flag exists yet (Part 3C), so a Phase 2 world loads as before except for the two §3B.1
+behaviour changes the spec asks for: a stack of masts is one cell, and a mast with a sector antenna
+directly on it is a mounting pole (both named by the census line).
+
+### Measured numbers (Part 3B)
+
+| What | Number | Where |
+|---|---|---|
+| Column scan on live ground | 624 ns per nine-mast scan from the base (11 reads), 812 ns from the sixth mast, 124 ns per two-read base check (858-879 ns per nine-mast scan in this step's runs); about 4 µs for a 64-mast column; never per evaluation | slice 6, this step |
+| Nine stacked masts | 1 registered cell instead of 9: the tower is no longer its own co-channel interferer | slice 6 |
+| Region epochs, per fresh evaluation | +2.6-6.1 µs for the dependency bins and 0.5-1.1 µs for the snapshot (6 rays, 17-19 bins; the evaluation itself 53-92 µs in open air) | slice 7 |
+| Region epochs, per replay | 0.35-0.45 µs for the bin check | slice 7 |
+| 200 fixed receivers, steady state (replays only) | 29-42 µs/tick (slice 8, four runs), 18.6-27.4 (row 9a), 21.4 and 28.0 (this step); about 1-2.6 µs per replay with the dispatch; the scan of all due ticks 8-12 µs/tick | slices 8, 9a, this step |
+| 200 fixed receivers, an interval with nothing cached (after any antenna change in the dimension) | 200-390 µs/tick for one interval, inside the 0.5 ms budget | slice 8 |
+| BLER at runtime, both ends POOR (SINR 0.98 / 0.71 dB) | 49-56 % of 200 messages delivered against 52.4 % modelled (7 runs, 98-112); 105 and 99 in this step | slice 9, this step |
+| BLER at runtime, both ends FAIR (9.31 / 8.94 dB) | 200 of 200 in each of the 9 runs whose counts were recorded (the test allows 2 lost) | slice 9, this step |
+| **200 radio links** (200 transmitters + 200 receivers, 12-13 receivers per message), steady state, the ticker plus the Radio Links' own work | medians of three 100-tick windows: 27.5, 43.5, 41.5 (slice 9), 26.1, 29.3, 45.3 (row 9a; 47.5 in one earlier row 9a run, before a reorder in `syncOutput`), **58.9 and 48.9 µs/tick** (this step); single windows 19.6-66.4 µs/tick. The first version measured 77-88 before the slice 9 rework | slices 9, 9a, this step |
+| Versions | `PROTOCOL_VERSION` "5" → "6" (slice 6) → "7" (row 9a); `SignalSamplePayload` unchanged; `AntennaBlockEntity.DATA_VERSION` 2 (unchanged: `OnAir` and `RadiatingY` are in the update tag only); the Radio Link entities save their own `DataVersion` 1 (`Address`, and the receiver's `KnownOn`) | slices 6, 9, 9a |
+
+**The 200-radio-link cost, honestly.** The done-when ("under 0.1 ms/tick, measure and record it")
+holds in every recorded run, and the game test asserts the median under 100 µs. But this step's two
+runs, on code identical to row 9a's apart from comments, measured medians of 58.9 and 48.9 µs/tick,
+above every earlier run on the final code (26-48). The fixed-receiver test in the same runs measured
+21.4 and 28.0 µs/tick, in line with before, so the rise is in the Radio Link dispatches (1.1-2.2 µs
+each here against 0.5-1.6 in slice 9) and the scan of 400 due ticks (15.7-22.2 µs/tick against 9-20).
+The cause was not investigated: the machine's load is the likely one (slice 9 already recorded a
+factor of up to two between runs of the same code; the spread is now 2.3x between medians). The
+margin to 0.1 ms is therefore 1.7x at the worst run, not the 2-4x the slice 9 runs suggested.
+Recorded as an open follow-up, with the scan's share as the first thing to cut (a timing wheel) if it
+ever matters.
+
+### Fidelity notes for Part 3B (§6), and where each is labelled
+
+§6 asks for three lists. Below are the entries that concern Part 3B, and every label the
+implementation added, each checked at its code site in this step. Five were missing or partial and
+were labelled in part 1 (`6d99b43`), one more in the docs commit; all six are marked **row 9b**.
+
+**Real, modelled faithfully**
+
+| Entry | Code site | Pinned by |
+|---|---|---|
+| The BLER-vs-SINR sigmoid shape (steep, about a decade per dB or two around the operating point) | `BlerModel` class javadoc | `BlerModelTest` (the §3B.4 table within 0.001, monotonic) |
+| Delivery needs both ends served, and each end's errors count (up to the cell and down from it) | `RadioLinkNetwork` | `RadioLinkNetworkTest.bothEndsServed`, the POOR/FAIR game test |
+| A taller tower helps by clearing obstruction (the radiating point moves up) | `SignalMastBlockEntity.radiatingPoint` | `MastColumnGameTests` |
+
+**Abstracted, labelled at the code site**
+
+| Entry | Code site |
+|---|---|
+| The generic BLER curve: one sigmoid, no MCS table, no link adaptation | `BlerModel` javadoc; the `blerSinr50Db` config comment |
+| No HARQ, no retransmission: the next status message is the retry | `BlerModel`, `RadioLinkTransmitterBlockEntity` javadocs; the config comment |
+| Every message is a full status report (a real device sends on change plus a keep-alive) | `RadioLinkTransmitterBlockEntity` javadoc |
+| About one update per second, by design | the item tooltip (`RadioLinkBlock.appendHoverText`, lang `tooltip.rate`) |
+| The distance between the two radios plays no part | `RadioLinkNetwork` javadoc |
+| A receiver learns that a transmitter left from its removal or its own look at the block; an unloaded transmitter is never timed out | `RadioLinkReceiverBlockEntity` javadoc |
+| `LIT` is the device's own public state, like a lit furnace | `RadioLinkBlock` javadoc (**row 9b**) |
+| A fixed receiver hears as a player does: 0 dBi, at the block centre | `FixedDevice` javadoc |
+| An overloaded ticker samples a receiver less often | `FixedReceiverTicker.staleCandidateGapTicks` |
+| A column is one site built from the radiating block; only the base's entity carries the configuration | `SignalMastBlock` javadoc (**row 9b**) |
+| The mounting-pole rule is a game rule (a real pole carries an omni and sectors together) | `SignalMastBlock` javadoc (**row 9b**) |
+| The height cap is a structural game rule, not RF | `maxMastHeight` config comment (**row 9b**) |
+| The lens works the column out from public blocks; the height is the server's | `LensRenderer` (**row 9b**, the height), `MastColumn`, `SignalMastBlockEntity.radiatingPoint` |
+| `OnAir` is the antenna's own public state: the client learns that a cell is off the air, not why | `AntennaBlockEntity.onAir` |
+| The dependency set is exact for its evaluation; the list of change sources is not | `BinTraversal` (the argument), `RegionEpochs` (the gaps) |
+| Bins are a cache granularity, not an RF concept | `RegionEpochs` javadoc (**row 9b**) |
+| A replay is the evaluation at the cached point (the half-block rule) | `SignalTicker.Cached` (**row 9b**) |
+
+**Deliberately absent** (§6): load and capacity sharing, a scheduler, cell sleep, per-user
+throughput, and **height gain in propagation**: the log-distance model has no antenna-height term
+(Okumura-Hata has one), so a taller column helps only by clearing obstruction and, for a sector on
+its own mast, through the vertical pattern. Labelled in the `ColumnScan` class javadoc and the
+`maxMastHeight` comment. Also absent from the Radio Link, and said so above: HARQ, link adaptation,
+inactivity timers, a timeout for a silent transmitter.
+
+**Server authority** holds: the client computes no service, no SINR and no delivery. It renders
+`LIT` and `POWERED` (vanilla block-state sync), `OnAir` and `RadiatingY` (the antennas' update tag),
+and works out which masts form a column from the blocks it can see, which are public world data.
+
+### Review: Phase 3B review round 1 (row 9a), outcome
+
+One round (lean mode: one review per part). **4 reported, 4 confirmed, 4 fixed, 0 rejected.** Each
+was checked against the code and the 1.21.1 / NeoForge 21.1.251 sources before fixing, and each fix
+has a game test that fails with the fix disabled (checked in one run with all three behaviour fixes
+off). The findings, in the reviewer's words, and what was done (detail in "Phase 3B review, round 1"
+above):
+
+1. **[major]** "Region epochs never change when a chunk loads, unloads, or moves in or out of the
+   in-memory ring outside FULL. The probe reads any chunk that is not FULL as air, so a fixed receiver
+   can replay a sample indefinitely that a fresh evaluation would no longer produce. This gap is not
+   recorded anywhere." *Confirmed (1.21.1 keeps a chunk at ticket level 34-44 in memory and brings it
+   back to FULL with no load event). Fixed: the chunk's bin is bumped on `ChunkEvent.Load` and on a
+   ticket-level change across FULL; no unload hook (a chunk has left FULL, and been bumped, before it
+   unloads); chunk bumps stay out of `total()`. The gap is now recorded in slice 7's list and the
+   `RegionEpochs` javadoc. Game test: `a_chunk_on_its_ray_reaching_or_leaving_full_reevaluates_it`.*
+2. **[major]** "A Radio Link receiver applies delivered messages and transmitter departures with
+   setBlock(UPDATE_ALL) even when its chunk is not FULL. The ticker skips such a receiver, but the
+   network still delivers to it, and setBlock then forces the chunk back to FULL synchronously on the
+   server thread and fires redstone updates in a chunk the ticker treats as unloaded." *Confirmed
+   (`Level.setBlock` reaches `ServerChunkCache.getChunk(..., FULL, true)`, which adds a ticket and
+   waits). Fixed: outside FULL only the memory changes; the next turn saves and writes. Game test:
+   `a_receiver_outside_full_hears_but_does_not_write_its_block`.*
+3. **[minor]** "Slice 6 moved the PCI plan for a migrated Phase 1 mast from the deferred onLoad to
+   ChunkEvent.Load. It now plans before antennas in chunks loaded later in the same batch have
+   registered, which regresses the planning quality of the Phase 1 to Phase 2 migration."
+   *Confirmed. Fixed: only a promotion plans in `refreshRegistration`; every other pending plan waits
+   for `onLoad`, as before slice 6. Game test: `migrated_mast_plans_after_the_whole_load_registered`.*
+4. **[minor]** "The RF Lens places a column's lobe using the client's own COMMON maxMastHeight, which
+   NeoForge does not sync. On a dedicated server with a different cap, the client draws the lobe
+   somewhere other than where the server radiates. This is already recorded as a follow-up but is
+   still unresolved as 3B closes." *Confirmed. Fixed: `RadiatingY` in the update tag, preferred by
+   the lens whenever it fits the column the client sees; `PROTOCOL_VERSION` 7; the slice 6 follow-up
+   is closed. Pinned by `ColumnScanTest.reportedRadiatingHeight` and three game-test assertions; the
+   drawing on a dedicated server is an optional in-game check.*
+
+What the review changed in the harness: the game-test helpers that force a chunk now load the 5 x 5
+chunks it makes FULL at once, so their load bumps land before a test registers anything.
+
+### Owner decisions waiting (Part 3B)
+
+None blocks Part 3C. From the follow-ups: a maximum replay age for fixed receivers (event-less block
+changes, water above all, can leave a Radio Link replaying a stale sample indefinitely; about 8
+µs/tick for 200 receivers at 600 ticks); a timeout for a remembered transmitter whose chunk stays
+unloaded. Neither is in §5, so both would be new `RanCraftConfig` values.
+
+### Verification of this step
+
+| Check | Result |
+|---|---|
+| `./gradlew build` | after part 1: **485 passed, 0 failed, 0 skipped**; again before the docs commit (one comment in `LensRenderer`, docs) |
+| `rf` / `util` purity | `PackagePurityTest` passes (no `rf` or `util` file changed in this step) |
+| `./gradlew runGameTestServer`, two runs after part 1 | "30 tests are now running", "All 30 required tests passed", both times; the cost and BLER lines above are from these runs |
+| Code-site labels | every row of the fidelity tables opened at its site; six added (above) |
+| In-game checklist | written from the slice and review checks; the Radio Link steps move 2,000 blocks away so that breaking the one mast really removes service (cells are heard up to `maxEvaluationRangeBlocks`, 1,400); the POOR spot is read off the meter's SINR, since `ServiceLevel` puts POOR at 0-5 dB |
+| In game | not run by the agent (no `runClient`); the route is at the end of `PHASE_3.md` |
+
+### Open for Part 3B (details in `PHASE_3.md` follow-ups)
+
+Decisions for the owner: a maximum replay age for fixed receivers; a timeout for a remembered
+unloaded transmitter. Minor: the census line on every start; the round-robin scan is linear in the
+receivers registered (a timing wheel); a transmitter toggling dozens of receivers is one burst; the
+200-radio-link test's margin (1.7x at the worst run); chunk-border re-evaluations with players walking
+not measured; event-less block changes (fluid, fire, leaf decay, falling blocks, commands). Notes for
+later slices: `onAir` must follow `isTransmitting()` (slices 12, 15); a backhaul flap re-evaluates
+every fixed receiver (keep it hysteretic); the region-epoch recipe for a microwave link (slice 12); the
+Radio Link blocks have no recipe yet (slice 16). Test harness: still no runtime test of the
+per-player ticker path. And every in-game check (`PHASE_3.md`, "How to test Part 3B in game", 8
+steps).
