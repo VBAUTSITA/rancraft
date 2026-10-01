@@ -55,6 +55,7 @@ Legend: `[x]` done and verified · `[~]` partly done / needs a manual in-game ch
 | 7 | BinTraversal + region epochs + cache rework | 3B | [~] `rf/BinTraversal` (pure 2D DDA over bins, both side bins through a corner; the correctness argument in its javadoc); `RfEngine.Evaluation.marched` (appended) and `dependencyBins`; `world/RegionEpochs`: per-bin (128) epochs bumped by break/place (multi-block too), explosions, pistons (at once and after the blocks settle) and tree growth, plus the dimension-wide sum (`CoverageSurveyor` untouched); `canReplay`'s epoch condition is now "every dependency bin unchanged", the rest unchanged; no version bump. Headless green (429 tests, 0 skipped; `runGameTestServer` 17/17, 4 new: a block 500 blocks away keeps the cache, one on the link path does not; +3-7 µs per fresh evaluation, 0.4 µs per replay check); in-game checks below; gaps recorded in follow-ups | 97489e6; e0383ee; 9c6d39f; tracker "PHASE_3.md, NOTES.md: record slice 7 commit hash" |
 | 8 | Fixed receiver registry + ticker | 3B | [x] `device/FixedDevice` (`requirement()`, `onSample(ServerLevel, BlockPos, DeviceContext)`); `block/FixedDeviceBlockEntity` (paths 1-2); `world/FixedReceiverRegistry` per dimension, keyed by `BlockPos.asLong()`, `ReceiverStateStore<Long>`, chunk load/unload paths (unload by position, not type), unregister by identity; `world/FixedReceiverTicker`: round robin under `fixedReceiverTickBudgetMs` (0.5, new), batches of 4 with the clock read between, rotating first dimension, at most once per interval, block-centre receiver, replay while the site version and every dependency bin are unchanged, its own stale-candidate threshold (interval + lag). Headless green (449 tests, 0 skipped; `runGameTestServer` 21/21, 4 new: 200 receivers 29-42 µs/tick in steady state). No device block yet, so no in-game check until slice 9; the two done-when items it feeds are [~] (below) | 02d1790; 62b54c7 (slice 7 game test fix); 7866ca9; tracker "PHASE_3.md, NOTES.md: record slice 8 commit hash" |
 | 9 | BlerModel + Radio Link | 3B | [~] `rf/BlerModel` (the §3B.4 sigmoid, `P(deliver)`, the table within 0.001, monotonic) and `rf/SplitMix64` (seed `pos.asLong() ^ gameTime`); `blerSinr50Db` 0 / `blerSlopeDb` 2 (COMMON, appended to `RfConfig`); blocks `radio_link_transmitter` / `radio_link_receiver` (FixedDevices, POOR tier 1, address 0-15 by use / sneak + use with the action bar, `LIT` while served, the receiver outputs weak power 15, a per-transmitter memory: a lost message is a stale state, a broken or re-addressed transmitter is forgotten at once, memory from a save is verified on the receiver's turns); `device/RadioLinkNetwork` per dimension (both ends served, each end's BLER, deterministic draws); tooltip "about once a second, by design"; loot tables, pickaxe tag, creative tab, lang, placeholder models; `FixedDeviceBlockEntity.clearRemoved` registers (closes the slice 8 `onPlace` follow-up). Headless green (482 tests, 0 skipped; `runGameTestServer` 27/27, 4 new + 2 generated harvest tests: POOR 49-56 % delivered vs 52 % modelled, FAIR 1,400 of 1,400; a real chunk reload resumes; 200 radio links (400 blocks) 20-53 µs/tick, medians 27-44). No version bump. The code of Part 3B is complete; the 3B review and docs follow; in-game checks below | 10c1de7; tracker "PHASE_3.md, NOTES.md: record slice 9 commit hash" |
+| 9a | Phase 3B review round 1: fixes (4 reported, 4 confirmed and fixed, 0 rejected) | 3B | [~] region epochs move when a chunk reaches or leaves FULL (`ChunkEvent.Load` + `ChunkTicketLevelUpdatedEvent` across 33; not in `total()`); a Radio Link receiver outside FULL updates its memory but writes no block (no forced chunk promotion), catching up on its next turn; a migrated Phase 1 mast plans in `onLoad` again (only a promotion plans in `refreshRegistration`); `RadiatingY` in the antennas' update tag, the lens draws at the server's height (closes the slice 6 `maxMastHeight` follow-up), `PROTOCOL_VERSION` 7. Headless green (485 tests, 0 skipped; `runGameTestServer` 30/30 in five runs, 3 new, each failing with its fix disabled); game-test helpers load the chunks a forced chunk makes FULL at once; in-game checks below | 8b42665; docs and tracker "Phase 3 review: fixes" |
 | 10 | Radio tiers + v3 migration | 3C | [ ] | |
 | 11 | MicrowaveLink + BackhaulGraph + tests | 3C | [ ] | |
 | 12 | Core site, dish, link tool, backhaul state, lens lines, `/rancraft backhaul status` | 3C | [ ] | |
@@ -589,6 +590,52 @@ Needs a human in game (creative is fine unless noted):
 - [ ] Break a powered transmitter: its receivers turn off at once.
 - [ ] Survival, iron pickaxe: both blocks drop themselves.
 
+## Phase 3B review (row 9a) checks
+
+Headless (verified by `./gradlew build`, 485 tests, 0 skipped, and `./gradlew runGameTestServer`,
+30 of 30 in each of five runs; details in NOTES.md, "Phase 3B review, round 1"):
+
+- [x] **Finding 1, at runtime**: a fixed receiver whose ray crosses a chunk kept in memory but not FULL
+      reads it as air and replays; the chunk forced back to FULL (the same `LevelChunk`, so no load
+      event) makes the next turn fresh, reading the stone wall in it; released again, fresh through air
+      (`FixedReceiverGameTests.a_chunk_on_its_ray_reaching_or_leaving_full_reevaluates_it`; fails with
+      the ticket hook disabled). `bumpChunk` moves the chunk's bin and not `total()`; only crossings of
+      level 33 count (`RegionEpochsTest`, +2).
+- [x] **Finding 2, at runtime**: a receiver in a chunk outside FULL (still in memory, attached,
+      registered, not served) hears a departure and new messages in its memory, writes no block and
+      does not pull the chunk back to FULL; forced again, its next turn writes the output
+      (`RadioLinkGameTests.a_receiver_outside_full_hears_but_does_not_write_its_block`; fails with the
+      old writes).
+- [x] **Finding 3, at runtime**: a migrated Phase 1 mast refreshed at "chunk load" before a neighbour
+      holding PCI 0 registered plans in `onLoad` around it (PCI 1); the old branch planned at once and
+      took 0 (`MastColumnGameTests.migrated_mast_plans_after_the_whole_load_registered`).
+- [x] **Finding 4**: `RadiatingY` is in the update tag (above the ninth mast; up one after extending; the
+      capped height under `maxMastHeight` 3) and never saved (game tests); the client's choice between
+      the server's height and its own scan is pinned (`ColumnScanTest.reportedRadiatingHeight`).
+      `PROTOCOL_VERSION` 6 → 7; `DATA_VERSION` 2.
+- [x] Costs unchanged within run-to-run spread: 200 fixed receivers 18.6-27.4 µs/tick (slice 8: 29-42); 200 radio links
+      medians 26.1, 29.3 and 45.3 µs/tick (slice 9: 27-44).
+
+Needs a human in game:
+
+- [~] (Finding 4, needs a dedicated server, so optional) Start `runServer` with `maxMastHeight = 4` in
+      the server's `rancraft-common.toml`, connect a `runClient` whose own config keeps 64, build a
+      column of eight masts with the lens on: the lobe sits above the **fourth** mast (where the meter's
+      "Serving ... @ y" says the cell is), not above the eighth. Before the fix it sat above the eighth.
+- [~] (Finding 4, single player) A column of nine masts, lens on: one lobe above the ninth mast; add a
+      tenth on top: the lobe moves up one block at once (the server re-sends the height).
+- [~] (Finding 1, best effort: it shows only if the wall's chunk loads after your first reading) Far
+      from spawn, stand 150 blocks from a Signal Mast with a stone wall 3 thick across the link about
+      120 blocks from you (lens on LINKS shows the line), meter held in detailed mode. Save and quit,
+      reopen, and do not move: the reading settles on the walled RSRP within a second or two of the world
+      appearing. Before the fix it could keep the clear reading, taken before the wall's chunk had
+      loaded, until you moved half a block.
+- [~] (Finding 2, optional: only its absence of side effects shows) Put a transmitter on a slow redstone
+      clock in a chunk you `/forceload add`, its receiver (with a lamp) 30 blocks away in a chunk you do
+      not force. Walk until the receiver is about 13 to 23 chunks away (view distance 10), wait a minute:
+      no hitch in the server's tick (F3 / `/tick query`), and back near it the lamp shows the clock's
+      current state within about a second. `/forceload remove` afterwards.
+
 ## 3B done-when
 
 - [~] The nine-mast column reads as one cell, (0 co-channel), lobe at the top. *One registered cell
@@ -928,7 +975,10 @@ centroid, so 7 × 16 + 1 = 113). (g)
   and the client now reads it (and collapses columns itself), so a slice 5 client on a slice 6
   server would draw a lobe per stacked mast and the reverse one lobe where nine cells transmit. No
   payload changed shape; `DATA_VERSION` stays 2.
-- **[ ] Open, minor (from slice 6).** `maxMastHeight` is COMMON, which NeoForge does not sync. The lens
+- **[x] Done in the Phase 3B review (row 9a, 8b42665), the second fix below.** *The update tag carries
+  `RadiatingY` (the server's radiating height) and the lens uses it whenever it fits the column the
+  client sees; `PROTOCOL_VERSION` 6 → 7 (NOTES.md, "Phase 3B review, round 1", finding 4).* (from slice 6)
+  `maxMastHeight` is COMMON, which NeoForge does not sync. The lens
   applies the client's own copy, so on a dedicated server whose cap differs from the client's, a
   column taller than the smaller cap is drawn with its lobe at the client's cap (the server radiates
   from its own). Single player is unaffected. Fixes: move the value to a SERVER config (synced), or

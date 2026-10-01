@@ -159,12 +159,14 @@ public class RadioLinkReceiverBlockEntity extends RadioLinkBlockEntity implement
      * the chunk is outside FULL (see {@link #memoryChanged}): the next turn does it.
      */
     private void syncOutput() {
-        if (!(level instanceof ServerLevel serverLevel) || !chunkFull()) {
+        if (!(level instanceof ServerLevel serverLevel)) {
             return;
         }
         BlockState state = getBlockState();
         boolean on = memory.output();
-        if (state.getBlock() instanceof RadioLinkReceiverBlock && state.getValue(RadioLinkReceiverBlock.POWERED) != on) {
+        // The chunk check last: in steady state the output already matches and nothing is looked up.
+        if (state.getBlock() instanceof RadioLinkReceiverBlock && state.getValue(RadioLinkReceiverBlock.POWERED) != on
+                && chunkFull()) {
             serverLevel.setBlock(worldPosition, state.setValue(RadioLinkReceiverBlock.POWERED, on), Block.UPDATE_ALL);
         }
     }

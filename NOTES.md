@@ -2540,7 +2540,11 @@ slice commit `5299fb4` "Phase 3 slice 6: mast columns".
    Consequences, all intended: a base is planned on its first refresh, which while building a column
    by hand is when the second mast goes on (the plan uses the radiating point at that moment, a block
    or two below the final top: irrelevant against a 500-block planning radius); a base loaded from
-   disk keeps its saved PCI. Sectors are planned exactly as before.
+   disk keeps its saved PCI. Sectors are planned exactly as before. *(Phase 3B review, finding 3:
+   planning on the first refresh also ran at `ChunkEvent.Load` for a migrated Phase 1 mast, before
+   the antennas in chunks loaded later in the same batch had registered. Now only a promotion plans
+   in `refreshRegistration`; every other pending plan, a fresh base's included, waits for `onLoad`
+   as before slice 6. See "Phase 3B review, round 1" below.)*
 5. **Only extending upward keeps the cell.** A mast placed under the base becomes the new base: a
    new `cellId` (its position) and a fresh PCI plan, and the old base stops transmitting. That is
    §3B.1's design ("using the top as owner would re-plan the PCI every time someone adds a block"),
@@ -2571,7 +2575,9 @@ slice commit `5299fb4` "Phase 3 slice 6: mast columns".
    only). The lens reads the client's own copy. In single player both sides read the same value; on
    a dedicated server whose admin changed the cap, a column taller than the lower of the two caps is
    drawn with its lobe at the client's cap. Recorded as a follow-up; a fix would send the server's
-   value, or put the radiating point in the update tag.
+   value, or put the radiating point in the update tag. *(Fixed in the Phase 3B review, finding 4:
+   the update tag carries `RadiatingY`, the server's height, and the lens uses it; `PROTOCOL_VERSION`
+   6 → 7.)*
 10. **A config change applies at the next re-scan.** Changing `maxMastHeight` (or `requireRedstone`,
     as before) re-registers nothing by itself; the next block change at the column or the chunk's
     next load does.
@@ -2820,6 +2826,16 @@ existed with the per-dimension epoch:
   inside the `emptyTime < 300` guard), so the moved blocks settle when a player returns, after the
   deferred bump. Players' caches are cleared on a dimension change anyway; slice 8's fixed receivers
   in such a dimension could replay a sample that saw the blocks mid-move.
+- **Chunks loading and unloading (missed in slice 7; fixed in the Phase 3B review, finding 1).** The
+  probe reads a chunk that is not loaded as FULL as air (`LevelWorldProbe`), and with
+  `maxEvaluationRangeBlocks` 1400 rays routinely cross chunks no player has loaded. A chunk on a ray
+  reaching or leaving FULL therefore changes what a fresh evaluation reads with no block event, and
+  slice 7 bumped nothing then. 1.21.1 keeps a chunk that leaves FULL in memory (ticket level 34-44)
+  with no unload event, and makes it FULL again with no load event, so even a chunk-event hook would
+  have missed most of it. A fixed receiver (which never moves) could replay such a sample
+  indefinitely: a ridge read as air while its chunk was unloaded, or the reverse. Now `RegionEpochs`
+  bumps the chunk's bin on `ChunkEvent.Load` and on a ticket-level change across FULL
+  (`ChunkTicketLevelUpdatedEvent`); details in "Phase 3B review, round 1" below.
 
 A cached sample is corrected by the next event in any of its bins, the next antenna change, or the
 receiver moving half a block. A catch-all exists (`BlockEvent.NeighborNotifyEvent`, fired from
@@ -3459,3 +3475,200 @@ per batch and three times per tick, about 45 reads per tick here at about 53 ns 
 | `./gradlew runGameTestServer` | "27 tests are now running", "All 27 required tests passed" (21 + 2 generated harvest tests + 4 Radio Link tests), in each of the eight runs of this step |
 | Versions | `PROTOCOL_VERSION` "6", `AntennaBlockEntity.DATA_VERSION` 2, unchanged; the Radio Link entities save their own `DataVersion` 1 |
 | In game | the checks listed in PHASE_3.md, "Slice 9 (Radio Link) checks" |
+
+---
+
+## Phase 3B review, round 1 — fixes
+
+Four findings from the Part B review (two major, two minor). Each was checked against the code and
+against the 1.21.1 / NeoForge 21.1.251 sources before fixing; all four are real and all four are fixed.
+None rejected. The build is green (**485 unit tests**, 0 skipped) and `runGameTestServer` passes
+**30 of 30** (27 + 3 new) in each of five runs (the fifth on the committed code, just before the commit). Code commit `8b42665` (checkpoint); the commit
+"Phase 3 review: fixes" adds these notes, the tracker and one reorder in
+`RadioLinkReceiverBlockEntity.syncOutput` (the chunk check last).
+
+### 1. [major] Region epochs now move when a chunk reaches or leaves FULL
+
+**The defect, confirmed.** `LevelWorldProbe` reads a voxel through `ServerChunkCache.getChunkNow`
+and treats `null` as air. `getChunkNow` returns a chunk only while its holder allows FULL (ticket level
+33 or lower: `GenerationChunkHolder.isStatusDisallowed`, set by `updateHighestAllowedStatus`) and its
+FULL step has completed. `RegionEpochs` listened to block events only, so a chunk on a cached ray
+reaching or leaving FULL changed what a fresh evaluation reads while every epoch stayed put. Checked in
+the sources: a chunk whose ticket level rises above 33 keeps its `LevelChunk` while the level is at most
+44 (`ChunkMap.updateChunkScheduling` queues a drop only when `!ChunkLevel.isLoaded(level)`), the
+completed FULL generation future is not cleared (`failAndClearPendingFuture` only completes futures
+that are not done), and when the level falls back to 33 the chunk is readable again at once, with no
+`ChunkEvent.Load` (posted only from `ChunkStatusTasks.full`). A fixed receiver never moves, so it could
+replay such a sample indefinitely, exactly as the reviewer's ridge scenario says; a player standing
+still at login, while the chunks round them were still loading, could too until they moved.
+
+**The fix.** `RegionEpochs` bumps the chunk's bin (`bumpChunk`: a 16-block chunk lies inside one
+128-block bin) on
+- `ChunkEvent.Load` (server side): a chunk generated or read from disk is FULL from now on;
+- `ChunkTicketLevelUpdatedEvent` when the old and new levels lie on opposite sides of FULL
+  (`crossesFull(old, new, ChunkLevel.byStatus(FullChunkStatus.FULL))`, 33 in 1.21.1).
+
+Why that is every change (also in `onTicketLevel`'s javadoc): the holder's allowed status and the FULL
+future change only in `ServerChunkCache.runDistanceManagerUpdates` (where `updateChunkScheduling` posts
+this event and, in the same call on the server thread, the allowed status follows it) and when the FULL
+step completes (which posts `ChunkEvent.Load`). Nothing evaluates in between.
+
+**Deviations from the reviewer's suggested fix, with reasons.**
+- **No `ChunkEvent.Unload` hook.** A chunk is dropped only once its level is above 44, so it left FULL,
+  and was bumped then, before; at unload the probe already read it as air. A bump there would only cost
+  a second needless re-evaluation for every cached ray through that bin, on every unload.
+- **No deferred second bump after a promotion.** The suggestion assumed promotion completes
+  asynchronously after the ticket change. In 1.21.1 the probe's view follows the holder's allowed
+  status, which is updated in the same `runAllUpdates` call as the event (verified in
+  `DistanceManager.runAllUpdates`: ticket propagation, then `updateHighestAllowedStatus`, then
+  `updateFutures`); the asynchronous part (`ChunkHolder.fullChunkFuture`, `prepareAccessibleChunk`)
+  gates ticking and sending, not `getChunkNow`. A chunk that was not kept in memory becomes readable
+  when its FULL step runs, which posts `ChunkEvent.Load`. The game test checks the in-memory case
+  (no load event at all) with the bump at once.
+- **Chunk bumps are not counted in `total()`.** `total()` stays the sum of *block-change* bumps, the
+  old per-dimension epoch that `CoverageSurveyor` reads (§3B.2: "works untouched"). Counting chunk
+  crossings there would make every coverage survey stale whenever any player walks across a chunk
+  border, flooring it at `coverageMinIntervalTicks` permanently. Before this fix (and before slice 7)
+  chunk loading never moved that epoch either, so coverage behaves exactly as before.
+
+**Known behaviour, honest.** Vanilla raises a ticket level in two steps (to 45, then to the new level),
+so a chunk going from 31 to 32 crosses FULL twice in one call although it stays FULL: two needless
+bumps, never a missed one. In play, chunks cross FULL along the edge of each player's loaded area as
+they walk (by the propagation rules, about three columns of chunks per chunk border crossed, a handful
+of bins), so a cached evaluation whose rays pass there is redone once. That is correct: the edge really
+changed what those rays read. Not measured with a moving player (no player in the headless runs); each
+bump itself is one synchronized hash-map increment.
+
+**Tests.** `RegionEpochsTest` +2: `bumpChunk` moves the chunk's own bin (negative coordinates, all 64
+chunks of a bin map to it) and not `total()`; `crossesFull` counts only crossings of 33, including both
+halves of vanilla's two-step raise. Game test
+`FixedReceiverGameTests.a_chunk_on_its_ray_reaching_or_leaving_full_reevaluates_it`: in the Nether a
+receiver and a band_900 omni about 140 blocks apart in two forced chunks, a stone wall across the link
+in the chunk halfway, built while that chunk was forced; released, it stays in memory at level 35 but is
+not FULL: the receiver is evaluated through air (0 dB) and replays; forced again, the *same*
+`LevelChunk` comes back (so no load event fired) and the receiver is evaluated afresh within about an
+interval and reads the wall (its exact stone loss); released again, afresh through air. With the
+ticket hook disabled the test fails ("a fresh evaluation after the wall's chunk came back to FULL").
+
+**Harness change that came with it.** The first run failed
+`two_hundred_receivers_in_steady_state` on "one fresh evaluation each" (204 instead of 200): the chunks
+round its freshly forced chunk finished loading in the background during the cold interval, and their
+load bumps (correctly) turned four replays into evaluations. The game-test helpers that force a chunk
+(`FixedReceiverGameTests.forceNetherChunk`, `RadioLinkGameTests.forceChunk`) now also load, at once,
+the 5 x 5 chunks the forced one makes FULL (`loadFullRings`), so their load events land before a test
+registers anything. Labelled at the helper.
+
+### 2. [major] A Radio Link receiver outside FULL no longer writes its block
+
+**The defect, confirmed.** `deliver` and `forget` called `syncOutput`, which wrote `POWERED` with
+`setBlock(UPDATE_ALL)` whatever the chunk's state. A receiver whose chunk sits at ticket level 34-44 is
+still in memory, its entity not removed (`ServerLevel.unload` runs only on a real unload), so it stays
+in the address book and messages and departures reach it, while the ticker skips it (`hasChunk`).
+`Level.setBlock` → `getChunkAt` → `ServerChunkCache.getChunk(x, z, FULL, true)` adds a
+`TicketType.UNKNOWN` ticket at 33 and waits (`managedBlock`): the chunk was promoted on the spot, on
+the server thread, inside a transmitter's dispatch, and neighbour updates ran there.
+
+**The fix.** `memoryChanged()`: where the chunk is FULL (`getChunkNow != null`, never loads anything),
+mark it changed and write the output as before; otherwise only the memory changes and a flag
+(`unsavedChange`) remembers to mark the chunk changed on the next turn (`BlockEntity.setChanged` would
+skip it: `Level.blockEntityChanged` checks `hasChunkAt`). `syncOutput` itself also writes nothing where
+the chunk is not FULL (checked last, so a turn whose output already matches looks nothing up). The
+receiver stays attached, so it still hears a transmitter's departure. Its
+next turn comes only once the chunk is FULL again, and `afterSample` then saves and writes the output
+(`afterSample` already called `syncOutput`).
+
+**Known limit, honest.** A memory change heard while the chunk is outside FULL is saved on the
+receiver's next turn. If the chunk unloads first, the reloaded receiver starts from its last save: its
+remembered transmitters are unverified and looked up on its first turn (a broken one is forgotten), and
+a missed "powered"/"off" is corrected by the transmitter's next delivered message, about a second later
+when both ends are served. Nothing in play is stuck by it.
+
+**Test.** `RadioLinkGameTests.a_receiver_outside_full_hears_but_does_not_write_its_block`: a receiver
+in a Nether chunk four chunks from a forced keeper chunk; while FULL a delivered message writes the
+block; released, the chunk leaves FULL, the entity is not removed, still attached and registered, and
+is not served; a departure, a new "powered" message and that transmitter's "off" all change the memory
+while the block (read from the held `LevelChunk`, loading nothing) keeps its old state and the chunk
+stays out of FULL; forced again, the next turn writes the output (off, signal 0). With the old
+`deliver`/`forget`/`syncOutput` the test fails ("the block was not written while the chunk is not
+FULL").
+
+### 3. [minor] A migrated Phase 1 mast plans its PCI after the whole load registered
+
+**The defect, confirmed.** Slice 6's `SignalMastBlockEntity.refreshRegistration` planned whenever a base
+had `needsPciAssignment`. `SignalTicker.onChunkLoad` calls it for every antenna at `ChunkEvent.Load`,
+while NeoForge calls `onLoad` later (`Level.tickBlockEntities`, from `freshBlockEntities`), once every
+chunk of that tick has posted its load. So a migrated Phase 1 mast (saved PCI 0, re-armed by
+`migrate`) planned seeing only the antennas of chunks loaded before its own. Before slice 6 the
+chunk-load refresh registered a placeholder and `onLoad` planned with the whole batch in the registry.
+
+**The fix**, as the reviewer suggested: only a promotion (`base && seenAsStructure`) plans in
+`refreshRegistration`. Every other pending plan waits for `onLoad → assignPciIfNeeded`, the mast
+registering its placeholder until then, as a sector does. A promotion happens on a block change next to
+a loaded column, never during a chunk load. Side effect, intended and as before slice 6: a freshly
+placed base is planned in its `onLoad` (the next tick) rather than on its first refresh.
+
+**Test.** `MastColumnGameTests.migrated_mast_plans_after_the_whole_load_registered`: two single masts 6
+blocks apart in a forced Nether chunk far from any other cell, one handed Phase 1 data
+(`DataVersion` 1, PCI 0), one Phase 2 data holding PCI 0; the chunk-load refresh runs for the Phase 1
+mast first (it registers its placeholder 0), then for the other; after `onLoad` the Phase 1 mast holds
+PCI 1 ("1 neighbour(s) in 500 blocks -> PCI 1" in the log), the other keeps 0. With the old override
+it plans in the first refresh, sees nobody, and takes 0: the test fails ("got 0"). Harness abstraction
+(stated in the test): no Phase 1 save is loaded; the saved data is handed to freshly placed entities and
+the refresh is called in a chunk batch's order.
+
+### 4. [minor] The lens draws a column's lobe at the server's radiating height
+
+**The defect, confirmed** (slice 6 follow-up, decision 9). `MastColumn.bounds` caps the signal part with
+`RanCraftConfig.maxMastHeight()`, a COMMON value NeoForge does not sync, and the client lens reached it
+through `toCellParams → radiatingPoint`. On a dedicated server whose cap differs from the client's, a
+column taller than the smaller cap was drawn at the client's cap.
+
+**The fix.** The antennas' update tag appends `RadiatingY` (`AntennaBlockEntity.RADIATING_Y_TAG`), the
+y of the radiating point as the server works it out, next to `OnAir`; never saved (the nine-mast game
+test checks the saved tag). The client keeps it (`toldRadiatingY`); `SignalMastBlockEntity.radiatingPoint`
+on the client uses it through `ColumnScan.reportedRadiatingY(column, reportedY)`: the server's height
+when it can belong to the column the client sees (above the base, at most one above the highest mast;
+any cap gives a value there), otherwise the client's own scan. "Otherwise" covers two moments only: no
+tag yet, and a block change that reached the client before the base's new tag (a stale height is never
+drawn outside the column). The server pushes a new tag when the height moves: `refreshRegistration`
+compares it with the height last written into an update tag (`sentRadiatingY`, recorded in
+`getUpdateTag`), so a mast added on top re-syncs the base, and nothing is sent before any client was
+told. Where the cell radiates from is the antenna's declared, public configuration, worked out by the
+server: the VISION line holds. **`PROTOCOL_VERSION` 6 → 7** (the update tag is wire format and the
+client reads it differently). `DATA_VERSION` stays 2.
+
+**Tests.** `ColumnScanTest.reportedRadiatingHeight` (+1): a 70-mast column under client cap 32 and server
+cap 64 and the reverse, both ends of the accepted range, unknown, below the base, above the highest mast
+plus one, a column cut down under an old report, no overflow. Game tests: the nine-mast base's tag
+carries the height above the ninth mast; after extending, the new height; under `maxMastHeight` 3 the
+capped height, not the uncapped one a default-cap client would scan. The drawing itself needs a client
+(PHASE_3.md, in-game checks).
+
+### APIs verified against sources (new to this codebase)
+
+- NeoForge 21.1.251 sources jar: `ChunkTicketLevelUpdatedEvent` (`getLevel`, `getChunkPos` as a packed
+  long, `getOldTicketLevel`, `getNewTicketLevel`, `getChunkHolder`; game bus, server only; not posted
+  when old equals new, nor when both are beyond the maximum); `EventHooks.fireChunkTicketLevelUpdated`,
+  called from `ChunkMap.updateChunkScheduling` after the holder's level is set.
+- Decompiled 1.21.1: `ChunkLevel.byStatus(FullChunkStatus)` (FULL is 33), `ChunkLevel.MAX_LEVEL`
+  (33 + the FULL step's radius), `ChunkLevel.fullStatus`; `FullChunkStatus.isOrAfter`;
+  `ChunkPos.getX(long)` / `getZ(long)`; `GenerationChunkHolder.getChunkIfPresent` /
+  `isStatusDisallowed` / `updateHighestAllowedStatus` / `failAndClearPendingFuture`;
+  `ChunkHolder.updateFutures`; `DistanceManager.runAllUpdates`; `DynamicGraphMinFixedPoint.runUpdates`
+  (a raised level goes through the maximum first); `ChunkMap.processUnloads` / `scheduleUnload` (the
+  unload event); `ServerChunkCache.getChunk` (adds an `UNKNOWN` ticket and waits), `getChunkNow`,
+  `hasChunk`, `runDistanceManagerUpdates`; `Level.setBlock` → `getChunkAt`; `Level.blockEntityChanged`
+  (checks `hasChunkAt`); `ChunkMap.save` (skips a chunk not marked unsaved); `Level.addFreshBlockEntities`
+  / `tickBlockEntities` (`onLoad` deferred); `LevelChunk.addAndRegisterBlockEntity`.
+
+### Verification
+
+| Check | Result |
+|---|---|
+| `./gradlew build` | **485 passed, 0 failed, 0 skipped** (482 + 1 `ColumnScanTest` + 2 `RegionEpochsTest`) |
+| `rf` / `util` purity | `PackagePurityTest` passes (`ColumnScan.reportedRadiatingY` and the `BinTraversal` javadoc name no game type) |
+| `./gradlew runGameTestServer` | "30 tests are now running", "All 30 required tests passed", in each of five runs after the harness change (the first run: 29 of 30, the count above) |
+| The new tests bite | one run with all three behaviour fixes disabled (ticket hook off, the receiver's old writes, the old planning branch): exactly the three new tests failed, with the messages quoted above; restored afterwards |
+| Costs, same runs | 200 fixed receivers in steady state 18.6-27.4 µs/tick (slice 8: 29-42); 200 radio links (400 blocks), median of three windows 26.1, 29.3 and 45.3 µs/tick in the three final runs (47.5 in one earlier run, before `syncOutput` checked the chunk last; slice 9 recorded medians of 27-44 and up to a factor of two between runs of the same code). All under the 100 µs assertions |
+| Versions | `PROTOCOL_VERSION` "7"; `AntennaBlockEntity.DATA_VERSION` 2, unchanged |
+| In game | not run by the agent (no `runClient`); checks in PHASE_3.md, "Phase 3B review (row 9a) checks" |
