@@ -3483,7 +3483,7 @@ per batch and three times per tick, about 45 reads per tick here at about 53 ns 
 Four findings from the Part B review (two major, two minor). Each was checked against the code and
 against the 1.21.1 / NeoForge 21.1.251 sources before fixing; all four are real and all four are fixed.
 None rejected. The build is green (**485 unit tests**, 0 skipped) and `runGameTestServer` passes
-**30 of 30** (27 + 3 new) in each of five runs (the fifth on the committed code, just before the commit). Code commit `8b42665` (checkpoint); the commit
+**30 of 30** (27 + 3 new) in each of five runs (the fifth on the committed code, just before the commit). Code commit `8b42665` (checkpoint); the commit `48e4da8`
 "Phase 3 review: fixes" adds these notes, the tracker and one reorder in
 `RadioLinkReceiverBlockEntity.syncOutput` (the chunk check last).
 
