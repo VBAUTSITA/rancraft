@@ -183,15 +183,17 @@ public final class RanCraftConfig {
 
     // ---- Phase 3: mast columns (§3B.1) ---------------------------------------------------------
     // Gameplay (which blocks form one tower), not an engine parameter, so it stays out of RfConfig.
-    // The RF Lens reads the same value on the client to draw a column's lobe where the server
-    // radiates it. COMMON configs are not synced, so a dedicated server and a client with different
-    // values disagree about columns taller than the smaller cap; see NOTES.md, slice 6.
+    // COMMON configs are not synced, so the RF Lens does not rely on the client's copy: the server
+    // sends each base's radiating height in its update tag (RadiatingY, Phase 3B review fix 4), and
+    // the client's own value is only the fallback before that tag arrives (or for the moment a block
+    // change reaches the client ahead of it); see NOTES.md, slice 6 and "Phase 3B review, round 1".
 
     public static final ModConfigSpec.IntValue MAX_MAST_HEIGHT = BUILDER
             .comment("Mast columns: a vertical run of Signal Masts is one cell, radiating from above its",
                     "top mast. Only the lowest this-many masts raise the radiating point; masts above",
                     "them are structure. A change applies to a column the next time it is rebuilt or",
-                    "its chunk loads.")
+                    "its chunk loads. GAME ABSTRACTION: a structural game rule, not RF (the propagation",
+                    "model has no antenna-height term; height helps only by clearing obstruction).")
             .defineInRange("maxMastHeight", 64, 1, 4096);
 
     // ---- Phase 3: fixed receivers (§3B.3) -------------------------------------------------------

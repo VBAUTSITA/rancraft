@@ -123,7 +123,13 @@ public final class SignalTicker {
      * and reconfiguring an antenna changes no block, so a player standing still kept reading the old
      * tilt until they took a step.
      *
-     * @param sample          the evaluation itself, full cell list included. <b>Slice 4:</b> kept so a
+     * <p><b>Honest label (NOTES.md, slice 7).</b> A replay is the evaluation at the cached point,
+     * not a new measurement where the player now stands: the half-block move rule
+     * ({@code MOVE_EPSILON_BLOCKS}) is the one approximation in the cache, unchanged since Phase 1.
+     * The dependency bins are those of the cached point's rays, so a player who moved 0.4 blocks
+     * across a bin edge replays the sample of where they were.
+     *
+     * @param sample         the evaluation itself, full cell list included. <b>Slice 4:</b> kept so a
      *                        replay can be dispatched to devices, which need more than the four
      *                        cells the payload carries. Server memory only; never sent.
      * @param links           the link rays built from this evaluation, or {@code null} when the

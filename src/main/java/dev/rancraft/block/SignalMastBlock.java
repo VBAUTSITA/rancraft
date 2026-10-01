@@ -35,6 +35,12 @@ import org.jetbrains.annotations.Nullable;
  * <p>Nothing may assume the radiating point equals the block position (or the block above it): for
  * a column it is the top's.
  *
+ * <p><b>Honest labels (NOTES.md, slice 6).</b> A real tower is a steel structure that carries one
+ * antenna system per sector; here the tower is built from the same block that radiates, and only the
+ * base's block entity carries the cell's configuration. The mounting-pole rule is a game rule: a real
+ * pole can carry an omni and sectors together, while here a sector on top replaces the column's omni,
+ * so one column is never more than one cell.
+ *
  * <p>{@code POWERED} is tracked per mast unconditionally, but only gates transmission when
  * {@code requireRedstone} is enabled. It defaults off so a freshly placed mast just works. With it
  * on, a column transmits while any of its masts is powered.

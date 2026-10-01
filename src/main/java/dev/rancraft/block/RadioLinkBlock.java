@@ -30,7 +30,9 @@ import net.minecraft.world.phys.BlockHitResult;
  *
  * <p><b>{@code LIT}</b> is set only by the server, from the device's last evaluation
  * ({@link RadioLinkBlockEntity#served()}), and reaches clients through vanilla block-state sync: the
- * client computes no service. Placed unlit; it lights at its first evaluation if it has service.
+ * client computes no service. It is the device's own public state, like a lit furnace: the client
+ * learns that the radio has service, not how good it is. Placed unlit; it lights at its first
+ * evaluation if it has service.
  */
 public abstract class RadioLinkBlock extends BaseEntityBlock {
 

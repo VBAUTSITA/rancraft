@@ -86,6 +86,10 @@ import net.neoforged.neoforge.event.tick.LevelTickEvent;
  * Phase 3B review: a fixed receiver could replay, indefinitely, a sample that read a ridge as air
  * because the ridge's chunk was not loaded when it ran, or the reverse.)
  *
+ * <p><b>Honest label (NOTES.md, slice 7).</b> Bins are a cache granularity, not an RF concept:
+ * nothing about propagation depends on them, and a replay is bit for bit the evaluation a fresh one
+ * would produce. What is incomplete is the list of change sources above, not the dependency set.
+ *
  * <p>Server thread only in practice (every event above is fired there); the methods are
  * synchronized anyway, as {@link SiteRegistry}'s are.
  */
