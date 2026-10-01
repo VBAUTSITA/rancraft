@@ -1,0 +1,12 @@
+{
+  "_comment": "Point-to-point microwave backhaul between two Backhaul Dishes. Kept out of rf/bands/ on purpose, so 18 GHz never appears as a cellular band.",
+  "frequency_mhz": 18000,
+  "tx_power_dbm": 20,
+  "dish_gain_dbi": 32,
+  "penetration_factor": 3.0,
+  "up_threshold_dbm": -50,
+  "degraded_threshold_dbm": -70,
+  "fresnel_penalty_db": 6.0,
+  "rain_db_per_km": 2.5,
+  "thunder_db_per_km": 6.0
+}

@@ -24,6 +24,13 @@ package dev.rancraft.rf;
  * {@code blerSlopeDb} (§5), for the same reason as the locator's: {@code rf} code reads them, and the
  * Radio Link reaches them through the {@code RfConfig} its device context carries
  * ({@link #blerModel()}).
+ *
+ * <p>Phase 3 slice 11 appends the backhaul values {@code rf} code reads (§3C.2, §5):
+ * {@code fiberRadiusBlocks} and {@code siteRadiusBlocks} ({@link BackhaulGraph}, via
+ * {@link #backhaulTopology()}) and {@code enableRainFade} ({@link MicrowaveLink#evaluate}).
+ * {@code requireBackhaul} (gameplay) and {@code backhaulRecomputeTicks} (server cost) stay in the mod
+ * config only, as the lens settings do. The link's own figures are data, not config:
+ * {@code rf/backhaul/microwave.json}.
  */
 public record RfConfig(
         double metersPerBlock,
@@ -53,7 +60,11 @@ public record RfConfig(
         double locatorSiteMergeBlocks,
         // ---- Phase 3 slice 9: Radio Link block error rate ----
         double blerSinr50Db,
-        double blerSlopeDb
+        double blerSlopeDb,
+        // ---- Phase 3 slice 11: backhaul ----
+        double fiberRadiusBlocks,
+        double siteRadiusBlocks,
+        boolean enableRainFade
 ) {
     public static final RfConfig DEFAULTS = new RfConfig(
             1.0,
@@ -85,7 +96,10 @@ public record RfConfig(
             LocatorParams.DEFAULT_NLOS_BIAS_BLOCKS_PER_DB,
             LocatorParams.DEFAULT_SITE_MERGE_BLOCKS,
             BlerModel.DEFAULT_SINR50_DB,
-            BlerModel.DEFAULT_SLOPE_DB);
+            BlerModel.DEFAULT_SLOPE_DB,
+            BackhaulGraph.Topology.DEFAULT_FIBER_RADIUS_BLOCKS,
+            BackhaulGraph.Topology.DEFAULT_SITE_RADIUS_BLOCKS,
+            true);
 
     public SinrCalculator.SinrParams sinrParams() {
         return new SinrCalculator.SinrParams(
@@ -103,6 +117,11 @@ public record RfConfig(
     /** The block-error-rate curve (§3B.4). Throws if {@code blerSlopeDb} is not positive. */
     public BlerModel blerModel() {
         return new BlerModel(blerSinr50Db, blerSlopeDb);
+    }
+
+    /** The backhaul topology radii (§3C.2). Throws if either is negative. */
+    public BackhaulGraph.Topology backhaulTopology() {
+        return new BackhaulGraph.Topology(fiberRadiusBlocks, siteRadiusBlocks);
     }
 
     public LocatorParams locatorParams() {

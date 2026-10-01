@@ -3,6 +3,7 @@ package dev.rancraft;
 import dev.rancraft.net.CoverageSurveyPayload;
 import dev.rancraft.net.LensLinksPayload;
 import dev.rancraft.net.LocatorFixPayload;
+import dev.rancraft.rf.BackhaulGraph;
 import dev.rancraft.rf.BlerModel;
 import dev.rancraft.rf.DriveTestLog;
 import dev.rancraft.rf.LocatorParams;
@@ -224,6 +225,42 @@ public final class RanCraftConfig {
                     "and one at FAIR (5 dB and up) almost none.")
             .defineInRange("blerSlopeDb", BlerModel.DEFAULT_SLOPE_DB, 0.1, 20.0);
 
+    // ---- Phase 3: backhaul (§3C.2) ------------------------------------------------------------
+    // fiberRadiusBlocks, siteRadiusBlocks and enableRainFade are read by rf code (BackhaulGraph,
+    // MicrowaveLink), so they cross into RfConfig in snapshot(). requireBackhaul is gameplay and
+    // backhaulRecomputeTicks server cost; both stay out of RfConfig, as the lens settings do. The
+    // microwave link's own figures (frequency, power, thresholds, rain rates) are data, in
+    // data/rancraft/rf/backhaul/microwave.json. See NOTES.md, Phase 3 slice 11.
+
+    public static final ModConfigSpec.BooleanValue REQUIRE_BACKHAUL = BUILDER
+            .comment("When true, a cell with no path to a Core Site goes off the air: no fiber (a core within",
+                    "fiberRadiusBlocks) and no chain of working microwave links from Backhaul Dishes.",
+                    "Off by default, like requireRedstone, so an existing world keeps working.")
+            .define("requireBackhaul", false);
+
+    public static final ModConfigSpec.DoubleValue FIBER_RADIUS_BLOCKS = BUILDER
+            .comment("A cell's base, or a Backhaul Dish, within this horizontal distance of a Core Site in the",
+                    "same dimension is on fiber to the core network. GAME ABSTRACTION: fiber is implicit;",
+                    "nothing is laid, and being near a core is being connected.")
+            .defineInRange("fiberRadiusBlocks", BackhaulGraph.Topology.DEFAULT_FIBER_RADIUS_BLOCKS, 0.0, 4096.0);
+
+    public static final ModConfigSpec.DoubleValue SITE_RADIUS_BLOCKS = BUILDER
+            .comment("A Backhaul Dish within this horizontal distance of a cell's base serves that cell, and",
+                    "dishes serving the same cell are connected through its site (a relay site).",
+                    "Horizontal, so a dish on top of a tall mast column serves the column's own cell.")
+            .defineInRange("siteRadiusBlocks", BackhaulGraph.Topology.DEFAULT_SITE_RADIUS_BLOCKS, 0.0, 256.0);
+
+    public static final ModConfigSpec.IntValue BACKHAUL_RECOMPUTE_TICKS = BUILDER
+            .comment("Least ticks between two recomputations of the microwave links and each cell's",
+                    "backhaul, whatever changed in between. 100 = 5 s.")
+            .defineInRange("backhaulRecomputeTicks", 100, 1, 12_000);
+
+    public static final ModConfigSpec.BooleanValue ENABLE_RAIN_FADE = BUILDER
+            .comment("Rain at a microwave link's midpoint adds loss: rain_db_per_km x the link's length in km,",
+                    "the higher thunder figure in a thunderstorm, nothing where it snows. APPROXIMATE: figures",
+                    "in the spirit of ITU-R P.838 at 18 GHz. Turn off to take weather out of the backhaul.")
+            .define("enableRainFade", true);
+
     public static final ModConfigSpec SPEC = BUILDER.build();
 
     // ---- RF Vision Step 3a: the drive-test trail (CLIENT) --------------------------------------
@@ -322,6 +359,30 @@ public final class RanCraftConfig {
         return SPEC.isLoaded() ? FIXED_RECEIVER_TICK_BUDGET_MS.get() : FIXED_RECEIVER_TICK_BUDGET_MS.getDefault();
     }
 
+    /**
+     * Whether a cell needs backhaul to stay on the air (§3C.2). Gameplay, deliberately not in
+     * {@link RfConfig}. Falls back to the default (off) if read before the config has loaded.
+     */
+    public static boolean requireBackhaul() {
+        return SPEC.isLoaded() ? REQUIRE_BACKHAUL.get() : REQUIRE_BACKHAUL.getDefault();
+    }
+
+    /**
+     * Least ticks between backhaul recomputations (§3C.2). Server cost, deliberately not in
+     * {@link RfConfig}. Falls back to the default if read before the config has loaded.
+     */
+    public static int backhaulRecomputeTicks() {
+        return SPEC.isLoaded() ? BACKHAUL_RECOMPUTE_TICKS.get() : BACKHAUL_RECOMPUTE_TICKS.getDefault();
+    }
+
+    /**
+     * The fiber radius (§3C.2). Also in {@link RfConfig} (the graph reads it there); this accessor is
+     * for game code that needs only the radius, such as the Storage Terminal's "near a core" rule.
+     */
+    public static double fiberRadiusBlocks() {
+        return SPEC.isLoaded() ? FIBER_RADIUS_BLOCKS.get() : FIBER_RADIUS_BLOCKS.getDefault();
+    }
+
     /** Immutable snapshot handed to the engine, so the engine never touches a config API. */
     public static RfConfig snapshot() {
         return new RfConfig(
@@ -348,6 +409,9 @@ public final class RanCraftConfig {
                 NLOS_BIAS_BLOCKS_PER_DB.get(),
                 LOCATOR_SITE_MERGE_BLOCKS.get(),
                 BLER_SINR50_DB.get(),
-                BLER_SLOPE_DB.get());
+                BLER_SLOPE_DB.get(),
+                FIBER_RADIUS_BLOCKS.get(),
+                SITE_RADIUS_BLOCKS.get(),
+                ENABLE_RAIN_FADE.get());
     }
 }

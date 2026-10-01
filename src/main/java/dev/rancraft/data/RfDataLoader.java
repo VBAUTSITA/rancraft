@@ -7,6 +7,7 @@ import dev.rancraft.RanCraft;
 import dev.rancraft.rf.Band;
 import dev.rancraft.rf.BandTable;
 import dev.rancraft.rf.CellParams;
+import dev.rancraft.rf.MicrowaveLink;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import net.minecraft.resources.ResourceLocation;
@@ -15,13 +16,16 @@ import net.minecraft.server.packs.resources.SimpleJsonResourceReloadListener;
 import net.minecraft.util.profiling.ProfilerFiller;
 
 /**
- * Loads {@code data/rancraft/rf/bands/*.json} and {@code data/rancraft/rf/materials/attenuation.json}.
+ * Loads {@code data/rancraft/rf/bands/*.json}, {@code data/rancraft/rf/materials/attenuation.json}
+ * and (Phase 3 slice 11) {@code data/rancraft/rf/backhaul/microwave.json}.
  *
  * <p>Defaults ship inside the mod jar but are still read through this loader, so there is exactly
  * one code path and Phase 2 can add a band by dropping in a file.
  *
  * <p>One listener is registered on the {@code rf} directory rather than two on its children, so
- * entries arrive as {@code rancraft:bands/band_900} and {@code rancraft:materials/attenuation}.
+ * entries arrive as {@code rancraft:bands/band_900}, {@code rancraft:materials/attenuation} and
+ * {@code rancraft:backhaul/microwave}. Only paths under {@code bands/} become cellular bands, so the
+ * microwave link's 18 GHz, in its own folder on purpose (§3C.2), never appears as one.
  */
 public final class RfDataLoader extends SimpleJsonResourceReloadListener {
 
@@ -30,8 +34,11 @@ public final class RfDataLoader extends SimpleJsonResourceReloadListener {
 
     private static final String BANDS_PREFIX = "bands/";
     private static final String MATERIALS_PATH = "materials/attenuation";
+    static final String MICROWAVE_PATH = "backhaul/microwave";
 
     private static volatile BandTable bands = BandTable.of(Band.DEFAULT_900);
+
+    private static volatile MicrowaveLink microwave = MicrowaveLink.DEFAULT;
 
     // Raw material data, kept unresolved until tags are bound. See invalidateMaterials().
     private static volatile double defaultSolidDb = 8.0;
@@ -45,6 +52,14 @@ public final class RfDataLoader extends SimpleJsonResourceReloadListener {
 
     public static BandTable bands() {
         return bands;
+    }
+
+    /**
+     * The microwave backhaul link's parameters (§3C.2), from {@code rf/backhaul/microwave.json};
+     * {@link MicrowaveLink#DEFAULT} until data loads, and when the file is missing or invalid.
+     */
+    public static MicrowaveLink microwave() {
+        return microwave;
     }
 
     /**
@@ -82,6 +97,7 @@ public final class RfDataLoader extends SimpleJsonResourceReloadListener {
         Map<ResourceLocation, Double> blocks = new LinkedHashMap<>();
         Map<ResourceLocation, Double> tags = new LinkedHashMap<>();
         double defaultDb = 8.0;
+        MicrowaveLink loadedMicrowave = null;
 
         for (Map.Entry<ResourceLocation, JsonElement> entry : entries.entrySet()) {
             ResourceLocation key = entry.getKey();
@@ -104,6 +120,8 @@ public final class RfDataLoader extends SimpleJsonResourceReloadListener {
                     }
                     readAttenuationMap(json, "blocks", blocks);
                     readAttenuationMap(json, "tags", tags);
+                } else if (path.equals(MICROWAVE_PATH)) {
+                    loadedMicrowave = parseMicrowave(entry.getValue().getAsJsonObject());
                 }
             } catch (RuntimeException failure) {
                 RanCraft.LOGGER.error("RANCraft could not parse {}: {}", key, failure.toString());
@@ -123,8 +141,43 @@ public final class RfDataLoader extends SimpleJsonResourceReloadListener {
         rawTags = tags;
         invalidateMaterials();
 
+        if (loadedMicrowave == null) {
+            RanCraft.LOGGER.warn("RANCraft loaded no valid rf/{}.json; the microwave backhaul uses its built-in figures",
+                    MICROWAVE_PATH);
+            loadedMicrowave = MicrowaveLink.DEFAULT;
+        }
+        microwave = loadedMicrowave;
+
         RanCraft.LOGGER.info("RANCraft loaded {} band(s), {} block override(s), {} tag override(s)",
                 loadedBands.size(), blocks.size(), tags.size());
+        RanCraft.LOGGER.info("RANCraft microwave backhaul: {} MHz, {} dBm, {} dBi dishes, UP >= {} dBm, DEGRADED >= {} dBm",
+                loadedMicrowave.frequencyMhz(), loadedMicrowave.txPowerDbm(), loadedMicrowave.dishGainDbi(),
+                loadedMicrowave.upThresholdDbm(), loadedMicrowave.degradedThresholdDbm());
+    }
+
+    /**
+     * Phase 3 slice 11: the microwave backhaul link (§3C.2). Every member is optional and falls back to
+     * {@link MicrowaveLink#DEFAULT}'s figure, as a band's optional members do; members it does not know
+     * (such as {@code _comment}) are ignored. Values that make no sense (a non-positive frequency, the
+     * DEGRADED threshold above the UP one, a negative loss) throw, so {@link #apply} logs the file as
+     * unparseable and the defaults stay in force.
+     */
+    static MicrowaveLink parseMicrowave(JsonObject json) {
+        MicrowaveLink d = MicrowaveLink.DEFAULT;
+        return new MicrowaveLink(
+                number(json, "frequency_mhz", d.frequencyMhz()),
+                number(json, "tx_power_dbm", d.txPowerDbm()),
+                number(json, "dish_gain_dbi", d.dishGainDbi()),
+                number(json, "penetration_factor", d.penetrationFactor()),
+                number(json, "up_threshold_dbm", d.upThresholdDbm()),
+                number(json, "degraded_threshold_dbm", d.degradedThresholdDbm()),
+                number(json, "fresnel_penalty_db", d.fresnelPenaltyDb()),
+                number(json, "rain_db_per_km", d.rainDbPerKm()),
+                number(json, "thunder_db_per_km", d.thunderDbPerKm()));
+    }
+
+    private static double number(JsonObject json, String member, double fallback) {
+        return json.has(member) ? json.get(member).getAsDouble() : fallback;
     }
 
     private static Band parseBand(String bandId, JsonObject json) {
