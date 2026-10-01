@@ -4087,8 +4087,8 @@ state (recorded 18.6-42).
 The pure half of backhaul: the link budget, the topology and its two-pass solve, the data file and the
 config. Nothing in the game reads them yet. The blocks (Core Site, Backhaul Dish, Link Tool), the
 per-cell state, `requireBackhaul`'s effect, the lens lines and `/rancraft backhaul status` are slice 12.
-Code in `0d45aca` (part 1 of 2); these notes and the tracker in "Phase 3 slice 11: microwave link and
-backhaul graph".
+Code in `0d45aca` (part 1 of 2); these notes and the tracker in `53ce35f` "Phase 3 slice 11: microwave
+link and backhaul graph".
 
 An earlier attempt at this slice was interrupted after writing the code and tests (uncommitted, green).
 This step reviewed that work against §3C.2, added three helpers slice 12 needs (marked below) with
