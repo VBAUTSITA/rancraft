@@ -32,6 +32,10 @@ import net.minecraft.world.level.block.state.BlockState;
  * it was broken, or the column split), it gets a fresh plan, as a newly placed mast would. That is a
  * known behaviour, not a bug (NOTES.md, slice 6): the new base is a different cell with a new id, so
  * its old entity's saved PCI (if any) is not the column's.
+ *
+ * <p>On the client the RF Lens draws a column's lobe at the radiating point the server worked out
+ * with its own {@code maxMastHeight}, sent in the update tag ({@code RadiatingY}, Phase 3B review
+ * fix): that config is COMMON, which NeoForge does not sync, so the client's own cap may differ.
  */
 public class SignalMastBlockEntity extends AntennaBlockEntity {
 
@@ -70,6 +74,12 @@ public class SignalMastBlockEntity extends AntennaBlockEntity {
      * For a column's base: just above the top of the column's signal part ({@code top.above()}). For
      * a single mast that is {@code pos.above()}, as in Phase 2. For structure (never registered) the
      * block above, which nothing uses.
+     *
+     * <p>On the client (the RF Lens) the height is the server's, from the update tag
+     * ({@link #toldRadiatingY()}), whenever it fits the column the client sees
+     * ({@link ColumnScan#reportedRadiatingY}): the server applies its own {@code maxMastHeight}, which
+     * is not synced. Only before the server has said, or for the moment a block change has reached
+     * the client ahead of the base's update, does the client fall back to its own cap.
      */
     @Override
     public BlockPos radiatingPoint() {
@@ -78,7 +88,13 @@ public class SignalMastBlockEntity extends AntennaBlockEntity {
             return super.radiatingPoint();
         }
         ColumnScan.Bounds column = MastColumn.bounds(level, pos);
-        return column == null ? super.radiatingPoint() : new BlockPos(pos.getX(), column.radiatingY(), pos.getZ());
+        if (column == null) {
+            return super.radiatingPoint();
+        }
+        int y = level.isClientSide()
+                ? ColumnScan.reportedRadiatingY(column, toldRadiatingY())
+                : column.radiatingY();
+        return new BlockPos(pos.getX(), y, pos.getZ());
     }
 
     /**
@@ -113,18 +129,25 @@ public class SignalMastBlockEntity extends AntennaBlockEntity {
     /**
      * Registers the cell if this mast is a transmitting base, unregisters it otherwise. A structure
      * mast that has just become a base gets a fresh PCI plan first.
+     *
+     * <p><b>Only a promotion plans here</b> (Phase 3B review fix). Every other pending plan (a fresh
+     * placement, a migrated Phase 1 mast whose saved PCI is 0) waits for {@link #onLoad}, as before
+     * slice 6: this method also runs from {@code ChunkEvent.Load}, before the antennas in chunks loaded
+     * later in the same batch have registered, while NeoForge runs {@code onLoad} afterwards
+     * ({@code Level.tickBlockEntities}), once the whole batch is in the registry. Until then such a mast
+     * registers with its placeholder PCI, as a sector antenna does. A promotion happens on a block
+     * change next to a loaded column, never during a chunk load, so its plan sees the neighbourhood.
      */
     @Override
     public void refreshRegistration() {
         if (level instanceof ServerLevel) {
             boolean base = isColumnBase();
-            if (base && seenAsStructure) {
-                // Promoted: the mast (or masts) under it went. A fresh plan, as for a new mast.
-                needsPciAssignment = true;
-            }
+            boolean promoted = base && seenAsStructure;
             seenAsStructure = !base;
-            if (base && needsPciAssignment) {
-                // Plans, then refreshes again (with nothing left to plan) to register the result.
+            if (promoted) {
+                // The mast (or masts) under it went. A fresh plan, as for a new mast; it plans, then
+                // refreshes again (not promoted any more) to register the result.
+                needsPciAssignment = true;
                 assignPciIfNeeded();
                 if (!needsPciAssignment) {
                     return;

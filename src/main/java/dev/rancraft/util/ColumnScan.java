@@ -32,6 +32,9 @@ public final class ColumnScan {
      */
     public static final int MAX_WALK = 4096;
 
+    /** A radiating height nobody has reported: the client has not been told the server's value. */
+    public static final int UNKNOWN_Y = Integer.MIN_VALUE;
+
     /**
      * One column.
      *
@@ -93,6 +96,29 @@ public final class ColumnScan {
         // In long arithmetic: base + cap - 1 can overflow an int for a huge cap.
         int top = (int) Math.min((long) highest, (long) base + cap - 1L);
         return new Bounds(base, top, highest);
+    }
+
+    /**
+     * Where a column radiates from, given the height another party (the server) reported for it: the
+     * reported height if it can belong to this column, otherwise this column's own
+     * {@link Bounds#radiatingY()}. Phase 3B review fix.
+     *
+     * <p>Why: the signal part's cap ({@code maxMastHeight}) is a COMMON config, which NeoForge does not
+     * sync, so a client may scan the same blocks with a different cap than the server registered the
+     * cell with. The server's height is the true one. It can belong to the column when it lies above
+     * the base and at most one block above the highest mast ({@code (baseY, highestY + 1]}); any cap
+     * gives a height in that range. Outside it, the report is about a column that has since changed
+     * (a block change can reach the client before the base's new update tag), and the local scan of
+     * the blocks the client sees is the better guess until the next report arrives.
+     *
+     * @param column    this column, as scanned locally.
+     * @param reportedY the reported radiating height, or {@link #UNKNOWN_Y} if none was reported.
+     */
+    public static int reportedRadiatingY(Bounds column, int reportedY) {
+        if (reportedY != UNKNOWN_Y && reportedY > column.baseY() && reportedY <= (long) column.highestY() + 1L) {
+            return reportedY;
+        }
+        return column.radiatingY();
     }
 
     /**

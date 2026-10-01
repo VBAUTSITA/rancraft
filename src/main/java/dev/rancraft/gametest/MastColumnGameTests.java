@@ -16,11 +16,13 @@ import java.util.List;
 import java.util.Locale;
 import java.util.function.Consumer;
 import net.minecraft.core.BlockPos;
+import net.minecraft.gametest.framework.AfterBatch;
 import net.minecraft.gametest.framework.GameTestGenerator;
 import net.minecraft.gametest.framework.GameTestHelper;
 import net.minecraft.gametest.framework.TestFunction;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Blocks;
 import net.neoforged.neoforge.gametest.GameTestHolder;
 
@@ -49,7 +51,17 @@ public final class MastColumnGameTests {
     private static final String BATCH = "rancraft_mast_columns";
     private static final String BATCH_REDSTONE = "rancraft_mast_columns_redstone";
     private static final String BATCH_CAP = "rancraft_mast_columns_cap";
+    private static final String BATCH_MIGRATION = "rancraft_mast_columns_migration";
     private static final int TIMEOUT_TICKS = 100;
+    /**
+     * The migration test's forced Nether chunk, above the roof and thousands of blocks from every other
+     * test's, so no other cell is within the PCI planning radius (500 blocks).
+     */
+    private static final int MIGRATION_CHUNK = 600;
+    private static final int AIR_Y = 200;
+
+    /** Undone after the migration batch, pass or fail. Server thread. */
+    private static final List<Runnable> CLEANUPS = new ArrayList<>();
     private static final int SETTLE = 3;
     /** The census logs after {@code MastColumnCensus.QUIET_TICKS} (100) quiet ticks. */
     private static final int CENSUS_TIMEOUT_TICKS = 200;
@@ -74,7 +86,21 @@ public final class MastColumnGameTests {
                 CENSUS_TIMEOUT_TICKS, 0L, true, MastColumnGameTests::savedStackIsLogged));
         tests.add(test(BATCH_REDSTONE, prefix + "any_powered_mast_powers_the_column", MastColumnGameTests::anyPoweredMast));
         tests.add(test(BATCH_CAP, prefix + "height_cap_limits_the_radiating_point", MastColumnGameTests::heightCap));
+        tests.add(test(BATCH_MIGRATION, prefix + "migrated_mast_plans_after_the_whole_load_registered",
+                MastColumnGameTests::migratedMastPlansAfterTheBatch));
         return tests;
+    }
+
+    @AfterBatch(batch = BATCH_MIGRATION)
+    public static void afterMigration(ServerLevel level) {
+        for (Runnable cleanup : CLEANUPS) {
+            try {
+                cleanup.run();
+            } catch (RuntimeException failure) {
+                RanCraft.LOGGER.error("RANCraft mast column game test cleanup failed", failure);
+            }
+        }
+        CLEANUPS.clear();
     }
 
     private static TestFunction test(String batch, String name, Consumer<GameTestHelper> body) {
@@ -114,6 +140,9 @@ public final class MastColumnGameTests {
                     }
                     CompoundTag saved = base.saveWithoutMetadata(level.registryAccess());
                     helper.assertFalse(saved.contains(AntennaBlockEntity.ON_AIR_TAG), "OnAir is never saved");
+                    helper.assertFalse(saved.contains(AntennaBlockEntity.RADIATING_Y_TAG), "nor is RadiatingY");
+                    helper.assertTrue(radiatingYInUpdateTag(level, base) == cell.y(),
+                            "the base's update tag carries the radiating height, above the ninth mast");
 
                     measureScanCost(level, abs(helper, 0), abs(helper, 5));
                 })
@@ -170,6 +199,8 @@ public final class MastColumnGameTests {
                     helper.assertTrue(after.pci() == before[0].pci(),
                             "same PCI after extending: " + before[0].pci() + " -> " + after.pci());
                     helper.assertTrue(after.y() == before[0].y() + 1, "the radiating point moved up one block");
+                    helper.assertTrue(radiatingYInUpdateTag(helper.getLevel(), mast(helper, 0)) == after.y(),
+                            "the update tag tells the lens the new height (RadiatingY)");
                 })
                 .thenSucceed();
     }
@@ -306,6 +337,12 @@ public final class MastColumnGameTests {
                     CellParams cell = onlyCell(helper);
                     helper.assertTrue(cell.cellId() == abs(helper, 0).asLong() && cell.y() == abs(helper, 3).getY(),
                             "capped at 3: radiates from above the third mast, got " + cell);
+                    // Phase 3B review: the cap is COMMON and not synced, so the lens is told the
+                    // server's height rather than applying its own cap.
+                    helper.assertTrue(radiatingYInUpdateTag(helper.getLevel(), mast(helper, 0)) == cell.y(),
+                            "the update tag carries the server's capped height");
+                    helper.assertTrue(radiatingYInUpdateTag(helper.getLevel(), mast(helper, 0)) != abs(helper, 6).getY(),
+                            "not the uncapped one a client with the default cap would scan");
                     // A sector on the highest mast (above the cap) still makes the column a pole.
                     helper.setBlock(new BlockPos(X, 6, Z), ModBlocks.SECTOR_ANTENNA.get());
                 }))
@@ -347,6 +384,87 @@ public final class MastColumnGameTests {
                     helper.assertTrue(cell.cellId() == abs(helper, 0).asLong(), "still one cell, owned by the base");
                 })
                 .thenSucceed();
+    }
+
+    /**
+     * Phase 3B review: a migrated Phase 1 mast (saved PCI 0, so it needs a plan) plans in
+     * {@code onLoad}, after the whole load has registered, not at {@code ChunkEvent.Load}.
+     *
+     * <p>Two single masts 6 blocks apart in a forced Nether chunk, far from any other cell: one with
+     * Phase 1 data ({@code DataVersion} 1, PCI 0), one with Phase 2 data that holds PCI 0 on purpose
+     * (as if it stood in a chunk loaded later in the same batch). They get their saved data before
+     * their {@code onLoad} (next tick), then the chunk-load refresh runs for the Phase 1 mast
+     * <em>before</em> the other one is registered, then for the other one: the order of a server
+     * start where the second mast's chunk loads after the first's. The Phase 1 mast must plan around
+     * the PCI 0 that registered after its own chunk-load refresh. Before the fix it planned in that
+     * refresh, saw no neighbour, and took PCI 0 too: a collision.
+     *
+     * <p>Harness abstraction, as in {@link #savedStackIsLogged}: there is no Phase 1 save to load. The
+     * saved data is handed to freshly placed entities, and the chunk-load refresh is called directly
+     * in the order a batch of chunk loads would call it.
+     */
+    private static void migratedMastPlansAfterTheBatch(GameTestHelper helper) {
+        ServerLevel nether = helper.getLevel().getServer().getLevel(Level.NETHER);
+        if (nether == null) {
+            helper.fail("the game test server has no Nether");
+            return;
+        }
+        nether.setChunkForced(MIGRATION_CHUNK, MIGRATION_CHUNK, true);
+        CLEANUPS.add(() -> nether.setChunkForced(MIGRATION_CHUNK, MIGRATION_CHUNK, false));
+        nether.getChunk(MIGRATION_CHUNK, MIGRATION_CHUNK);
+        BlockPos phase1Pos = new BlockPos(MIGRATION_CHUNK * 16 + 4, AIR_Y, MIGRATION_CHUNK * 16 + 4);
+        BlockPos phase2Pos = phase1Pos.east(6);
+        CLEANUPS.add(() -> {
+            nether.setBlock(phase1Pos, Blocks.AIR.defaultBlockState(), 3);
+            nether.setBlock(phase2Pos, Blocks.AIR.defaultBlockState(), 3);
+        });
+        nether.setBlock(phase1Pos, ModBlocks.SIGNAL_MAST.get().defaultBlockState(), 3);
+        nether.setBlock(phase2Pos, ModBlocks.SIGNAL_MAST.get().defaultBlockState(), 3);
+        if (!(nether.getBlockEntity(phase1Pos) instanceof SignalMastBlockEntity phase1)
+                || !(nether.getBlockEntity(phase2Pos) instanceof SignalMastBlockEntity phase2)) {
+            helper.fail("no Signal Mast block entities placed");
+            return;
+        }
+
+        // Saved data, as the chunk load hands it over before onLoad.
+        CompoundTag phase1Data = phase1.saveWithoutMetadata(nether.registryAccess());
+        phase1Data.putInt("DataVersion", 1);
+        phase1Data.putInt("Pci", 0);
+        phase1.loadWithComponents(phase1Data, nether.registryAccess());
+        CompoundTag phase2Data = phase2.saveWithoutMetadata(nether.registryAccess());
+        phase2Data.putInt("DataVersion", AntennaBlockEntity.DATA_VERSION);
+        phase2Data.putInt("Pci", 0);
+        phase2.loadWithComponents(phase2Data, nether.registryAccess());
+
+        // The chunk-load refreshes, the Phase 1 mast's first (its chunk loaded first).
+        SiteRegistry sites = SiteRegistry.of(nether);
+        phase1.refreshRegistration();
+        helper.assertTrue(registeredPci(sites, phase1Pos) == 0,
+                "at its chunk load the Phase 1 mast registers with its placeholder PCI 0, unplanned: "
+                        + registeredPci(sites, phase1Pos));
+        phase2.refreshRegistration();
+        helper.assertTrue(registeredPci(sites, phase2Pos) == 0, "the later mast registers its saved PCI 0");
+
+        helper.startSequence()
+                .thenIdle(SETTLE)
+                .thenExecute(() -> {
+                    helper.assertTrue(phase2.pci() == 0, "a Phase 2 mast keeps the PCI it saved");
+                    helper.assertTrue(phase1.pci() != 0,
+                            "the Phase 1 mast planned in onLoad, around the PCI 0 registered after its chunk load: got "
+                                    + phase1.pci());
+                    helper.assertTrue(registeredPci(sites, phase1Pos) == phase1.pci(), "and registered the plan");
+                })
+                .thenSucceed();
+    }
+
+    /** The PCI registered for the cell owned by the mast at {@code pos}; -1 if none is. */
+    private static int registeredPci(SiteRegistry sites, BlockPos pos) {
+        for (CellParams cell : sites.near(pos.getX() + 0.5, pos.getY() + 1.0, pos.getZ() + 0.5, 4.0)) {
+            if (cell.cellId() == pos.asLong()) {
+                return cell.pci();
+            }
+        }
+        return -1;
     }
 
     // ---- helpers ----------------------------------------------------------------------------------
@@ -396,6 +514,12 @@ public final class MastColumnGameTests {
         }
         helper.fail("no cell owned by " + owner + " in " + cells);
         throw new IllegalStateException("unreachable");
+    }
+
+    /** The update tag's {@code RadiatingY}; {@code Integer.MIN_VALUE} if absent. */
+    private static int radiatingYInUpdateTag(ServerLevel level, AntennaBlockEntity antenna) {
+        CompoundTag tag = antenna.getUpdateTag(level.registryAccess());
+        return tag.contains(AntennaBlockEntity.RADIATING_Y_TAG) ? tag.getInt(AntennaBlockEntity.RADIATING_Y_TAG) : Integer.MIN_VALUE;
     }
 
     private static boolean onAirInUpdateTag(ServerLevel level, AntennaBlockEntity antenna) {

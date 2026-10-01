@@ -11,7 +11,10 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import net.minecraft.core.BlockPos;
 import net.minecraft.resources.ResourceKey;
+import net.minecraft.server.level.ChunkLevel;
+import net.minecraft.server.level.FullChunkStatus;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.LevelAccessor;
 import net.minecraft.world.level.block.piston.PistonStructureResolver;
@@ -21,6 +24,8 @@ import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.common.util.BlockSnapshot;
 import net.neoforged.neoforge.event.level.BlockEvent;
 import net.neoforged.neoforge.event.level.BlockGrowFeatureEvent;
+import net.neoforged.neoforge.event.level.ChunkEvent;
+import net.neoforged.neoforge.event.level.ChunkTicketLevelUpdatedEvent;
 import net.neoforged.neoforge.event.level.ExplosionEvent;
 import net.neoforged.neoforge.event.level.PistonEvent;
 import net.neoforged.neoforge.event.tick.LevelTickEvent;
@@ -37,10 +42,12 @@ import net.neoforged.neoforge.event.tick.LevelTickEvent;
  * {@link BinTraversal}'s class javadoc: which cells get a ray is decided with no obstruction term,
  * and a pruned cell cannot be revived by any block change, so only the marched rays read the world.
  *
- * <p>{@link #total()} is the sum of every bin's epoch: it goes up on every bump anywhere in the
- * dimension, which is the old per-dimension epoch's meaning. {@code SignalTicker.blockEpochOf}
- * returns it, so {@code CoverageSurveyor} works unchanged (floored by
- * {@code coverageMinIntervalTicks}, as before).
+ * <p>{@link #total()} is the sum of every <em>block-change</em> bump: it goes up on every block event
+ * anywhere in the dimension, which is the old per-dimension epoch's meaning. {@code
+ * SignalTicker.blockEpochOf} returns it, so {@code CoverageSurveyor} works unchanged (floored by
+ * {@code coverageMinIntervalTicks}, as before). The chunk bumps below are left out of it, so a coverage
+ * survey is not redone whenever any player walks across a chunk border, which the old epoch never
+ * did either.
  *
  * <h2>What bumps a bin</h2>
  * <ul>
@@ -58,6 +65,14 @@ import net.neoforged.neoforge.event.tick.LevelTickEvent;
  *   <li>{@link BlockGrowFeatureEvent} (a sapling grows into a tree, a mushroom or fungus into a huge
  *       one): every bin within {@link #FEATURE_REACH_BLOCKS}. Beyond §3B.2's list (see
  *       {@link #onFeatureGrow}).
+ *   <li><b>A chunk becoming readable, or ceasing to be</b> (Phase 3B review fix): the chunk's bin (a
+ *       16-block chunk lies inside one 128-block bin). The probe reads a chunk that is not loaded as
+ *       FULL as air ({@link LevelWorldProbe}), so what a ray reads changes when a chunk on it reaches
+ *       or leaves FULL, with no block event. Bumped on {@link ChunkEvent.Load} (a chunk generated or
+ *       read from disk becomes FULL) and on a ticket-level change across FULL
+ *       ({@link ChunkTicketLevelUpdatedEvent}: a chunk kept in memory just outside the loaded area,
+ *       ticket level 34 to 44, goes back to FULL with no load event, or leaves FULL with no unload
+ *       event). See {@link #onTicketLevel} for why that covers every change.
  * </ul>
  *
  * <h2>Gaps that remain (NOTES.md, Phase 3 slice 7)</h2>
@@ -67,7 +82,9 @@ import net.neoforged.neoforge.event.tick.LevelTickEvent;
  * other than explosions (an enderman carrying a block), commands ({@code /setblock}, {@code /fill},
  * {@code /clone}) and other mods writing blocks directly. The same gaps existed with the
  * per-dimension epoch. A cached sample is corrected by the next event in any of its bins, the next
- * antenna change, or the receiver moving half a block.
+ * antenna change, or the receiver moving half a block. (Chunk loading was one more gap until the
+ * Phase 3B review: a fixed receiver could replay, indefinitely, a sample that read a ridge as air
+ * because the ridge's chunk was not loaded when it ran, or the reverse.)
  *
  * <p>Server thread only in practice (every event above is fired there); the methods are
  * synchronized anyway, as {@link SiteRegistry}'s are.
@@ -186,6 +203,29 @@ public final class RegionEpochs {
             epochs.addTo(key, 1L);
         }
         total += distinct.length;
+    }
+
+    /**
+     * The chunk at chunk coordinates {@code (chunkX, chunkZ)} became readable (FULL) or stopped being
+     * readable: its bin's epoch goes up by one. Not counted in {@link #total()} (see the class
+     * javadoc): it is not a block change.
+     */
+    public synchronized void bumpChunk(int chunkX, int chunkZ) {
+        // A chunk's 16 blocks never straddle a bin edge (BIN_SIZE is a multiple of 16), so its
+        // minimum corner names its bin.
+        epochs.addTo(BinTraversal.keyOfBlock(chunkX << 4, chunkZ << 4, BIN_SIZE), 1L);
+    }
+
+    /**
+     * Whether a ticket-level change moves a chunk into or out of FULL: a chunk is FULL (the only
+     * state in which the probe reads it) at {@code fullLevel} or lower. Pure, so it is unit-tested
+     * without touching {@code ChunkLevel}, whose class initialisation needs the game's registries.
+     *
+     * @param fullLevel the highest FULL ticket level, {@code ChunkLevel.byStatus(FullChunkStatus.FULL)}
+     *                  (33 in 1.21.1).
+     */
+    static boolean crossesFull(int oldTicketLevel, int newTicketLevel, int fullLevel) {
+        return (oldTicketLevel <= fullLevel) != (newTicketLevel <= fullLevel);
     }
 
     /** Bumps these bins now and again once {@code dueGameTime} is reached ({@link #settle}). */
@@ -350,6 +390,56 @@ public final class RegionEpochs {
         if (epochs != null) {
             epochs.bumpBins(featureBins(event.getPos().getX(), event.getPos().getZ()));
         }
+    }
+
+    /**
+     * A chunk was generated or read from disk and is now FULL (posted from the FULL step,
+     * {@code ChunkStatusTasks.full}, the only place a chunk becomes a {@code LevelChunk}): from now on
+     * the probe reads its blocks instead of air.
+     */
+    @SubscribeEvent
+    public static void onChunkLoad(ChunkEvent.Load event) {
+        RegionEpochs epochs = ofServer(event.getLevel());
+        if (epochs != null) {
+            ChunkPos pos = event.getChunk().getPos();
+            epochs.bumpChunk(pos.x, pos.z);
+        }
+    }
+
+    /**
+     * A chunk's ticket level moved across FULL (33). Phase 3B review fix.
+     *
+     * <p><b>Why this and {@link #onChunkLoad} cover every change in what the probe sees</b> (1.21.1
+     * sources). The probe reads a chunk through {@code ServerChunkCache.getChunkNow}, which returns it
+     * only while its holder allows FULL (ticket level 33 or lower, set by
+     * {@code GenerationChunkHolder.updateHighestAllowedStatus}) and its FULL step has completed. Both
+     * change in exactly two places:
+     * <ul>
+     *   <li>{@code ServerChunkCache.runDistanceManagerUpdates}: {@code ChunkMap.updateChunkScheduling}
+     *       sets the new ticket level and posts this event, then, in the same call, the holder's allowed
+     *       status follows. A chunk that leaves FULL keeps its {@code LevelChunk} in memory up to level
+     *       44 ({@code ChunkLevel.MAX_LEVEL}) with no unload event, and one that comes back while still
+     *       in memory becomes readable at once, with no load event (its FULL step stays completed).
+     *       Nothing is evaluated between the event and the change: it is all one call on the server
+     *       thread.
+     *   <li>The FULL step completing for a chunk generated or read from disk, which posts
+     *       {@link ChunkEvent.Load}.
+     * </ul>
+     * An unload needs no bump of its own: a chunk is dropped only above level 44, so it left FULL (and
+     * was bumped here) before.
+     *
+     * <p>Vanilla raises a ticket level in two steps (to 45, then to the new level), so a chunk that stays
+     * FULL (31 to 32, say) crosses twice in one call: two needless bumps of its bin, never a missed one.
+     * In play, chunks cross FULL along the edge of each player's loaded area as they walk, so a cached
+     * evaluation whose rays pass there is redone: the edge really did change what those rays read.
+     */
+    @SubscribeEvent
+    public static void onTicketLevel(ChunkTicketLevelUpdatedEvent event) {
+        if (!crossesFull(event.getOldTicketLevel(), event.getNewTicketLevel(), ChunkLevel.byStatus(FullChunkStatus.FULL))) {
+            return;
+        }
+        long pos = event.getChunkPos();
+        of(event.getLevel()).bumpChunk(ChunkPos.getX(pos), ChunkPos.getZ(pos));
     }
 
     /**

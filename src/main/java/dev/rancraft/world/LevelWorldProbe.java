@@ -18,7 +18,9 @@ import net.minecraft.world.level.chunk.LevelChunk;
  * ({@code ServerChunkCache.getChunk} -> {@code managedBlock}) until worldgen is done -- a stall
  * inside one probe call, which no tick budget between calls can bound. A voxel in a chunk that is
  * unloaded or still generating reads as air: no chunk load is forced and nothing waits. That
- * matches the coverage survey's surface probe ({@code CoverageSurveyor.surfaceOf}).
+ * matches the coverage survey's surface probe ({@code CoverageSurveyor.surfaceOf}). Since what a ray
+ * reads therefore changes when a chunk on it reaches or leaves FULL, {@link RegionEpochs} bumps that
+ * chunk's bin then, so a cached sample is not replayed past it (Phase 3B review fix).
  *
  * <p><b>Server thread only.</b> {@code getChunkNow} returns {@code null} on any other thread, so
  * off-thread every voxel would read as air. Every caller ({@link SignalTicker}'s evaluation and

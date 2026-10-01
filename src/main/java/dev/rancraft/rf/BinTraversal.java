@@ -31,7 +31,11 @@ import java.util.Arrays;
  * produce.
  *
  * <p>The other inputs are covered separately by the cache: the cells (the site registry version)
- * and the receiver point (the 0.5-block move). Early exits make the set a superset, never a subset:
+ * and the receiver point (the 0.5-block move). One more input is not a block at all: the server's
+ * probe reads a voxel in a chunk that is not loaded (as FULL) as air, so a chunk on a ray loading or
+ * unloading changes what the ray reads with no block changing. The server bumps the chunk's bin
+ * then as well (a 16-block chunk lies inside one bin), so the argument above holds for that too
+ * (Phase 3B review fix; NOTES.md, slice 7). Early exits make the set a superset, never a subset:
  * a ray that stopped at a wall still lists the bins past it, which is conservative (a change there
  * could not have altered an early exit, but it costs only an unnecessary re-evaluation).
  *

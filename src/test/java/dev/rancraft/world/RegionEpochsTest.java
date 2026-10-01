@@ -160,4 +160,45 @@ class RegionEpochsTest {
         assertArrayEquals(new long[] {BinTraversal.key(-1, 2)}, RegionEpochs.explosionBins(List.of(), -0.5, 300.0),
                 "an explosion that broke nothing still bumps its own bin");
     }
+
+    @Test
+    @DisplayName("a chunk reaching or leaving FULL bumps its own bin only, and not the block-change sum")
+    void chunkBumps() {
+        RegionEpochs epochs = new RegionEpochs();
+        RegionEpochs.Snapshot snapshot = epochs.snapshot(BinTraversal.sortedDistinct(new long[] {
+                BinTraversal.key(0, 0), BinTraversal.key(1, 0), BinTraversal.key(-1, -1)}));
+        epochs.bumpChunk(7, 3); // blocks 112-127, 48-63: bin (0, 0)
+        assertEquals(1, epochs.epochOf(BinTraversal.key(0, 0)));
+        assertFalse(epochs.unchanged(snapshot), "a cached sample through that bin is redone");
+        assertEquals(0, epochs.total(), "not a block change: CoverageSurveyor's sum does not move");
+        epochs.bumpChunk(8, 0); // blocks 128-143: bin (1, 0)
+        epochs.bumpChunk(-1, -1); // blocks -16..-1: bin (-1, -1)
+        assertEquals(1, epochs.epochOf(BinTraversal.key(1, 0)));
+        assertEquals(1, epochs.epochOf(BinTraversal.key(-1, -1)));
+        epochs.bumpChunk(-8, 0); // blocks -128..-113: bin (-1, 0)
+        assertEquals(1, epochs.epochOf(BinTraversal.key(-1, 0)));
+        assertEquals(0, epochs.epochOf(BinTraversal.key(-2, 0)));
+        assertEquals(0, epochs.total());
+        // Every chunk of a bin maps to that bin: 8 x 8 chunks per 128-block bin.
+        for (int cx = 0; cx < 8; cx++) {
+            for (int cz = 8; cz < 16; cz++) {
+                epochs.bumpChunk(cx, cz);
+            }
+        }
+        assertEquals(64, epochs.epochOf(BinTraversal.key(0, 1)));
+    }
+
+    @Test
+    @DisplayName("only a ticket-level change across FULL (33) counts; vanilla's raise through 45 crosses twice")
+    void ticketLevelCrossings() {
+        int full = 33;
+        assertTrue(RegionEpochs.crossesFull(33, 34, full), "leaves FULL: kept in memory, read as air");
+        assertTrue(RegionEpochs.crossesFull(35, 31, full), "a forced chunk comes back to FULL");
+        assertTrue(RegionEpochs.crossesFull(31, 45, full), "first half of a raise");
+        assertTrue(RegionEpochs.crossesFull(45, 32, full), "second half: back to FULL (two needless bumps)");
+        assertFalse(RegionEpochs.crossesFull(31, 32, full), "entity ticking to block ticking: still FULL");
+        assertFalse(RegionEpochs.crossesFull(32, 33, full));
+        assertFalse(RegionEpochs.crossesFull(34, 44, full), "outside FULL both times");
+        assertFalse(RegionEpochs.crossesFull(45, 34, full));
+    }
 }

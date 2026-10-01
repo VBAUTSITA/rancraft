@@ -38,6 +38,7 @@ import net.minecraft.world.level.block.LeverBlock;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.properties.AttachFace;
+import net.minecraft.world.level.chunk.LevelChunk;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.Vec3;
 import net.neoforged.neoforge.gametest.GameTestHolder;
@@ -68,6 +69,7 @@ public final class RadioLinkGameTests {
     private static final String BATCH_BLER = "rancraft_radio_link_bler";
     private static final String BATCH_CHUNKS = "rancraft_radio_link_chunks";
     private static final String BATCH_COST = "rancraft_radio_link_cost";
+    private static final String BATCH_OUTSIDE_FULL = "rancraft_radio_link_outside_full";
     private static final int TIMEOUT_TICKS = 1_600;
 
     /** Nether chunks, far from slice 8's (x 256-264, z 256) and from each other. */
@@ -82,6 +84,12 @@ public final class RadioLinkGameTests {
      */
     private static final int RELOAD_CHUNK_X = 340;
     private static final int RELOAD_OTHER_CHUNK_X = 356;
+    /**
+     * The not-FULL test's chunk (Phase 3B review) and the forced chunk four away that keeps it in
+     * memory, at ticket level 35, once it is released.
+     */
+    private static final int OUTSIDE_FULL_CHUNK_X = 380;
+    private static final int OUTSIDE_FULL_KEEPER_CHUNK_X = 384;
     private static final int COST_CHUNK_X = 304;
     private static final int AIR_Y = 200;
 
@@ -111,6 +119,8 @@ public final class RadioLinkGameTests {
         tests.add(test(BATCH_BLER, prefix + "poor_link_drops_updates_fair_link_is_solid", RadioLinkGameTests::bler));
         tests.add(test(BATCH_CHUNKS, prefix + "unloading_stops_it_reloading_resumes_it", RadioLinkGameTests::reload));
         tests.add(test(BATCH_COST, prefix + "two_hundred_radio_links_in_steady_state", RadioLinkGameTests::cost));
+        tests.add(test(BATCH_OUTSIDE_FULL, prefix + "a_receiver_outside_full_hears_but_does_not_write_its_block",
+                RadioLinkGameTests::outsideFull));
         return tests;
     }
 
@@ -138,6 +148,11 @@ public final class RadioLinkGameTests {
         runCleanups();
     }
 
+    @AfterBatch(batch = BATCH_OUTSIDE_FULL)
+    public static void afterOutsideFull(ServerLevel level) {
+        runCleanups();
+    }
+
     /** Runs the cleanups newest first, so blocks go before the chunks holding them are released. */
     private static void runCleanups() {
         for (int i = CLEANUPS.size() - 1; i >= 0; i--) {
@@ -160,10 +175,16 @@ public final class RadioLinkGameTests {
         return nether;
     }
 
+    /**
+     * Forces a chunk (loaded now) and registers its release; the chunks it makes FULL are loaded now
+     * too, so their region-epoch bumps (Phase 3B review) do not land in a measured window
+     * ({@code FixedReceiverGameTests.loadFullRings}).
+     */
     private static void forceChunk(ServerLevel nether, int chunkX, int chunkZ) {
         nether.setChunkForced(chunkX, chunkZ, true);
         CLEANUPS.add(() -> nether.setChunkForced(chunkX, chunkZ, false));
         nether.getChunk(chunkX, chunkZ);
+        FixedReceiverGameTests.loadFullRings(nether, chunkX, chunkZ);
     }
 
     private static void cell(ServerLevel nether, CellParams cell) {
@@ -571,6 +592,89 @@ public final class RadioLinkGameTests {
                                 && reloaded[1].unverifiedCount() == 0,
                         "on its first turn it looked the transmitter up, found it gone, and went off"))
                 .thenSucceed();
+    }
+
+    // ---- 3b. a receiver whose chunk is not FULL (Phase 3B review) ---------------------------------
+
+    /**
+     * A receiver in a chunk that is outside FULL but still in memory (four chunks from a forced one:
+     * ticket level 35, the ring just outside a player's loaded area in play) stays in the address book,
+     * so messages and departures still reach it. Before the Phase 3B review it wrote its output block
+     * there, which loaded the chunk back to FULL on the spot and ran redstone in it.
+     *
+     * <ol>
+     *   <li>While FULL, a delivered "powered" message turns it on (the block is written).</li>
+     *   <li>Its chunk is released and leaves FULL; the entity is not removed and is not served.</li>
+     *   <li>A departure, a new "powered" message and that transmitter's "off" all change its memory
+     *       (its output follows) but the block is not written and the chunk stays out of FULL.</li>
+     *   <li>Forced again: on its next turn the block catches up (off).</li>
+     * </ol>
+     * The messages are handed to the receiver directly, as {@link RadioLinkNetwork} does.
+     */
+    private static void outsideFull(GameTestHelper helper) {
+        ServerLevel nether = nether(helper);
+        int chunkX = OUTSIDE_FULL_CHUNK_X;
+        forceChunk(nether, OUTSIDE_FULL_KEEPER_CHUNK_X, CHUNK_Z);
+        forceChunk(nether, chunkX, CHUNK_Z);
+        LevelChunk chunk = nether.getChunk(chunkX, CHUNK_Z);
+        BlockPos rxPos = new BlockPos(chunkX * 16 + 4, AIR_Y, CHUNK_Z * 16 + 4);
+        RadioLinkReceiverBlockEntity rx = receiver(helper, nether, rxPos);
+        // Cleanups run newest first: this one loads the chunk before the receiver is removed.
+        CLEANUPS.add(() -> {
+            nether.setChunkForced(chunkX, CHUNK_Z, true);
+            nether.getChunk(chunkX, CHUNK_Z);
+        });
+        long txA = new BlockPos(chunkX * 16 + 1, AIR_Y, CHUNK_Z * 16 + 1).asLong();
+        long txB = new BlockPos(chunkX * 16 + 2, AIR_Y, CHUNK_Z * 16 + 1).asLong();
+        FixedReceiverRegistry registry = FixedReceiverRegistry.of(nether);
+        long[] mark = new long[1];
+
+        helper.startSequence()
+                .thenWaitUntil(() -> helper.assertTrue(rx.samples() >= 1, "served once while FULL"))
+                .thenExecute(() -> {
+                    rx.deliver(txA, true, nether.getGameTime());
+                    helper.assertTrue(rx.output() && outputOn(nether, rxPos), "FULL: a delivered message writes the block");
+                    nether.setChunkForced(chunkX, CHUNK_Z, false);
+                })
+                .thenWaitUntil(() -> helper.assertTrue(nether.getChunkSource().getChunkNow(chunkX, CHUNK_Z) == null,
+                        "the chunk leaves FULL"))
+                .thenExecute(() -> {
+                    helper.assertTrue(!rx.isRemoved() && rx.attached() && registry.deviceAt(rxPos) == rx,
+                            "still in memory, still attached, still registered");
+                    mark[0] = rx.samples();
+                })
+                .thenIdle(2 * interval() + 2)
+                .thenExecute(() -> {
+                    helper.assertTrue(rx.samples() == mark[0], "not served while its chunk is not FULL");
+                    rx.forget(txA);
+                    helper.assertTrue(!rx.output(), "the departure is heard: memory says off");
+                    assertNotWritten(helper, nether, chunk, rxPos, chunkX, true);
+                    rx.deliver(txB, true, nether.getGameTime());
+                    helper.assertTrue(rx.output() && rx.knownOnCount() == 1, "a new message is heard: on");
+                    rx.deliver(txB, false, nether.getGameTime());
+                    helper.assertTrue(!rx.output() && rx.knownOnCount() == 0, "and its off: off");
+                    assertNotWritten(helper, nether, chunk, rxPos, chunkX, true);
+                    mark[0] = rx.samples();
+                    nether.setChunkForced(chunkX, CHUNK_Z, true);
+                })
+                .thenWaitUntil(() -> helper.assertTrue(rx.samples() > mark[0], "served again once FULL"))
+                .thenExecute(() -> helper.assertTrue(!outputOn(nether, rxPos) && signalFrom(nether, rxPos) == 0,
+                        "its next turn writes the output it worked out meanwhile: off"))
+                .thenSucceed();
+    }
+
+    /**
+     * The receiver's block still says {@code POWERED = expected}, read from the chunk object without
+     * loading anything, and the chunk is still outside FULL.
+     */
+    private static void assertNotWritten(GameTestHelper helper, ServerLevel nether, LevelChunk chunk, BlockPos pos,
+                                         int chunkX, boolean expected) {
+        BlockState state = chunk.getBlockState(pos);
+        helper.assertTrue(state.getBlock() instanceof RadioLinkReceiverBlock
+                        && state.getValue(RadioLinkReceiverBlock.POWERED) == expected,
+                "the block was not written while the chunk is not FULL: " + state);
+        helper.assertTrue(nether.getChunkSource().getChunkNow(chunkX, CHUNK_Z) == null,
+                "and the chunk was not loaded back to FULL");
     }
 
     // ---- 4. cost ----------------------------------------------------------------------------------

@@ -41,7 +41,9 @@ import net.minecraft.world.level.chunk.LevelChunk;
  *
  * <p>The output is the block's {@code POWERED} state ({@link RadioLinkReceiverBlock}), set by the server
  * with a full neighbour update, so the redstone next to it reacts at once, and synced to clients by
- * vanilla block-state sync.
+ * vanilla block-state sync. Only while its chunk is loaded as FULL: a receiver in a chunk just outside
+ * FULL (still in memory, still in the address book) hears and forgets as usual, and its output catches
+ * up on its next turn (Phase 3B review fix, {@link #memoryChanged}).
  */
 public class RadioLinkReceiverBlockEntity extends RadioLinkBlockEntity implements RadioLinkNetwork.Receiver {
 
@@ -49,6 +51,8 @@ public class RadioLinkReceiverBlockEntity extends RadioLinkBlockEntity implement
 
     private long delivered;
     private long lastDeliveredTick = Long.MIN_VALUE;
+    /** The memory changed while the chunk was not FULL: mark the chunk unsaved on the next turn. */
+    private boolean unsavedChange;
 
     public RadioLinkReceiverBlockEntity(BlockPos pos, BlockState state) {
         super(ModBlockEntities.RADIO_LINK_RECEIVER.get(), pos, state);
@@ -63,6 +67,10 @@ public class RadioLinkReceiverBlockEntity extends RadioLinkBlockEntity implement
     protected void afterSample(ServerLevel level, BlockPos pos, DeviceContext ctx) {
         RadioLinkNetwork.of(level).attach(pos.asLong(), this);
         if (memory.unverifiedCount() > 0 && memory.verify(txKey -> presence(level, txKey))) {
+            unsavedChange = true;
+        }
+        if (unsavedChange) {
+            unsavedChange = false;
             setChanged();
         }
         syncOutput();
@@ -85,17 +93,43 @@ public class RadioLinkReceiverBlockEntity extends RadioLinkBlockEntity implement
         delivered++;
         lastDeliveredTick = gameTime;
         if (memory.hear(txKey, powered)) {
-            setChanged();
-            syncOutput();
+            memoryChanged();
         }
     }
 
     @Override
     public void forget(long txKey) {
         if (memory.forget(txKey)) {
+            memoryChanged();
+        }
+    }
+
+    /**
+     * The memory changed: saves it and moves the output, but only where the chunk is loaded as FULL
+     * (Phase 3B review fix). A receiver stays in the address book while its chunk sits outside FULL
+     * but still in memory (ticket level 34 to 44: the ring just beyond every player's loaded area, or
+     * near a forced chunk), so messages and departures still reach it there. Writing its block state
+     * then would load the chunk back to FULL on the spot ({@code Level.setBlock} ->
+     * {@code getChunk(FULL, true)}, which waits on the server thread) and run redstone in a chunk the
+     * ticker treats as unloaded. So there the memory is updated (a lost update stays a stale state, and
+     * a departure is still heard), and the output and the save catch up on the receiver's next turn,
+     * which comes only once the chunk is FULL again ({@link #afterSample}).
+     */
+    private void memoryChanged() {
+        if (chunkFull()) {
             setChanged();
             syncOutput();
+        } else {
+            // BlockEntity.setChanged would skip marking the chunk (Level.blockEntityChanged checks
+            // hasChunkAt), so remember to do it on the next turn.
+            unsavedChange = true;
         }
+    }
+
+    /** Whether this block's chunk is loaded as FULL now. Never loads anything. */
+    private boolean chunkFull() {
+        return level instanceof ServerLevel serverLevel
+                && serverLevel.getChunkSource().getChunkNow(worldPosition.getX() >> 4, worldPosition.getZ() >> 4) != null;
     }
 
     // ---- output -----------------------------------------------------------------------------------
@@ -120,9 +154,12 @@ public class RadioLinkReceiverBlockEntity extends RadioLinkBlockEntity implement
         return lastDeliveredTick;
     }
 
-    /** Sets {@code POWERED} to {@link #output()} if it differs, with a full neighbour update. */
+    /**
+     * Sets {@code POWERED} to {@link #output()} if it differs, with a full neighbour update. Not while
+     * the chunk is outside FULL (see {@link #memoryChanged}): the next turn does it.
+     */
     private void syncOutput() {
-        if (!(level instanceof ServerLevel serverLevel)) {
+        if (!(level instanceof ServerLevel serverLevel) || !chunkFull()) {
             return;
         }
         BlockState state = getBlockState();

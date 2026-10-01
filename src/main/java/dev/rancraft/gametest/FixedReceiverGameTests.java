@@ -70,6 +70,7 @@ public final class FixedReceiverGameTests {
     private static final String BATCH_CHUNKS = "rancraft_fixed_receivers_chunks";
     private static final String BATCH_HOOKS = "rancraft_fixed_receivers_hooks";
     private static final String BATCH_COST = "rancraft_fixed_receivers_cost";
+    private static final String BATCH_ACCESS = "rancraft_fixed_receivers_chunk_access";
     private static final int TIMEOUT_TICKS = 900;
 
     /** Nether chunks, far from anything, one per test that needs one. */
@@ -77,6 +78,15 @@ public final class FixedReceiverGameTests {
     private static final int CHUNKS_CHUNK_X = 260;
     private static final int COST_CHUNK_X = 264;
     private static final int CHUNK_Z = 256;
+    /**
+     * The chunk-access test's row (Phase 3B review): the receiver's chunk, the wall's chunk and the
+     * cell's chunk, four apart, so with only the first and last forced the middle one sits at ticket
+     * level 35: kept in memory, not FULL. A row of its own, far from every other test's chunks.
+     */
+    private static final int ACCESS_CHUNK_Z = 320;
+    private static final int ACCESS_RX_CHUNK_X = 256;
+    private static final int ACCESS_WALL_CHUNK_X = 260;
+    private static final int ACCESS_CELL_CHUNK_X = 264;
     /** Above the Nether's bedrock roof (y 127): open air. */
     private static final int AIR_Y = 200;
     private static final int RECEIVERS_FOR_COST = 200;
@@ -108,6 +118,8 @@ public final class FixedReceiverGameTests {
                 FixedReceiverGameTests::chunkPaths));
         tests.add(test(BATCH_HOOKS, prefix + "block_entity_on_load_and_set_removed", FixedReceiverGameTests::hooks));
         tests.add(test(BATCH_COST, prefix + "two_hundred_receivers_in_steady_state", FixedReceiverGameTests::cost));
+        tests.add(test(BATCH_ACCESS, prefix + "a_chunk_on_its_ray_reaching_or_leaving_full_reevaluates_it",
+                FixedReceiverGameTests::chunkAccess));
         return tests;
     }
 
@@ -132,6 +144,11 @@ public final class FixedReceiverGameTests {
 
     @AfterBatch(batch = BATCH_COST)
     public static void afterCost(ServerLevel level) {
+        runCleanups();
+    }
+
+    @AfterBatch(batch = BATCH_ACCESS)
+    public static void afterAccess(ServerLevel level) {
         runCleanups();
     }
 
@@ -212,11 +229,27 @@ public final class FixedReceiverGameTests {
         return nether;
     }
 
-    /** Forces a Nether chunk (loaded now) and registers its release. */
+    /**
+     * Forces a Nether chunk (loaded now) and registers its release. The chunks the forced one makes
+     * FULL (two rings round it) are loaded now as well: since the Phase 3B review a chunk reaching
+     * FULL bumps its region epoch, and left to load in the background they would do so in the middle
+     * of a test that counts replays.
+     */
     private static LevelChunk forceNetherChunk(ServerLevel nether, int chunkX, int chunkZ) {
         nether.setChunkForced(chunkX, chunkZ, true);
         CLEANUPS.add(() -> nether.setChunkForced(chunkX, chunkZ, false));
-        return nether.getChunk(chunkX, chunkZ);
+        LevelChunk chunk = nether.getChunk(chunkX, chunkZ);
+        loadFullRings(nether, chunkX, chunkZ);
+        return chunk;
+    }
+
+    /** Loads, now, every chunk within two of a forced chunk: the ones its ticket makes FULL. */
+    static void loadFullRings(ServerLevel level, int chunkX, int chunkZ) {
+        for (int dx = -2; dx <= 2; dx++) {
+            for (int dz = -2; dz <= 2; dz++) {
+                level.getChunk(chunkX + dx, chunkZ + dz);
+            }
+        }
     }
 
     private static int interval() {
@@ -427,7 +460,135 @@ public final class FixedReceiverGameTests {
                 .thenSucceed();
     }
 
-    // ---- 4. cost ----------------------------------------------------------------------------------
+    // ---- 4. a chunk on the ray reaching or leaving FULL (Phase 3B review) -------------------------
+
+    /**
+     * The probe reads a chunk that is not FULL as air, so a chunk on a receiver's ray reaching or
+     * leaving FULL changes what a fresh evaluation would give with no block event. Before the Phase 3B
+     * review nothing bumped an epoch then, and a fixed receiver replayed its old sample indefinitely.
+     *
+     * <p>A receiver in a forced chunk, a band_900 omni about 140 blocks east in another, and a stone
+     * wall (one block thick) across the link, in the chunk halfway, built while that chunk was forced.
+     * <ol>
+     *   <li>The middle chunk is released: it stays in memory (ticket level 35, four chunks from each
+     *       forced one) but is no longer FULL. Its neighbours were let finish loading first, so nothing
+     *       else loads later. The receiver is evaluated through air (obstruction 0) and replays.</li>
+     *   <li>The middle chunk is forced again. It is the same {@code LevelChunk}, kept in memory, so no
+     *       chunk load event fires; the ticket-level change is the only signal. The receiver is
+     *       evaluated afresh and reads the wall.</li>
+     *   <li>Released again (it leaves FULL with no unload event): evaluated afresh, through air.</li>
+     * </ol>
+     */
+    private static void chunkAccess(GameTestHelper helper) {
+        ServerLevel nether = nether(helper);
+        int z = ACCESS_CHUNK_Z;
+        int wallChunk = ACCESS_WALL_CHUNK_X;
+        forceNetherChunk(nether, ACCESS_RX_CHUNK_X, z);
+        forceNetherChunk(nether, ACCESS_CELL_CHUNK_X, z);
+        LevelChunk middle = forceNetherChunk(nether, wallChunk, z);
+        int baseZ = z * 16;
+        BlockPos rx = new BlockPos(ACCESS_RX_CHUNK_X * 16 + 1, AIR_Y, baseZ + 1);
+        int wallX = wallChunk * 16 + 8;
+        long cellId = -8_100_301L;
+        CellParams cell = CellParams.omniDefaults(cellId, ACCESS_CELL_CHUNK_X * 16 + 14, AIR_Y, baseZ + 1);
+        List<BlockPos> wall = new ArrayList<>();
+        for (int dy = -1; dy <= 1; dy++) {
+            for (int dz = 0; dz <= 2; dz++) {
+                wall.add(new BlockPos(wallX, AIR_Y + dy, baseZ + dz));
+            }
+        }
+        for (BlockPos stone : wall) {
+            nether.setBlock(stone, Blocks.STONE.defaultBlockState(), 3);
+        }
+
+        SiteRegistry sites = SiteRegistry.of(nether);
+        FixedReceiverRegistry registry = FixedReceiverRegistry.of(nether);
+        RecordingDevice device = new RecordingDevice(new DeviceRequirement(ServiceLevel.POOR, 1));
+        // Runs after the three releases above (this class runs its cleanups oldest first).
+        CLEANUPS.add(() -> {
+            registry.unregister(rx, device);
+            sites.unregister(cellId);
+            nether.setChunkForced(wallChunk, z, true);
+            nether.getChunk(wallChunk, z);
+            for (BlockPos stone : wall) {
+                nether.setBlock(stone, Blocks.AIR.defaultBlockState(), 3);
+            }
+            nether.setChunkForced(wallChunk, z, false);
+        });
+        double stoneDb = RfDataLoader.materials().attenuationDb(Blocks.STONE.defaultBlockState())
+                * RfDataLoader.bands().getOrFallback(cell.bandId()).penetrationFactor();
+        int interval = interval();
+        long[] mark = new long[2];
+
+        helper.startSequence()
+                // Let every chunk the three forced ones made FULL finish loading, so no load event of
+                // theirs lands later in the test.
+                .thenWaitUntil(() -> {
+                    for (int x = ACCESS_RX_CHUNK_X - 2; x <= ACCESS_CELL_CHUNK_X + 2; x++) {
+                        helper.assertTrue(nether.getChunkSource().getChunkNow(x, z) != null, "chunk " + x + " not FULL yet");
+                    }
+                })
+                .thenExecute(() -> nether.setChunkForced(wallChunk, z, false))
+                .thenWaitUntil(() -> helper.assertTrue(nether.getChunkSource().getChunkNow(wallChunk, z) == null,
+                        "the middle chunk leaves FULL"))
+                .thenExecute(() -> {
+                    sites.register(cell);
+                    helper.assertTrue(registry.register(rx, device), "registered");
+                })
+                .thenWaitUntil(() -> helper.assertTrue(device.count() >= 2
+                                && device.last().sample() == device.dispatches.get(device.count() - 2).sample(),
+                        "evaluated, then replayed"))
+                .thenExecute(() -> {
+                    helper.assertTrue(device.dispatches.get(0).sample().servingCellId() == cellId,
+                            "served by the cell to the east");
+                    helper.assertTrue(obstruction(device.last()) == 0.0,
+                            "the wall's chunk is not FULL: read as air, obstruction " + obstruction(device.last()));
+                    helper.assertTrue(nether.getChunkSource().getChunkNow(wallChunk, z) == null, "still not FULL");
+                    // 2. Back to FULL, from memory: no load event.
+                    mark[0] = device.count();
+                    mark[1] = nether.getGameTime();
+                    nether.setChunkForced(wallChunk, z, true);
+                })
+                .thenWaitUntil(() -> helper.assertTrue(freshSince(device, (int) mark[0]) != null,
+                        "a fresh evaluation after the wall's chunk came back to FULL"))
+                .thenExecute(() -> {
+                    Dispatch fresh = freshSince(device, (int) mark[0]);
+                    helper.assertTrue(nether.getChunkSource().getChunkNow(wallChunk, z) == middle,
+                            "the same chunk object came back: it was kept in memory, so no chunk load event fired");
+                    helper.assertTrue(fresh.tick() - mark[1] <= 2L * interval + 2,
+                            "within about an interval: " + (fresh.tick() - mark[1]) + " ticks");
+                    helper.assertTrue(Math.abs(obstruction(fresh) - stoneDb) < 1e-9,
+                            "it reads the wall: " + obstruction(fresh) + " dB, stone " + stoneDb + " dB");
+                    // 3. Out of FULL again: no unload event (still in memory).
+                    mark[0] = device.count();
+                    mark[1] = nether.getGameTime();
+                    nether.setChunkForced(wallChunk, z, false);
+                })
+                .thenWaitUntil(() -> helper.assertTrue(freshSince(device, (int) mark[0]) != null,
+                        "a fresh evaluation after the wall's chunk left FULL"))
+                .thenExecute(() -> {
+                    Dispatch fresh = freshSince(device, (int) mark[0]);
+                    helper.assertTrue(nether.getChunkSource().getChunkNow(wallChunk, z) == null, "not FULL");
+                    helper.assertTrue(fresh.tick() - mark[1] <= 2L * interval + 2,
+                            "within about an interval: " + (fresh.tick() - mark[1]) + " ticks");
+                    helper.assertTrue(obstruction(fresh) == 0.0, "through air again: " + obstruction(fresh) + " dB");
+                    registry.unregister(rx, device);
+                })
+                .thenSucceed();
+    }
+
+    /** The first fresh evaluation dispatched at or after index {@code from}, or {@code null}. */
+    private static Dispatch freshSince(RecordingDevice device, int from) {
+        for (int i = from; i < device.count(); i++) {
+            Dispatch dispatch = device.dispatches.get(i);
+            if (dispatch.tick() == dispatch.sample().timestampTick()) {
+                return dispatch;
+            }
+        }
+        return null;
+    }
+
+    // ---- 5. cost ----------------------------------------------------------------------------------
 
     /**
      * 200 receivers in a forced Nether chunk round one band_900 omni: the ticker's own cost, measured

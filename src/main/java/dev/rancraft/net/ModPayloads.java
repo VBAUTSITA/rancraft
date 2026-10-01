@@ -37,9 +37,13 @@ public final class ModPayloads {
      *       column out from the blocks as the server does. No payload changed shape, but a slice 5
      *       client on a slice 6 server would draw a lobe on every stacked mast (and none greyed), and
      *       the reverse pairing would draw one lobe where nine cells transmit.
+     *   <li><b>7</b> -- Phase 3B review: the antennas' update tag appends {@code RadiatingY}, the
+     *       radiating height the server worked out with its own {@code maxMastHeight} (a COMMON config,
+     *       not synced), and the lens draws a column's lobe there. A slice 6 client would draw it at its
+     *       own cap's height.
      * </ul>
      */
-    private static final String PROTOCOL_VERSION = "6";
+    private static final String PROTOCOL_VERSION = "7";
 
     @SubscribeEvent
     public static void register(RegisterPayloadHandlersEvent event) {

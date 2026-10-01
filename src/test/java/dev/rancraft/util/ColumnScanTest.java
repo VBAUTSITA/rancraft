@@ -138,6 +138,35 @@ class ColumnScanTest {
     }
 
     @Test
+    @DisplayName("the lens uses the server's radiating height under a different cap, and its own scan when unknown or stale")
+    void reportedRadiatingHeight() {
+        // 70 masts from y 0. The client's cap is 32; the server registered the cell with 64.
+        ColumnScan.Bounds clientView = ColumnScan.bounds(0, run(0, 69), 32);
+        assertEquals(32, clientView.radiatingY(), "the client's own cap would put the lobe above the 32nd mast");
+        assertEquals(64, ColumnScan.reportedRadiatingY(clientView, 64), "the server's height wins");
+        // The reverse: client cap 64, server cap 32.
+        ColumnScan.Bounds wideClient = ColumnScan.bounds(0, run(0, 69), 64);
+        assertEquals(32, ColumnScan.reportedRadiatingY(wideClient, 32));
+        // Any cap gives a height in (base, highest + 1]: both ends are accepted.
+        assertEquals(1, ColumnScan.reportedRadiatingY(clientView, 1), "cap 1: just above the base");
+        assertEquals(70, ColumnScan.reportedRadiatingY(clientView, 70), "no cap reached: above the highest mast");
+
+        // Not told yet: the client's own scan.
+        assertEquals(32, ColumnScan.reportedRadiatingY(clientView, ColumnScan.UNKNOWN_Y));
+        // A report that cannot belong to this column (the column changed and its new report has not
+        // arrived): the local scan.
+        assertEquals(32, ColumnScan.reportedRadiatingY(clientView, 0), "at the base: not this column");
+        assertEquals(32, ColumnScan.reportedRadiatingY(clientView, -3), "below the base");
+        assertEquals(32, ColumnScan.reportedRadiatingY(clientView, 71), "above the highest mast + 1");
+        // A column that was cut down to three masts while the old report (73) is still in hand.
+        ColumnScan.Bounds cut = ColumnScan.bounds(64, run(64, 66), CAP);
+        assertEquals(67, ColumnScan.reportedRadiatingY(cut, 73));
+        // Extreme heights do not overflow.
+        ColumnScan.Bounds top = new ColumnScan.Bounds(0, 10, Integer.MAX_VALUE);
+        assertEquals(Integer.MAX_VALUE, ColumnScan.reportedRadiatingY(top, Integer.MAX_VALUE));
+    }
+
+    @Test
     @DisplayName("negative heights work (1.18+ worlds reach y = -64)")
     void negativeHeights() {
         ColumnScan.Bounds column = ColumnScan.bounds(-60, run(-64, -56), CAP);

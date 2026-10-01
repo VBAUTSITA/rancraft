@@ -5,6 +5,7 @@ import dev.rancraft.RanCraftConfig;
 import dev.rancraft.rf.CellParams;
 import dev.rancraft.rf.ParabolicPattern;
 import dev.rancraft.rf.PciPlanner;
+import dev.rancraft.util.ColumnScan;
 import dev.rancraft.world.SiteRegistry;
 import java.util.concurrent.atomic.AtomicInteger;
 import net.minecraft.core.BlockPos;
@@ -46,6 +47,12 @@ public abstract class AntennaBlockEntity extends BlockEntity {
 
     /** The update tag's on-air flag (slice 6). Never saved; see {@link #getUpdateTag}. */
     public static final String ON_AIR_TAG = "OnAir";
+
+    /**
+     * The update tag's radiating height: the y of {@link #radiatingPoint()} as the server works it out
+     * (Phase 3B review fix). Never saved; see {@link #getUpdateTag}.
+     */
+    public static final String RADIATING_Y_TAG = "RadiatingY";
 
     /** Debounce so migrating a large world logs a running total, not one line per tower. */
     private static final long MIGRATION_LOG_INTERVAL_MILLIS = 10_000L;
@@ -90,6 +97,23 @@ public abstract class AntennaBlockEntity extends BlockEntity {
      */
     private boolean onAir = true;
 
+    /**
+     * Client: the server's radiating height from the update tag ({@code RadiatingY}), or
+     * {@link ColumnScan#UNKNOWN_Y} before one arrives. Only a mast column's lens drawing reads it
+     * ({@link SignalMastBlockEntity#radiatingPoint()}); the server never does (it would also hold a
+     * value from a crafted {@code block_entity_data} here, which is why it is not used there). Phase 3B
+     * review fix: {@code maxMastHeight} is COMMON and not synced, so the client cannot work the
+     * height out of a tall column itself.
+     */
+    private int toldRadiatingY = ColumnScan.UNKNOWN_Y;
+
+    /**
+     * Server: the radiating height last written into an update tag, so {@link #refreshRegistration()}
+     * can tell clients when it moves (a mast added on top of a column). {@link ColumnScan#UNKNOWN_Y}
+     * until a tag is written: then no client holds an old value, and the next tag is written fresh.
+     */
+    private int sentRadiatingY = ColumnScan.UNKNOWN_Y;
+
     protected AntennaBlockEntity(BlockEntityType<?> type, BlockPos pos, BlockState state) {
         super(type, pos, state);
     }
@@ -112,7 +136,10 @@ public abstract class AntennaBlockEntity extends BlockEntity {
     }
 
     public CellParams toCellParams() {
-        BlockPos point = radiatingPoint();
+        return cellParamsAt(radiatingPoint());
+    }
+
+    private CellParams cellParamsAt(BlockPos point) {
         return new CellParams(
                 cellId(), point.getX(), point.getY(), point.getZ(),
                 bandId, txPowerDbm, gainDbi,
@@ -156,6 +183,14 @@ public abstract class AntennaBlockEntity extends BlockEntity {
     /** See {@link #onAir}: on the server whether the cell is registered, on the client what the server said. */
     public boolean onAir() {
         return onAir;
+    }
+
+    /**
+     * Client: the radiating height the server last reported in the update tag, or
+     * {@link ColumnScan#UNKNOWN_Y}. See {@link #toldRadiatingY}.
+     */
+    public int toldRadiatingY() {
+        return toldRadiatingY;
     }
 
     /**
@@ -220,18 +255,21 @@ public abstract class AntennaBlockEntity extends BlockEntity {
 
     /**
      * Re-evaluates whether this antenna should currently be in the registry, and tells clients when
-     * that changes its {@link #onAir()} flag.
+     * that changes its {@link #onAir()} flag or moves its radiating point up or down (a mast column
+     * that grew or shrank; Phase 3B review fix, so the lens draws where the server radiates).
      */
     public void refreshRegistration() {
         if (level instanceof ServerLevel serverLevel) {
             SiteRegistry registry = SiteRegistry.of(serverLevel);
             boolean transmitting = isTransmitting();
+            BlockPos point = radiatingPoint();
             if (transmitting) {
-                registry.register(toCellParams());
+                registry.register(cellParamsAt(point));
             } else {
                 registry.unregister(cellId());
             }
-            if (transmitting != onAir) {
+            boolean pointMoved = sentRadiatingY != ColumnScan.UNKNOWN_Y && point.getY() != sentRadiatingY;
+            if (transmitting != onAir || pointMoved) {
                 onAir = transmitting;
                 syncToClients();
             }
@@ -308,12 +346,20 @@ public abstract class AntennaBlockEntity extends BlockEntity {
      * should be -- see VISION.md for where that line sits.
      *
      * <p>Phase 3 slice 6 appends {@code OnAir} (see {@link #onAir}), in the update tag only: it is
-     * written here, not in {@link #saveAdditional}, so it never reaches the save.
+     * written here, not in {@link #saveAdditional}, so it never reaches the save. The Phase 3B review
+     * appends {@code RadiatingY} the same way (see {@link #toldRadiatingY}): where the cell radiates
+     * from is the antenna's declared, public configuration, worked out on the server with the
+     * server's {@code maxMastHeight}.
      */
     @Override
     public CompoundTag getUpdateTag(HolderLookup.Provider registries) {
         CompoundTag tag = saveWithoutMetadata(registries);
         tag.putBoolean(ON_AIR_TAG, onAir);
+        if (level != null && !level.isClientSide()) {
+            int radiatingY = radiatingPoint().getY();
+            tag.putInt(RADIATING_Y_TAG, radiatingY);
+            sentRadiatingY = radiatingY;
+        }
         return tag;
     }
 
@@ -385,6 +431,10 @@ public abstract class AntennaBlockEntity extends BlockEntity {
         // next refreshRegistration(), so a crafted block_entity_data value does not stick there.
         if (tag.contains(ON_AIR_TAG)) {
             onAir = tag.getBoolean(ON_AIR_TAG);
+        }
+        // Also only in an update tag; the server never reads it back (see toldRadiatingY).
+        if (tag.contains(RADIATING_Y_TAG)) {
+            toldRadiatingY = tag.getInt(RADIATING_Y_TAG);
         }
 
         // Real persisted data just arrived, so this is not a fresh placement -- the constructor's
