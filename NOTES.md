@@ -4081,3 +4081,224 @@ state (recorded 18.6-42).
 | Mutation check | with the `applyOn` tier check and the v1-only PCI condition both removed: "2 required tests failed", one per new test, each with its own message |
 | Versions | `PROTOCOL_VERSION` 7 → 8; `AntennaBlockEntity.DATA_VERSION` 2 → 3; `SignalSamplePayload.VERSION` unchanged |
 | In game | not run by the agent (no `runClient`); the checks are in `PHASE_3.md`, "Slice 10 (radio tiers) checks" |
+
+## Slice 11 — microwave link and backhaul graph (§3C.2, pure `rf`)
+
+The pure half of backhaul: the link budget, the topology and its two-pass solve, the data file and the
+config. Nothing in the game reads them yet. The blocks (Core Site, Backhaul Dish, Link Tool), the
+per-cell state, `requireBackhaul`'s effect, the lens lines and `/rancraft backhaul status` are slice 12.
+Code in `0d45aca` (part 1 of 2); these notes and the tracker in "Phase 3 slice 11: microwave link and
+backhaul graph".
+
+An earlier attempt at this slice was interrupted after writing the code and tests (uncommitted, green).
+This step reviewed that work against §3C.2, added three helpers slice 12 needs (marked below) with
+tests, measured, ran the game tests, and committed.
+
+### What was built
+
+- **`rf/MicrowaveLink`** (a record; pure). Its nine components are the nine figures of
+  `microwave.json`; `DEFAULT` equals the §3C.2 JSON. The compact constructor refuses nonsense (a
+  frequency that is not positive and finite, a non-finite power or gain, a negative loss, rate or
+  factor, a DEGRADED threshold above the UP one), so a broken datapack file is refused whole.
+  - `fsplDb(d_m)` = `20·log10(f_MHz) − 27.56 + 20·log10(d_m)`, built on `RfMath.fsplAt1mDb`, the
+    distance floored at 1 m as `RfMath.pathLossDb` does (adjacent dishes stay finite).
+  - `wavelengthMeters()` = `c / f`; `fresnelRadiusMeters(d, t)` = `sqrt(λ·d·t(1−t))`, `t` clamped.
+  - `rainLossDb(weather, d)`: RAIN `rain_db_per_km × d_km`; THUNDER `max(rain, thunder) × d_km`;
+    CLEAR and SNOW nothing.
+  - `rslDbm(fspl, obstruction, fresnel, rain)` = `Tx + 2·G − FSPL − Obstruction − Fresnel − Rain`;
+    `stateOf(rsl)`: UP at or above −50, DEGRADED at or above −70, otherwise DOWN (NaN is DOWN).
+  - `evaluate(probe, A, B, metersPerBlock, weather, maxSteps)` returns `Budget(distanceMeters, fsplDb,
+    obstructionDb, fresnelClear, fresnelLossDb, rainLossDb, rslDbm, marginDb, state, outOfRange)`,
+    `marginDb` being `rsl − up_threshold`. One `RayMarcher` march on the line of sight (factor
+    `penetration_factor`, no early exit, both dish voxels skipped as the cellular march skips antenna
+    and receiver), then the four Fresnel offset paths (factor 1, stopped at the first attenuating
+    voxel, the bend voxel probed once since both segments skip it as an endpoint), then rain. A line
+    march that runs out of `maxSteps` is DOWN with `outOfRange`. An `RfConfig` overload supplies
+    `metersPerBlock` and drops the weather when `enableRainFade` is off.
+  - `Weather` {CLEAR, RAIN, THUNDER, SNOW} with `Weather.at(levelRaining, levelThundering,
+    biomePrecipitation)`; `LinkState` {UP, DEGRADED, DOWN}.
+  - **Added in this step, for slice 12:** `withWeather(budget, weather)` (plus an `RfConfig` overload)
+    re-derives rain, RSL, margin and state from a measured budget without marching. It equals a fresh
+    evaluation (pinned), so the weather recompute of §3C.2 reads no block. `fresnelOffsetMidpoints(A,
+    B, metersPerBlock)` gives the four bend points (up, down, left, right); `evaluate` now uses it, so
+    the two cannot drift apart. `dependencyBins(A, B, metersPerBlock, binSize)` gives the `BinTraversal`
+    bins of the line and of the eight offset segments: the hop's dependency set for "a region epoch
+    moves on any bin a link crosses" (pinned: every voxel `evaluate` reads lies in it, on 300 random
+    hops, a third of them hugging a bin edge, plus a hop whose offset path enters a bin its line never
+    does).
+- **`rf/BackhaulGraph`** (pure): `solve(topology, cores, cells, dishes, links)` returns
+  `Result(cells, dishes)`, a `BackhaulState` {FULL, LIMITED, NONE} per cell and per dish, in input
+  order. `Node(id, x, z)`, `Link(dishA, dishB, state)`, `Topology(fiberRadiusBlocks,
+  siteRadiusBlocks)` (`DEFAULT` 24 and 8; `onFiber` and `onSite`, both horizontal, bounds inclusive).
+  Vertices are cells and dishes. The seeds are every vertex within the fiber radius of any core. Edges:
+  dish to cell within the site radius and UP hops (both passes), DEGRADED hops (second pass only), DOWN
+  hops none. Two BFS: reached in pass 1 is FULL, newly reached in pass 2 is LIMITED, the rest NONE.
+  Cells and dishes are bucketed in squares one radius wide for the neighbour search; a brute-force
+  all-pairs reference agrees on 300 random layouts (radius bounds, zero radii, negative coordinates).
+  One graph per dimension: the caller passes one dimension's nodes, which is what "a core in the same
+  dimension" means here.
+- **`data/rancraft/rf/backhaul/microwave.json`**: the §3C.2 JSON, figure for figure, plus a
+  `_comment`. **`RfDataLoader`** (its listener already covers the `rf` directory) reads
+  `backhaul/microwave` with `parseMicrowave`: every member optional with the default's figure, unknown
+  members ignored, an invalid file logged with the defaults kept, a reload without the file back to the
+  defaults; `RfDataLoader.microwave()` is the accessor. Only `bands/` paths become cellular bands, so
+  18 GHz never appears as one (pinned; and at runtime the game-test server logs "4 band(s)" and
+  "microwave backhaul: 18000.0 MHz, 20.0 dBm, 32.0 dBi dishes, UP >= -50.0 dBm, DEGRADED >= -70.0 dBm").
+- **Config (COMMON, §5):** `requireBackhaul` false, `fiberRadiusBlocks` 24 (0-4096),
+  `siteRadiusBlocks` 8 (0-256), `backhaulRecomputeTicks` 100 (1-12,000), `enableRainFade` true. The
+  three that `rf` code reads (`fiberRadiusBlocks`, `siteRadiusBlocks`, `enableRainFade`) are appended
+  to `RfConfig` (`backhaulTopology()` builds the `Topology`); `requireBackhaul` (gameplay) and
+  `backhaulRecomputeTicks` (server cost) stay out of it, as §5 says, with accessors
+  `RanCraftConfig.requireBackhaul()` and `backhaulRecomputeTicks()`, plus `fiberRadiusBlocks()` for
+  the Storage Terminal's "near a core" rule (slice 13). The radii are doubles, like the existing
+  `pciPlanningRadius` and `maxEvaluationRangeBlocks`.
+- **No wire or save change.** `RfConfig` never leaves the server. `PROTOCOL_VERSION` stays 8,
+  `SignalSamplePayload.VERSION` and `DATA_VERSION` (3) unchanged. Nothing reads `requireBackhaul` until
+  slice 12, so every world plays exactly as before.
+
+### Where each part of §3C.2 lives (this slice's half)
+
+| §3C.2 | Where | Pinned by |
+|---|---|---|
+| Parameters from `rf/backhaul/microwave.json`, never a cellular band | `RfDataLoader.parseMicrowave`, `MICROWAVE_PATH`; `MicrowaveLink.DEFAULT` | `RfDataLoaderMicrowaveTest` (3); the game-test server's log |
+| `FSPL = 20·log10(f_MHz) − 27.56 + 20·log10(d_m)` | `MicrowaveLink.fsplDb` | `fspl`: 117.55 dB within 0.01 at 18 GHz / 1000 m |
+| `RSL = Tx + 2·G − FSPL − Obstruction − Fresnel − Rain`; UP / DEGRADED / DOWN | `rslDbm`, `stateOf`, `evaluate` | `clearHop` (−33.55 dBm, 16.45 dB margin), `oneStoneIsDegraded`, `twoStonesAreDown`, `sixLeavesAreDegraded`, `thresholds` |
+| `r(t) = sqrt(λ·d·t(1−t))`, `λ = c/f` | `fresnelRadiusMeters`, `wavelengthMeters` | `fresnelRadius`: 2.04 m within 0.01 |
+| 60 % check: four offset paths, two segments through the offset midpoint, any hit adds `fresnel_penalty_db` | `evaluate`, `fresnelOffsetMidpoints`, `pathHits` | `fresnelPenaltyEachDirection`, `blockOutsideTheZone`, `blockNearDishFillsTheZone`, `groundClearance`, `slopingHop`, `offsetMidpoints` |
+| Rain `rain_db_per_km × d_km`, thunder the higher figure, snow nothing | `rainLossDb`, `Weather.at` | `rainFade` (exact, delta 0), `marginalHopInAThunderstorm`, `weatherAt`, `configOverload` |
+| Fiber (implicit, horizontal, same dimension), site, microwave | `BackhaulGraph.Topology`, `solve` | `fullViaFiber`, `siteRadius`, `dishOnFiberServesItsCell`, `relayNeedsACell` |
+| Two BFS passes: FULL, LIMITED, NONE | `BackhaulGraph.solve`, `reach` | `fullViaUpChain`, `limitedViaOneDegradedHop`, `noneWhenIsolated`, `upPathBeatsDegradedPath`, `breakingTheMiddleDish`, `longChain`, `matchesBruteForce` |
+| Config: `requireBackhaul`, `fiberRadiusBlocks`, `siteRadiusBlocks`, `backhaulRecomputeTicks`, `enableRainFade` | `RanCraftConfig`; `RfConfig` (three appended) | `topologyFromConfig`, `configOverload`; the game-test server's config file has all five at their defaults |
+| Recompute on a region epoch along a link, on weather (slice 12's trigger) | `dependencyBins`, `withWeather` | `dependencyBinsContainEveryProbedVoxel`, `withWeatherEqualsFreshEvaluation` |
+
+### Decisions and deviations
+
+1. **The site radius is horizontal.** §3C.2 says "horizontally" for fiber and nothing for the site.
+   Horizontal lets a dish on top of a tall mast column (up to `maxMastHeight` 64 above its base) serve
+   the column's own cell, as a dish on a real tower serves the antennas below it; a 3D 8-block radius
+   would forbid that. Labelled in the `BackhaulGraph` javadoc.
+2. **A cell's site relays between its dishes; a site with no cell relays nothing.** §3C.2 names three
+   kinds of edge (fiber, dish to cell, hop). The done-when's "three sites chained by microwave" needs
+   traffic to pass through a site, and the undirected dish-to-cell edge gives exactly that: in-hop dish,
+   cell, out-hop dish. Two dishes side by side with no cell are not joined, so a pure repeater (a
+   hilltop relay with no antenna) carries nothing. The spec does not define one. Owner decision in
+   `PHASE_3.md` follow-ups (option: also join dishes within `siteRadiusBlocks` of each other).
+3. **Thunder takes the higher of the two figures** (`max(rain, thunder)`), so a datapack that sets
+   thunder below rain still never makes a storm lighter than rain. At the shipped figures it is 6.0.
+4. **One block on the line in mid-path does not trip the Fresnel penalty.** The spec's own sanity
+   check needs this: one stone, 36 dB, is DEGRADED at −69.55 dBm; with the 6 dB penalty as well it
+   would be −75.55, DOWN. The offset paths pass 1.22 blocks off the line at a 1000 m hop's midpoint,
+   outside a single voxel on the line. Consequence, labelled at the code site: mid-path, a leaf beside
+   the beam costs 6 dB while a leaf on it costs 3. Near a dish the zone is narrower than a voxel, and
+   one block on the line there costs both (penetration and penalty). Adding a block never raises the
+   RSL (pinned on 200 random hops).
+5. **Offset directions.** "Up/down" is perpendicular to the line in its vertical plane (straight up
+   for a level hop), "left/right" horizontal; a vertical hop uses x for left/right. The two segments
+   trace a diamond inside the zone's ellipsoid, exact at the midpoint and at the dishes and narrower
+   between: part of the labelled sampling abstraction.
+6. **FSPL floors the distance at 1 m**, as the cellular `RfMath.pathLossDb` does. Only adjacent dishes
+   are affected.
+7. **Malformed graph input is ignored**: a link to an unknown dish, a dish linked to itself, a
+   repeated id (the first entry kept). The same pair given twice counts with its better state.
+8. **Hop length is capped by the march.** A line march that runs out of `maxSteps` is DOWN and
+   `outOfRange`. Slice 12 chooses the cap. If it passes `maxRaySteps` (default 1200 voxels, about
+   `|dx| + |dy| + |dz|` of the hop), a 1000-block diagonal hop (about 1414 voxels) is out of range;
+   noted in the follow-ups.
+
+### Honest-abstraction notes (also at the code sites)
+
+- **Real, modelled faithfully** (`MicrowaveLink` javadoc): free-space loss with exponent 2 (a dish
+  link above the clutter is line of sight, unlike the cellular bands' 3.5), the dependence on line of
+  sight (one stone block, 36 dB, costs about as much as making the hop 64 times longer), the first Fresnel
+  zone radius and the 60 % clearance rule, rain fade at 18 GHz, the three adaptive-modulation states.
+- **Obstruction** is the cellular material table times `penetration_factor` 3.0, one flat frequency
+  factor, as each band scales it: not a measured 18 GHz loss per material (`MicrowaveLink` javadoc).
+- **Alignment is automatic**: both dishes get the full 32 dBi whatever the geometry. Real alignment is
+  field work to a few tenths of a degree at 18 GHz, and a misaligned dish loses tens of dB
+  (`MicrowaveLink` javadoc; slice 12's Link Tool repeats it).
+- **The Fresnel check is a simplified knife-edge approximation**: the zone is sampled along four
+  offset paths, and any hit costs a flat 6 dB, the knife-edge loss of an obstacle grazing the line of
+  sight. A real obstacle in the zone costs from about 0 dB at 0.6 of the radius to 6 dB grazing
+  (`MicrowaveLink` javadoc and `evaluate`).
+- **Rain is approximate**: figures in the spirit of ITU-R P.838 at 18 GHz (about 2.5 dB/km for heavy
+  rain near 25 mm/h, about 6 dB/km for a thunderstorm downpour near 60 mm/h), applied over the whole
+  hop when it rains at the midpoint. No rain-cell extent (ITU-R P.530's path reduction factor), no
+  varying rate, no polarisation. Snow adds nothing; dry snow attenuates far less than rain here.
+- **Fiber is implicit, by radius**: nothing is laid; being near a core is being on fiber
+  (`BackhaulGraph` javadoc).
+- **Site cabling and the site router are implicit**: a dish near a cell's base feeds it, and the site
+  switches between its dishes (`BackhaulGraph` javadoc).
+- **Capacity is two levels**: FULL or LIMITED is the worst hop state on the best path, not a
+  throughput. No link capacity, no traffic, no sharing of a hop between the cells behind it
+  (`BackhaulGraph` javadoc). The FAIR cap that LIMITED will impose is slice 12's (§6's "backhaul cap as
+  a flat FAIR ceiling").
+
+### Measured
+
+A scratch harness (not in the repo) against the compiled classes, JDK 25 HotSpot on this machine, with
+a synthetic probe (a counting lambda, not the server's block lookups); medians of 15 rounds:
+
+| What | Median | Range | Probe calls |
+|---|---|---|---|
+| `evaluate`, 100-block hop | 3.1 µs | 3.0-16.0 | 495 |
+| `evaluate`, 300-block hop | 8.2 µs | 8.1-9.5 | 1,503 |
+| `evaluate`, 1000-block hop | 26.2 µs | 25.8-28.6 | 5,003 |
+| `solve`, 200 cells, 400 dishes, 200 links, 5 cores | 350 µs | 264-630 | — |
+| `solve`, 1000 cells, 2000 dishes, 1000 links, 5 cores | 1.97 ms | 1.86-3.48 | — |
+
+- A hop reads about five voxels per block of length (the line and four offset paths, each nearly as
+  long), so on the server its cost will be set by the block lookups. Slice 12 must measure that with
+  a game test. It should re-march only hops whose dependency bins moved (`dependencyBins`) and handle a
+  weather change with `withWeather`, which reads nothing.
+- `solve` is allocation-bound (boxed maps and lists), roughly linear (five times the size took 5.6
+  times as long), and runs at most once per `backhaulRecomputeTicks` (100). At 200 cells that is 3.5
+  µs/tick amortised; at 1000 cells one tick in a hundred would carry about 2 ms. Recorded as a
+  follow-up for slice 12: solve only when an input changed, and move to primitive arrays if it ever
+  shows in `/tick query`.
+- The game tests' cost lines in this step's run (no hot path changed): 200 radio links median 48.6
+  µs/tick (windows 51.8, 50.7, 52.3), 200 fixed receivers 25.1 µs/tick in steady state. Both within the
+  recorded ranges.
+
+### Tests
+
+- `MicrowaveLinkTest` (24, headless). The §3C tests: FSPL at 18 GHz / 1000 m is 117.55 dB within 0.01;
+  one stone block DEGRADED (36 dB, −69.55 dBm); two stones DOWN (72 dB); the Fresnel radius at the
+  midpoint 2.04 m within 0.01; rain adds exactly `rate × d_km` (delta 0, three lengths), snow nothing.
+  Also: the clear-hop sanity check (−33.55 dBm, 16.45 dB margin, UP); six leaves DEGRADED; the penalty
+  in each of the four directions and not beyond 60 %; a block near a dish filling the zone; ground
+  clearance; the dishes' own voxels; a marginal hop that drops in a thunderstorm and recovers; the
+  `enableRainFade` and `metersPerBlock` overload; the offset in blocks at 2 m per block; thresholds
+  exactly at −50 and −70; a sloping and a vertical hop; monotonic in blocks (200 random hops); out of
+  range; `Weather.at`; validation; and this step's three: `withWeather` equals a fresh evaluation and
+  reads no block, the offset midpoints' geometry, `dependencyBins` containment.
+- `BackhaulGraphTest` (13, headless). The §3C tests: FULL via fiber (bound inclusive, 24.04 blocks
+  out), FULL via an UP chain of three sites, LIMITED via one DEGRADED hop (the cells behind it only),
+  NONE when isolated (alone, behind a DOWN hop, with no core, an unknown id), a DEGRADED path loses to
+  an UP path when both exist (and a repeated pair counts as its better state). Also: breaking the
+  middle site's dish takes the far site off (the done-when, at graph level); the site radius bound; a
+  dish on fiber serving a cell beyond the fiber radius; no relay without a cell, two cores; malformed
+  input and input order; the radii from `RfConfig`; a 40-site chain; the brute-force reference on 300
+  random layouts.
+- `RfDataLoaderMicrowaveTest` (3, headless, the first test in `dev.rancraft.data`): the shipped file
+  is exactly the §3C.2 figures; loaded beside the four bands it is never a band and its figures reach
+  `microwave()`; partial files take defaults, an invalid file or none leaves the defaults. It calls the
+  loader's `apply` with no resource manager or profiler (neither is read) and restores the empty-load
+  state after each test.
+- No block added, so `HarvestGameTests` is unchanged.
+
+### APIs verified against sources (new to this codebase)
+
+- `Biome.getPrecipitationAt(BlockPos)` (1.21.1): `Biome.Precipitation.NONE` when the biome has no
+  precipitation, otherwise `SNOW` when `coldEnoughToSnow` (height-adjusted temperature, colder above y
+  80) and `RAIN` else; `Level.isRaining()`, `Level.isThundering()`. Not called yet: `Weather.at` takes
+  their results, so slice 12 maps `NONE` to `Weather.CLEAR`, `RAIN` to `RAIN`, `SNOW` to `SNOW`.
+
+### Verification
+
+| Check | Result |
+|---|---|
+| `./gradlew build` | **539 passed, 0 failed, 0 skipped** (499 + 24 + 13 + 3) |
+| `rf` / `util` purity | `PackagePurityTest` passes (`MicrowaveLink` and `BackhaulGraph` have no Minecraft imports and name no game-side package) |
+| `./gradlew runGameTestServer` | "32 tests are now running", "All 32 required tests passed"; the log shows the microwave figures loaded through the real reload listener beside 4 bands, and the config file gains the five keys at their defaults |
+| Versions | none changed: `PROTOCOL_VERSION` 8, `SignalSamplePayload.VERSION` unchanged, `DATA_VERSION` 3 |
+| In game | nothing to see yet (no block reads the link or the graph); the done-when checks come with slice 12 |

@@ -68,6 +68,12 @@ To run a headless dedicated server instead: `.\gradlew.bat runServer`
     configuration screen shows band_3500 greyed with "needs Wideband Radio Unit" until then. A sector
     already on band_3500 in an older world keeps it. The RF Lens is never tier-gated. Creative tab
     only for now.
+  - *Backhaul (the maths so far; the blocks come next):* an 18 GHz point-to-point microwave link
+    budget (free-space loss, line of sight, first Fresnel zone clearance, rain fade; figures in
+    `data/rancraft/rf/backhaul/microwave.json`) and the graph that decides whether each cell reaches a
+    core network at full rate, limited, or not at all. New COMMON config: `requireBackhaul` (off by
+    default, so existing worlds are unaffected), `fiberRadiusBlocks`, `siteRadiusBlocks`,
+    `backhaulRecomputeTicks`, `enableRainFade`.
 
 See `VISION.md` for the full design of the vision feature, `VISION_STEP3.md` for Step 3 (the
 drive-test log, and the planned automatic problem diagnosis), and `NOTES.md` for the full build log,

@@ -58,7 +58,7 @@ Legend: `[x]` done and verified · `[~]` partly done / needs a manual in-game ch
 | 9a | Phase 3B review round 1: fixes (4 reported, 4 confirmed and fixed, 0 rejected) | 3B | [~] region epochs move when a chunk reaches or leaves FULL (`ChunkEvent.Load` + `ChunkTicketLevelUpdatedEvent` across 33; not in `total()`); a Radio Link receiver outside FULL updates its memory but writes no block (no forced chunk promotion), catching up on its next turn; a migrated Phase 1 mast plans in `onLoad` again (only a promotion plans in `refreshRegistration`); `RadiatingY` in the antennas' update tag, the lens draws at the server's height (closes the slice 6 `maxMastHeight` follow-up), `PROTOCOL_VERSION` 7. Headless green (485 tests, 0 skipped; `runGameTestServer` 30/30 in five runs, 3 new, each failing with its fix disabled); game-test helpers load the chunks a forced chunk makes FULL at once; in-game checks below | 8b42665; 48e4da8; tracker 980e858 |
 | 9b | Phase 3B docs and tracker: code-site labels, done-when re-checked, follow-ups, summary, in-game checklist | 3B | [x] five abstractions NOTES.md called labelled at their code sites were not, or only in part, and now are (`SignalMastBlock`: a column is one site, the mounting-pole rule; the `maxMastHeight` comment, which also still described the pre-review lens; `RegionEpochs`: bins are a cache granularity; `SignalTicker.Cached`: a replay is the evaluation at the cached point; `RadioLinkBlock`: `LIT` is public state), and `LensRenderer` now says the lobe's height is the server's; the 3B done-when re-checked against the code and tests (4 `[x]`, 2 `[~]`); every 3B follow-up marked; NOTES.md "Phase 3B summary"; README; MILESTONES; "How to test Part 3B in game" at the end of this file. Headless green (485 tests, 0 skipped; `runGameTestServer` 30/30 in each of two runs after part 1; 200 radio links medians 58.9 and 48.9 µs/tick there, above every earlier run's 26-48 and still under 0.1 ms) | 6d99b43; docs b8c9299; tracker "PHASE_3.md, NOTES.md: record the Phase 3B docs commit hash" |
 | 10 | Radio tiers + v3 migration | 3C | [~] `rf/RadioTier` (pure; one rule for the server check, the migration and the screen); `AntennaBlockEntity.radioTier` (mast 1, sector 2), saved: `DATA_VERSION` 2 → 3, v2 → v3 `max(blockDefault, tierOf(currentBand))` grandfathers a band_3500 sector, and the v1 "PCI 0 is unassigned" rule now applies to v1 saves only (it would have re-planned every Phase 2 PCI 0); item `wideband_radio_unit` (use on a sector: tier 3, consumed; breaking drops it, a command does not); `applyOn` rejects a band above the radio tier; `OpenAntennaConfigPayload` appends `radioTier` and the bands' tiers, `PROTOCOL_VERSION` 8; screen greys locked bands ("needs Wideband Radio Unit") and disables Apply on one; RF Lens not tier-gated (VISION.md Q1). Headless green (499 tests, 0 skipped; `runGameTestServer` 32/32, 2 new, each failing with its fix removed); in-game checks below; one spec deviation (payload also carries band tiers) and two owner decisions in follow-ups | 71288f0; 4b3ce10; tracker "PHASE_3.md, NOTES.md: record slice 10 commit hash" |
-| 11 | MicrowaveLink + BackhaulGraph + tests | 3C | [ ] | |
+| 11 | MicrowaveLink + BackhaulGraph + tests | 3C | [x] `rf/MicrowaveLink` (pure: the §3C.2 budget, FSPL with n = 2, RSL, UP / DEGRADED / DOWN at −50 / −70, the 60 % Fresnel check over four offset paths with a flat 6 dB (simplified knife-edge), approximate rain fade (thunder the higher figure, snow nothing); plus `withWeather`, `fresnelOffsetMidpoints` and `dependencyBins` for slice 12), its figures from `rf/backhaul/microwave.json` through `RfDataLoader` and never a cellular band; `rf/BackhaulGraph` (pure: implicit fiber by horizontal radius, dish-to-cell site edges through which a site relays, hops with their state; two BFS passes give FULL / LIMITED / NONE); config `requireBackhaul` false, `fiberRadiusBlocks` 24, `siteRadiusBlocks` 8, `backhaulRecomputeTicks` 100, `enableRainFade` true (the radii and rain fade appended to `RfConfig`). Headless green (539 tests, 0 skipped; `runGameTestServer` 32/32, the microwave figures loaded at runtime beside 4 bands); no version bump; nothing in game reads it until slice 12; two interpretations, an owner decision and notes for slice 12 in follow-ups | 0d45aca; docs "Phase 3 slice 11: microwave link and backhaul graph" |
 | 12 | Core site, dish, link tool, backhaul state, lens lines, `/rancraft backhaul status` | 3C | [ ] | |
 | 13 | Storage Terminal | 3C | [ ] | |
 | 14 | Proximity Scanner | 3C | [ ] | |
@@ -730,6 +730,37 @@ Needs a human in game (creative unless noted):
       on this branch, its screen shows "Radio tier: 3" and band_3500 unlocked; breaking it drops a unit.
       A sector there with PCI 0 keeps PCI 0.
 
+## Slice 11 (microwave link, backhaul graph) checks
+
+Headless (verified by `./gradlew build`, 539 tests, 0 skipped, and `./gradlew runGameTestServer`,
+32 of 32; details in NOTES.md, slice 11):
+
+- [x] `rf/MicrowaveLink` and `rf/BackhaulGraph` are pure (`PackagePurityTest`).
+- [x] 3C test: FSPL at 18 GHz / 1000 m is 117.55 dB within 0.01 (`MicrowaveLinkTest.fspl`); the clear
+      1000 m hop is −33.55 dBm, 16.45 dB above UP (§3C.2's sanity check).
+- [x] 3C test: one stone block on the path is DEGRADED (36 dB, −69.55 dBm); two are DOWN (72 dB). About
+      six leaves (18 dB) is DEGRADED.
+- [x] 3C test: the first Fresnel radius at the midpoint of 1000 m at 18 GHz is 2.04 m within 0.01. A
+      block inside 60 % of it costs the 6 dB penalty in each of the four directions; one beyond costs
+      nothing.
+- [x] 3C test: rain adds exactly `rain_db_per_km × d_km`, thunder the higher figure, snow nothing; a
+      marginal hop drops to DOWN in a thunderstorm and is DEGRADED again after.
+- [x] 3C test: `BackhaulGraph` FULL via fiber, FULL via an UP chain, LIMITED via one DEGRADED hop, NONE
+      when isolated, and a DEGRADED path loses to an UP path when both exist.
+- [x] `microwave.json` is the §3C.2 JSON, loads through `RfDataLoader` (also at runtime: the game-test
+      server's log shows its figures beside 4 bands) and never appears as a cellular band
+      (`RfDataLoaderMicrowaveTest`).
+- [x] Config: `requireBackhaul` false, `fiberRadiusBlocks` 24, `siteRadiusBlocks` 8,
+      `backhaulRecomputeTicks` 100, `enableRainFade` true (checked in the game-test server's config
+      file); the three that `rf` reads are appended to `RfConfig`, the other two stay out of it.
+- [x] For slice 12: `withWeather` equals a fresh evaluation and reads no block; `dependencyBins` holds
+      every voxel an evaluation reads (300 random hops).
+- [x] No version moved and no hot path touched (the game tests' cost lines: 200 radio links median
+      48.6 µs/tick, 200 fixed receivers 25.1 µs/tick).
+
+Needs a human in game: nothing yet. No block uses the link or the graph until slice 12, so a world
+plays exactly as before (`requireBackhaul` is read by nothing).
+
 ## 3C done-when
 
 - [~] A tier-2 sector cannot use band_3500 until it gets a Wideband Radio Unit. *Server half verified
@@ -737,10 +768,14 @@ Needs a human in game (creative unless noted):
       the real item use path). The greyed band and the disabled Apply on the screen need the client
       (slice 10 checks above).*
 - [ ] With requireBackhaul on: three microwave-chained sites are on air; breaking the middle dish takes
-      the far site off air and the lens greys it.
+      the far site off air and the lens greys it. *(Slice 11: the graph half is pinned headless,
+      `BackhaulGraphTest.breakingTheMiddleDish` and `fullViaUpChain`; the blocks, the off-air effect and
+      the lens are slice 12.)*
 - [ ] A tree grown into a link path → DEGRADED, cells behind read BH: LIMITED, Storage Terminal stops,
-      Radio Link keeps working.
-- [ ] A marginal link drops in a thunderstorm and recovers after.
+      Radio Link keeps working. *(Slice 11: six leaves on a hop is DEGRADED and a DEGRADED hop makes the
+      cells behind it LIMITED, both headless; the rest is slices 12 and 13.)*
+- [ ] A marginal link drops in a thunderstorm and recovers after. *(Slice 11: pinned headless,
+      `MicrowaveLinkTest.marginalHopInAThunderstorm`; the server's weather input is slice 12.)*
 - [ ] Proximity Scanner works on band_3500 at GOOD, refuses on band_1800 with "needs tier 3".
 - [ ] With requirePower on, a 30 dBm sector burns fuel ~7× faster than a 20 dBm one.
 - [ ] Every block and item is craftable in survival and every block drops itself.
@@ -1206,6 +1241,37 @@ centroid, so 7 × 16 + 1 = 113). (g)
   is the one item that skips the screen.
 - **[ ] Note for slice 16 (from slice 10).** The Wideband Radio Unit is creative-only until its recipe
   exists (§3C.6: gold, amethyst, redstone block).
+- **[x] Decided in slice 11, spec silent (NOTES.md, slice 11, decision 1).** §3C.2 says "horizontally"
+  for the fiber radius and nothing for the site radius. Both are horizontal, so a dish on top of a tall
+  mast column (up to `maxMastHeight` above its base) serves the column's own cell.
+- **[x] Decided in slice 11, spec interpretation (NOTES.md, slice 11, decisions 2 and 3).** A cell's
+  site relays between its dishes (the dish-to-cell edge is undirected), which is what lets "three sites
+  chained by microwave" work. Thunder uses `max(rain_db_per_km, thunder_db_per_km)`, so a storm is never
+  lighter than rain whatever a datapack sets.
+- **[ ] Open, decision for the owner (from slice 11).** A site with no cell relays nothing: two dishes
+  side by side with no antenna between them are not joined, so a pure repeater (a hilltop relay) carries
+  no traffic. §3C.2 defines no such edge. Option: also join dishes within `siteRadiusBlocks` of each
+  other (one more edge kind in `BackhaulGraph.solve`, pass 0).
+- **[x] Accepted in slice 11, labelled (NOTES.md, slice 11, decision 4).** The Fresnel check samples
+  the zone along four offset paths, so one block on the line of sight in mid-path costs its
+  penetration loss but not the 6 dB penalty. §3C.2's own sanity check needs this (one stone is
+  DEGRADED at −69.55 dBm; with the penalty it would be DOWN). Side effect: mid-path, a leaf beside the
+  beam costs 6 dB and a leaf on it 3 dB.
+- **[ ] Note for slice 12 (from slice 11): cost.** A hop reads about five voxels per block of its
+  length (the line and the four offset paths); 26 µs per 1000-block hop with a synthetic probe, more
+  with the server's block lookups, so measure it in a game test. Re-march only hops whose
+  `MicrowaveLink.dependencyBins` moved (region epochs), re-budget a weather change with `withWeather`
+  (no march), and run `BackhaulGraph.solve` only when an input changed (0.35 ms at 200 cells, 400 dishes
+  and 200 links; about 2 ms at 1000 cells, allocation-bound; move to primitive arrays if it ever shows).
+  If the backhaul state flaps in rain, keep the flips hysteretic (the slice 8 note above).
+- **[ ] Note for slice 12 (from slice 11): evaluation details.** Evaluate each pair of dishes in one
+  fixed order (say the lower packed position as A): the voxel march breaks ties at voxel edges by
+  direction, so the two ends could otherwise disagree. Choose the hop's march cap deliberately:
+  `maxRaySteps` (default 1200 voxels, about `|dx| + |dy| + |dz|`) would put a 1000-block diagonal hop
+  (about 1414 voxels) out of range. Map `Biome.getPrecipitationAt(midpoint)` NONE / RAIN / SNOW to
+  `Weather.CLEAR` / `RAIN` / `SNOW` and pass `Level.isRaining()` / `isThundering()` to `Weather.at`.
+- **[ ] Note for slice 12 (from slice 11).** `requireBackhaul` and `backhaulRecomputeTicks` are in the
+  config (COMMON) but nothing reads them yet; slice 12 wires them.
 
 ### Phase 3B review round 1: the four findings
 
