@@ -429,10 +429,14 @@ public final class MastColumnGameTests {
         // Saved data, as the chunk load hands it over before onLoad.
         CompoundTag phase1Data = phase1.saveWithoutMetadata(nether.registryAccess());
         phase1Data.putInt("DataVersion", 1);
+        phase1Data.remove(AntennaBlockEntity.RADIO_TIER_TAG);
         phase1Data.putInt("Pci", 0);
         phase1.loadWithComponents(phase1Data, nether.registryAccess());
+        // Phase 2's save format, DataVersion 2 (since slice 10 it migrates to 3, which must keep a
+        // v2 PCI 0 as a deliberate value).
         CompoundTag phase2Data = phase2.saveWithoutMetadata(nether.registryAccess());
-        phase2Data.putInt("DataVersion", AntennaBlockEntity.DATA_VERSION);
+        phase2Data.putInt("DataVersion", 2);
+        phase2Data.remove(AntennaBlockEntity.RADIO_TIER_TAG);
         phase2Data.putInt("Pci", 0);
         phase2.loadWithComponents(phase2Data, nether.registryAccess());
 

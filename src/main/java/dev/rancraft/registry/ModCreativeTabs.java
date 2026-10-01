@@ -25,6 +25,7 @@ public final class ModCreativeTabs {
                     .displayItems((params, output) -> {
                         output.accept(ModItems.SIGNAL_MAST.get());
                         output.accept(ModItems.SECTOR_ANTENNA.get());
+                        output.accept(ModItems.WIDEBAND_RADIO_UNIT.get());
                         output.accept(ModItems.FIELD_TEST_METER.get());
                         output.accept(ModItems.RF_LENS.get());
                         output.accept(ModItems.NETWORK_LOCATOR.get());

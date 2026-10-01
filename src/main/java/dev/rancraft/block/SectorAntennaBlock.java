@@ -3,7 +3,10 @@ package dev.rancraft.block;
 import com.mojang.serialization.MapCodec;
 import dev.rancraft.RanCraftConfig;
 import dev.rancraft.data.RfDataLoader;
+import dev.rancraft.item.WidebandRadioUnitItem;
 import dev.rancraft.net.OpenAntennaConfigPayload;
+import dev.rancraft.registry.ModItems;
+import dev.rancraft.rf.Band;
 import dev.rancraft.rf.PciConflict;
 import dev.rancraft.rf.PciPlanner;
 import dev.rancraft.world.SiteRegistry;
@@ -12,6 +15,7 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.Containers;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.ItemInteractionResult;
@@ -44,8 +48,9 @@ import org.jetbrains.annotations.Nullable;
  * facing, and that facing seeds {@code azimuthDeg} on placement so the antenna points somewhere
  * sensible before the player opens the configuration screen.
  *
- * <p>Right-clicking with an empty hand opens that screen. Any other interaction falls through, so
- * the antenna does not swallow block placement or tool use.
+ * <p>Right-clicking opens that screen, whatever the main hand holds, as a crafting table does;
+ * sneak + use places a block against it. The one exception is a Wideband Radio Unit, which is fitted
+ * instead (Phase 3 slice 10, §3C.1) and dropped again when the antenna is broken ({@link #onRemove}).
  */
 public class SectorAntennaBlock extends BaseEntityBlock {
 
@@ -112,9 +117,34 @@ public class SectorAntennaBlock extends BaseEntityBlock {
     @Override
     protected ItemInteractionResult useItemOn(ItemStack stack, BlockState state, Level level, BlockPos pos,
                                               Player player, InteractionHand hand, BlockHitResult hit) {
-        // Only an empty hand opens the screen, so the antenna never swallows block placement or
-        // tool use. Falling through sends us to useWithoutItem when the hand is empty.
+        // A Wideband Radio Unit is fitted by the item's own useOn (slice 10), so the screen must not
+        // open first: SKIP goes straight on to the item.
+        if (stack.getItem() instanceof WidebandRadioUnitItem) {
+            return ItemInteractionResult.SKIP_DEFAULT_BLOCK_INTERACTION;
+        }
+        // Anything else falls through to useWithoutItem, which vanilla calls for the main hand
+        // whatever it holds (ServerPlayerGameMode.useItemOn, checked in slice 10): use opens the
+        // screen like a crafting table's, and sneak + use places a block against the antenna.
         return ItemInteractionResult.PASS_TO_DEFAULT_BLOCK_INTERACTION;
+    }
+
+    /**
+     * Breaking the antenna drops its Wideband Radio Unit, if it has one (§3C.1), as a chest spills
+     * its contents: whatever broke it (a player with or without the right tool, in creative too, an
+     * explosion), and regardless of {@code doTileDrops}. A command that replaces the block clears the
+     * entity first ({@link SectorAntennaBlockEntity#clearContent}), so it drops nothing. Runs on the
+     * server only (vanilla calls {@code onRemove} there), before the entity is removed.
+     */
+    @Override
+    protected void onRemove(BlockState state, Level level, BlockPos pos, BlockState newState, boolean movedByPiston) {
+        if (!level.isClientSide()
+                && !state.is(newState.getBlock())
+                && level.getBlockEntity(pos) instanceof SectorAntennaBlockEntity antenna
+                && antenna.hasWidebandUnit()) {
+            Containers.dropItemStack(level, pos.getX(), pos.getY(), pos.getZ(),
+                    new ItemStack(ModItems.WIDEBAND_RADIO_UNIT.get()));
+        }
+        super.onRemove(state, level, pos, newState, movedByPiston);
     }
 
     @Override
@@ -133,11 +163,18 @@ public class SectorAntennaBlock extends BaseEntityBlock {
         return InteractionResult.CONSUME;
     }
 
-    /** Snapshots the antenna plus the band list and its current PCI conflicts, for the screen. */
+    /**
+     * Snapshots the antenna plus the band list (with each band's capacity tier, and the antenna's
+     * radio tier, so the screen can grey out what the server would refuse) and its current PCI
+     * conflicts, for the screen.
+     */
     private static OpenAntennaConfigPayload openPayloadFor(
             AntennaBlockEntity antenna, BlockPos pos, Level level) {
 
         List<String> bands = List.copyOf(RfDataLoader.bands().all().keySet());
+        List<Integer> bandTiers = RfDataLoader.bands().all().values().stream()
+                .map(Band::capacityTier)
+                .toList();
 
         List<String> conflicts = List.of();
         if (level instanceof ServerLevel serverLevel) {
@@ -154,7 +191,7 @@ public class SectorAntennaBlock extends BaseEntityBlock {
                 pos, antenna.bandId(), antenna.txPowerDbm(), antenna.gainDbi(),
                 antenna.azimuthDeg(), antenna.tiltDeg(),
                 antenna.hBeamwidthDeg(), antenna.vBeamwidthDeg(), antenna.pci(),
-                bands, conflicts);
+                bands, conflicts, antenna.radioTier(), bandTiers);
     }
 
     @Override

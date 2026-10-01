@@ -4,6 +4,7 @@ import dev.rancraft.RanCraft;
 import dev.rancraft.item.FieldTestMeterItem;
 import dev.rancraft.item.NetworkLocatorItem;
 import dev.rancraft.item.RfLensItem;
+import dev.rancraft.item.WidebandRadioUnitItem;
 import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.Item;
 import net.neoforged.bus.api.IEventBus;
@@ -35,6 +36,15 @@ public final class ModItems {
             "network_locator",
             NetworkLocatorItem::new,
             new Item.Properties().stacksTo(1));
+
+    /**
+     * Phase 3 slice 10, §3C.1: raises a Sector Antenna's radio to tier 3 (band_3500). Consumed when
+     * fitted; breaking the antenna drops it. Stacks like any part. No recipe yet (§3C.6, slice 16).
+     */
+    public static final DeferredItem<WidebandRadioUnitItem> WIDEBAND_RADIO_UNIT = ITEMS.registerItem(
+            "wideband_radio_unit",
+            WidebandRadioUnitItem::new,
+            new Item.Properties());
 
     public static final DeferredItem<BlockItem> SIGNAL_MAST = ITEMS.registerSimpleBlockItem(ModBlocks.SIGNAL_MAST);
 

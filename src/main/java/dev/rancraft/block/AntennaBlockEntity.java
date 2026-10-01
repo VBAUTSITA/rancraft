@@ -2,9 +2,11 @@ package dev.rancraft.block;
 
 import dev.rancraft.RanCraft;
 import dev.rancraft.RanCraftConfig;
+import dev.rancraft.data.RfDataLoader;
 import dev.rancraft.rf.CellParams;
 import dev.rancraft.rf.ParabolicPattern;
 import dev.rancraft.rf.PciPlanner;
+import dev.rancraft.rf.RadioTier;
 import dev.rancraft.util.ColumnScan;
 import dev.rancraft.world.SiteRegistry;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -41,9 +43,16 @@ public abstract class AntennaBlockEntity extends BlockEntity {
      *   <li><b>1</b> -- Phase 1. All fields present but azimuth/tilt/beamwidths/PCI were inert seams.
      *   <li><b>2</b> -- Phase 2. The same fields are now live, and a PCI of 0 written by Phase 1
      *       means "never assigned" rather than "deliberately PCI 0".
+     *   <li><b>3</b> -- Phase 3 slice 10 (§3C.1). Appends {@code RadioTier}. An older save gets
+     *       {@code max(blockDefault, tierOf(currentBand))} ({@link RadioTier#migrated}), so a sector
+     *       already on band_3500 is grandfathered to tier 3. A PCI of 0 in a v2 save stays a
+     *       deliberate PCI 0: only a v1 save's means "never assigned".
      * </ul>
      */
-    public static final int DATA_VERSION = 2;
+    public static final int DATA_VERSION = 3;
+
+    /** The saved radio tier (v3). Also in the update tag, as all saved fields are: it is public hardware. */
+    public static final String RADIO_TIER_TAG = "RadioTier";
 
     /** The update tag's on-air flag (slice 6). Never saved; see {@link #getUpdateTag}. */
     public static final String ON_AIR_TAG = "OnAir";
@@ -68,6 +77,21 @@ public abstract class AntennaBlockEntity extends BlockEntity {
     protected double hBeamwidthDeg = CellParams.OMNI_H_BEAMWIDTH_DEG;
     protected double vBeamwidthDeg = CellParams.DEFAULT_V_BEAMWIDTH_DEG;
     protected int pci = 0;
+
+    /**
+     * The lowest radio tier this kind of antenna always has: 1 for a Signal Mast, 2 for a Sector
+     * Antenna (§3C.1). A radio never drops below it.
+     */
+    private final int defaultRadioTier;
+
+    /**
+     * Which bands this antenna's radio may use: those whose {@code capacityTier} is at most this
+     * ({@link RadioTier}). Phase 3 slice 10. Starts at {@link #defaultRadioTier}; a Wideband Radio
+     * Unit raises a sector to {@link RadioTier#WIDEBAND} ({@link SectorAntennaBlockEntity}). Only
+     * {@code UpdateCellParamsPayload.applyOn} enforces it, when a band is chosen: the engine never
+     * reads it, so an antenna already on a band keeps transmitting on it.
+     */
+    protected int radioTier;
 
     /**
      * Set when a Phase 1 site loads, or when a freshly placed antenna has not been planned yet.
@@ -114,8 +138,10 @@ public abstract class AntennaBlockEntity extends BlockEntity {
      */
     private int sentRadiatingY = ColumnScan.UNKNOWN_Y;
 
-    protected AntennaBlockEntity(BlockEntityType<?> type, BlockPos pos, BlockState state) {
+    protected AntennaBlockEntity(BlockEntityType<?> type, BlockPos pos, BlockState state, int defaultRadioTier) {
         super(type, pos, state);
+        this.defaultRadioTier = defaultRadioTier;
+        this.radioTier = defaultRadioTier;
     }
 
     // ---- identity -----------------------------------------------------------
@@ -178,6 +204,25 @@ public abstract class AntennaBlockEntity extends BlockEntity {
 
     public int pci() {
         return pci;
+    }
+
+    /** See {@link #radioTier}. On the client, the server's value from the update tag. */
+    public int radioTier() {
+        return radioTier;
+    }
+
+    /** See {@link #defaultRadioTier}. */
+    public int defaultRadioTier() {
+        return defaultRadioTier;
+    }
+
+    /**
+     * Whether a PCI plan is still pending ({@link #needsPciAssignment}): for a fresh placement until
+     * its {@code onLoad}, for a migrated Phase 1 site whose saved PCI was 0. Read by the game tests
+     * (a v2 save's PCI 0 must not be re-planned by the v3 migration).
+     */
+    public boolean pciPlanPending() {
+        return needsPciAssignment;
     }
 
     /** See {@link #onAir}: on the server whether the cell is registered, on the client what the server said. */
@@ -389,6 +434,7 @@ public abstract class AntennaBlockEntity extends BlockEntity {
         tag.putDouble("HBeamwidthDeg", hBeamwidthDeg);
         tag.putDouble("VBeamwidthDeg", vBeamwidthDeg);
         tag.putInt("Pci", pci);
+        tag.putInt(RADIO_TIER_TAG, radioTier);
     }
 
     @Override
@@ -427,6 +473,10 @@ public abstract class AntennaBlockEntity extends BlockEntity {
         if (tag.contains("Pci")) {
             pci = tag.getInt("Pci");
         }
+        // v3 and later. Absent from older saves: the constructor's default stands until migrate().
+        if (tag.contains(RADIO_TIER_TAG)) {
+            radioTier = RadioTier.loaded(defaultRadioTier, tag.getInt(RADIO_TIER_TAG));
+        }
         // Only an update tag carries it (the client's copy). On the server it is recomputed by the
         // next refreshRegistration(), so a crafted block_entity_data value does not stick there.
         if (tag.contains(ON_AIR_TAG)) {
@@ -448,14 +498,26 @@ public abstract class AntennaBlockEntity extends BlockEntity {
     }
 
     /**
-     * Phase 1 -> Phase 2. Every existing value is kept; only genuinely absent ones are filled.
-     * A Phase 1 world must load with every tower intact and reading identically.
+     * Older saves to {@link #DATA_VERSION}. Every existing value is kept; only genuinely absent ones
+     * are filled. A Phase 1 or Phase 2 world must load with every tower intact and reading identically.
+     *
+     * <ul>
+     *   <li>v1 to v2: a PCI of 0 is "never assigned", so it is planned in {@link #onLoad()}.
+     *   <li>v2 (and v1) to v3: the radio tier is {@code max(blockDefault, tierOf(currentBand))}
+     *       ({@link RadioTier#migrated}), from the band table loaded now. The datapacks load before
+     *       any level, so on the server this is the world's table.
+     * </ul>
      */
     protected void migrate(int fromVersion) {
         // Phase 1 wrote PCI 0 for every site because it had no planner. Treat that as unassigned
-        // rather than as a deliberate choice, or a migrated world is one giant PCI collision.
-        if (pci == 0) {
+        // rather than as a deliberate choice, or a migrated world is one giant PCI collision. Only a
+        // v1 save: from v2 on, PCI 0 is a value the planner or the player chose (slice 10 keeps it).
+        if (fromVersion < 2 && pci == 0) {
             needsPciAssignment = true;
+        }
+        // Grandfathering: whatever band the antenna was on keeps working, and stays selectable.
+        if (fromVersion < 3) {
+            radioTier = RadioTier.migrated(defaultRadioTier, RfDataLoader.bands(), bandId);
         }
         noteMigration(fromVersion);
     }

@@ -41,9 +41,13 @@ public final class ModPayloads {
      *       radiating height the server worked out with its own {@code maxMastHeight} (a COMMON config,
      *       not synced), and the lens draws a column's lobe there. A slice 6 client would draw it at its
      *       own cap's height.
+     *   <li><b>8</b> -- Phase 3 slice 10 (radio tiers, §3C.1): {@link OpenAntennaConfigPayload}
+     *       appends the antenna's radio tier and each band's capacity tier. A slice 9 client would
+     *       stop reading early. The antennas' update tag also gains {@code RadioTier} (a saved field,
+     *       {@code DATA_VERSION} 3).
      * </ul>
      */
-    private static final String PROTOCOL_VERSION = "7";
+    private static final String PROTOCOL_VERSION = "8";
 
     @SubscribeEvent
     public static void register(RegisterPayloadHandlersEvent event) {

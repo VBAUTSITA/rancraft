@@ -7,10 +7,13 @@ import dev.rancraft.rf.AntennaPattern;
 import dev.rancraft.rf.CellParams;
 import dev.rancraft.rf.ParabolicPattern;
 import dev.rancraft.rf.PciPlanner;
+import dev.rancraft.rf.RadioTier;
+import net.minecraft.ChatFormatting;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.AbstractSliderButton;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.CycleButton;
+import net.minecraft.client.gui.components.Tooltip;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
 import net.neoforged.neoforge.network.PacketDistributor;
@@ -59,6 +62,9 @@ public class AntennaConfigScreen extends Screen {
     private double vBeamwidthDeg;
     private int pci;
 
+    private Button applyButton;
+    private int applyY;
+
     public AntennaConfigScreen(OpenAntennaConfigPayload payload) {
         super(Component.translatable("gui.rancraft.antenna_config.title"));
         this.initial = payload;
@@ -98,14 +104,21 @@ public class AntennaConfigScreen extends Screen {
         int left = this.width / 2 - PANEL_WIDTH - 8;
         int y = 40;
 
-        addRenderableWidget(CycleButton.<String>builder(Component::literal)
+        // Every band is offered; one the antenna's radio cannot use (slice 10, §3C.1) is greyed and
+        // says why, and Apply is off while it is selected. The rule is the server's (RadioTier, fed
+        // with the tiers the server sent); the server checks again on apply.
+        addRenderableWidget(CycleButton.<String>builder(this::bandLabel)
                 .withValues(initial.availableBandIds().isEmpty()
                         ? java.util.List.of(bandId)
                         : initial.availableBandIds())
                 .withInitialValue(bandId)
+                .withTooltip(value -> initial.bandLocked(value) ? Tooltip.create(lockReason(value)) : null)
                 .create(left, y, WIDGET_WIDTH, 20,
                         Component.translatable("gui.rancraft.antenna_config.band"),
-                        (button, value) -> bandId = value));
+                        (button, value) -> {
+                            bandId = value;
+                            updateApplyButton();
+                        }));
         y += ROW_HEIGHT;
 
         addRenderableWidget(new DoubleSlider(left, y, WIDGET_WIDTH, 20,
@@ -149,11 +162,36 @@ public class AntennaConfigScreen extends Screen {
                 value -> pci = (int) Math.round(value)));
         y += ROW_HEIGHT + 8;
 
-        addRenderableWidget(Button.builder(
+        applyButton = addRenderableWidget(Button.builder(
                         Component.translatable("gui.rancraft.antenna_config.apply"),
                         button -> apply())
                 .bounds(left, y, WIDGET_WIDTH, 20)
                 .build());
+        applyY = y;
+        updateApplyButton();
+    }
+
+    /** The band as the cycle button shows it: greyed, with "(locked)", when the radio cannot use it. */
+    private Component bandLabel(String id) {
+        if (initial.bandLocked(id)) {
+            return Component.translatable("gui.rancraft.antenna_config.band_locked", id).withStyle(ChatFormatting.GRAY);
+        }
+        return Component.literal(id);
+    }
+
+    /** Why a locked band is locked: the Wideband Radio Unit, or (a datapack band above tier 3) nothing can unlock it. */
+    private Component lockReason(String id) {
+        int capacityTier = initial.capacityTierOf(id);
+        return RadioTier.unlockedByWideband(initial.radioTier(), capacityTier)
+                ? Component.translatable("gui.rancraft.antenna_config.needs_wideband")
+                : Component.translatable("gui.rancraft.antenna_config.needs_tier", capacityTier);
+    }
+
+    /** Apply is off while the selected band is locked: the server would refuse it. */
+    private void updateApplyButton() {
+        if (applyButton != null) {
+            applyButton.active = !initial.bandLocked(bandId);
+        }
     }
 
     private void apply() {
@@ -171,6 +209,14 @@ public class AntennaConfigScreen extends Screen {
 
         int left = this.width / 2 - PANEL_WIDTH - 8;
         graphics.drawString(font, title, left, 20, COLOR_TITLE, false);
+
+        // Slice 10: the antenna's radio tier, and why Apply is off when the band is locked.
+        graphics.drawString(font,
+                Component.translatable("gui.rancraft.antenna_config.radio_tier", initial.radioTier()),
+                left, applyY + 26, COLOR_LABEL, false);
+        if (initial.bandLocked(bandId)) {
+            graphics.drawString(font, lockReason(bandId), left, applyY + 38, COLOR_WARN, false);
+        }
 
         int plotLeft = this.width / 2 + 16;
         int plotTop = 40;

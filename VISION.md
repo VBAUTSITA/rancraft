@@ -225,6 +225,10 @@ Carried over from the rest of the project: label abstractions, never teach a wro
 1. **Should the lens gate on progression?** Phase 3 gates devices on `ServiceLevel` +
    `capacityTier`. A "good" lens needing a high-tier band to craft would fit, but it also delays
    the teaching tool until late game — which may be backwards for a mod whose purpose is teaching.
+   *Resolved in Phase 3 slice 10 (§3C.1): no. Radio tiers gate antennas (a Sector Antenna needs a
+   Wideband Radio Unit for band_3500) and devices gate on the serving band's tier, but the lens is
+   not tier-gated: it shows every band from the first mast and gets a cheap early recipe (§3C.6,
+   slice 16) (NOTES.md, slice 10).*
 2. **Should the mast stack collapse into one cell?** Independent of this feature, but the lens will
    make the current N-cells-per-stack behaviour very visually obvious (nine overlapping spheres).
    Phase 3's "stack masts for height" needs to address it.

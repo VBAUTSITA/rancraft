@@ -4,6 +4,7 @@ import dev.rancraft.RanCraft;
 import dev.rancraft.block.AntennaBlockEntity;
 import dev.rancraft.data.RfDataLoader;
 import dev.rancraft.rf.PciPlanner;
+import dev.rancraft.rf.RadioTier;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.network.codec.StreamCodec;
@@ -15,8 +16,10 @@ import net.minecraft.server.level.ServerPlayer;
  * Client to server: apply these settings to the antenna at {@code pos}.
  *
  * <p><b>Nothing in this packet is trusted.</b> {@link #applyOn(ServerPlayer, UpdateCellParamsPayload)}
- * re-checks reach, that the target is actually an antenna, and that every value is inside its
- * allowed range, before anything is written. A rejected packet is logged and dropped silently from
+ * re-checks reach, that the target is actually an antenna, that every value is inside its allowed
+ * range, and (Phase 3 slice 10, §3C.1) that the antenna's radio tier supports the band
+ * ({@link RadioTier}: a tier-2 sector refuses band_3500 until it has a Wideband Radio Unit), before
+ * anything is written. A rejected packet is logged and dropped silently from
  * the player's point of view -- there is no legitimate client that sends an invalid one.
  *
  * <p>Note that gain is deliberately <em>absent</em>. It is derived from the beamwidths server-side,
@@ -88,6 +91,15 @@ public record UpdateCellParamsPayload(
                 RanCraft.LOGGER.warn(
                         "RANCraft rejected an antenna configuration from {} for {}: out of range or invalid",
                         player.getGameProfile().getName(), payload.pos);
+                return false;
+            }
+            // Phase 3 slice 10 (§3C.1): the antenna's radio must support the band. Checked here, on
+            // the server, whatever the screen showed; the band is known to exist (isValid).
+            if (!RadioTier.allows(antenna.radioTier(), RfDataLoader.bands(), payload.bandId)) {
+                RanCraft.LOGGER.warn(
+                        "RANCraft rejected an antenna configuration from {} for {}: {} is capacity tier {}, the antenna's radio is tier {}",
+                        player.getGameProfile().getName(), payload.pos, payload.bandId,
+                        RfDataLoader.bands().getOrFallback(payload.bandId).capacityTier(), antenna.radioTier());
                 return false;
             }
             antenna.applyConfiguration(

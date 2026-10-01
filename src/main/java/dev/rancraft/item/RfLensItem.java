@@ -40,6 +40,11 @@ import net.minecraft.world.level.Level;
  * {@code net.SignalSamplePayload}); the client only draws them.
  * RSRP, SINR, obstruction, serving-cell choice and coverage all stay server-authoritative. See
  * VISION.md for where that line sits and why.
+ *
+ * <p><b>Not tier-gated</b> (VISION.md open question 1, answered by §3C.1 in Phase 3 slice 10). Radio
+ * tiers gate antennas and devices, never the lens: it works with every band from the first mast,
+ * and gets a cheap early recipe (§3C.6, slice 16). Gating the teaching tool behind late game would be
+ * backwards for this mod.
  */
 public class RfLensItem extends Item implements Equipable {
 

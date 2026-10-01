@@ -2,6 +2,7 @@ package dev.rancraft.block;
 
 import dev.rancraft.RanCraftConfig;
 import dev.rancraft.registry.ModBlockEntities;
+import dev.rancraft.rf.RadioTier;
 import dev.rancraft.util.ColumnScan;
 import dev.rancraft.world.MastColumnCensus;
 import net.minecraft.core.BlockPos;
@@ -49,8 +50,15 @@ public class SignalMastBlockEntity extends AntennaBlockEntity {
     /** Set when saved data arrived ({@link #loadAdditional}); only such a column is counted in the census. */
     private boolean loadedFromSave;
 
+    /**
+     * A mast's radio tier (§3C.1): tier-1 bands only. With no configuration screen it stays on
+     * band_900 (the default) in practice; the server's tier check would also let a crafted packet
+     * choose band_700, the other tier-1 band, as before slice 10. No Wideband Radio Unit fits a mast.
+     */
+    public static final int RADIO_TIER = RadioTier.MIN;
+
     public SignalMastBlockEntity(BlockPos pos, BlockState state) {
-        super(ModBlockEntities.SIGNAL_MAST.get(), pos, state);
+        super(ModBlockEntities.SIGNAL_MAST.get(), pos, state, RADIO_TIER);
     }
 
     /**
