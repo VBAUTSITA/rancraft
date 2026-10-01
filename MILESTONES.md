@@ -113,7 +113,7 @@ Tests: **161 at the start of Phase 3 → 382 now.**
 | 8 | **Fixed receivers**: blocks that listen to the network, evaluated in the background under a time budget | `7866ca9` |
 | 9 | **Radio Link**: remote redstone over the network. About half the updates get lost at POOR service (SINR about 1 dB), none at FAIR. 200 links cost 0.03-0.06 ms per tick | `10c1de7` |
 | — | Review round: 4 findings, **all 4 real and fixed**, 0 rejected | `48e4da8` |
-| — | Docs, labels and the "How to test Part 3B in game" list | this step |
+| — | Docs, labels and the "How to test Part 3B in game" list | `b8c9299` |
 
 Real bugs the review caught, each now fixed and tested:
 

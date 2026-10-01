@@ -3684,8 +3684,8 @@ of 30** in each of two runs in this step. What is left needs a person at the cli
 detail stays in the slice sections above (slices 6-9 and "Phase 3B review, round 1"), which this
 step re-read against the code and the git log.
 
-Commits of this step: part 1 `6d99b43` (code-site labels, comments only) and the docs commit "Phase
-3B: docs and tracker" (one more label in `LensRenderer`, these notes, the tracker with the in-game
+Commits of this step: part 1 `6d99b43` (code-site labels, comments only) and the docs commit
+`b8c9299` "Phase 3B: docs and tracker" (one more label in `LensRenderer`, these notes, the tracker with the in-game
 checklist, `README.md`, `MILESTONES.md`). An earlier attempt at this step was interrupted with two of
 the label edits uncommitted (`SignalMastBlock`, `RanCraftConfig`); this step checked them against the
 code, kept them and added the rest.
@@ -3699,7 +3699,7 @@ code, kept them and added the rest.
 | 8 | Fixed receivers: `FixedDevice`, registry, ticker | 02d1790, 62b54c7, 7866ca9 (2bc36cc) | 449 | 21 |
 | 9 | `BlerModel`, `SplitMix64`, Radio Link (**3B ships**) | 10c1de7 (f3948b4) | 482 | 27 |
 | 9a | Phase 3B review round 1 fixes | 8b42665, 48e4da8 (980e858) | 485 | 30 |
-| 9b | This step | 6d99b43, "Phase 3B: docs and tracker" (the hash-recording commit after it) | 485 | 30 |
+| 9b | This step | 6d99b43, b8c9299 (the hash-recording commit after it) | 485 | 30 |
 
 Part 3B took the unit tests from 382 to 485 (+103) and the game tests from 5 to 30 (+25: 9 mast
 column, 4 region epoch, 5 fixed receiver, 5 Radio Link, 2 generated harvest tests).
