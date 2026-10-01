@@ -57,7 +57,7 @@ Legend: `[x]` done and verified · `[~]` partly done / needs a manual in-game ch
 | 9 | BlerModel + Radio Link | 3B | [~] `rf/BlerModel` (the §3B.4 sigmoid, `P(deliver)`, the table within 0.001, monotonic) and `rf/SplitMix64` (seed `pos.asLong() ^ gameTime`); `blerSinr50Db` 0 / `blerSlopeDb` 2 (COMMON, appended to `RfConfig`); blocks `radio_link_transmitter` / `radio_link_receiver` (FixedDevices, POOR tier 1, address 0-15 by use / sneak + use with the action bar, `LIT` while served, the receiver outputs weak power 15, a per-transmitter memory: a lost message is a stale state, a broken or re-addressed transmitter is forgotten at once, memory from a save is verified on the receiver's turns); `device/RadioLinkNetwork` per dimension (both ends served, each end's BLER, deterministic draws); tooltip "about once a second, by design"; loot tables, pickaxe tag, creative tab, lang, placeholder models; `FixedDeviceBlockEntity.clearRemoved` registers (closes the slice 8 `onPlace` follow-up). Headless green (482 tests, 0 skipped; `runGameTestServer` 27/27, 4 new + 2 generated harvest tests: POOR 49-56 % delivered vs 52 % modelled, FAIR 1,400 of 1,400; a real chunk reload resumes; 200 radio links (400 blocks) 20-53 µs/tick, medians 27-44). No version bump. **3B ships here** (with the review fixes, row 9a); in-game checks below | 10c1de7; tracker f3948b4 |
 | 9a | Phase 3B review round 1: fixes (4 reported, 4 confirmed and fixed, 0 rejected) | 3B | [~] region epochs move when a chunk reaches or leaves FULL (`ChunkEvent.Load` + `ChunkTicketLevelUpdatedEvent` across 33; not in `total()`); a Radio Link receiver outside FULL updates its memory but writes no block (no forced chunk promotion), catching up on its next turn; a migrated Phase 1 mast plans in `onLoad` again (only a promotion plans in `refreshRegistration`); `RadiatingY` in the antennas' update tag, the lens draws at the server's height (closes the slice 6 `maxMastHeight` follow-up), `PROTOCOL_VERSION` 7. Headless green (485 tests, 0 skipped; `runGameTestServer` 30/30 in five runs, 3 new, each failing with its fix disabled); game-test helpers load the chunks a forced chunk makes FULL at once; in-game checks below | 8b42665; 48e4da8; tracker 980e858 |
 | 9b | Phase 3B docs and tracker: code-site labels, done-when re-checked, follow-ups, summary, in-game checklist | 3B | [x] five abstractions NOTES.md called labelled at their code sites were not, or only in part, and now are (`SignalMastBlock`: a column is one site, the mounting-pole rule; the `maxMastHeight` comment, which also still described the pre-review lens; `RegionEpochs`: bins are a cache granularity; `SignalTicker.Cached`: a replay is the evaluation at the cached point; `RadioLinkBlock`: `LIT` is public state), and `LensRenderer` now says the lobe's height is the server's; the 3B done-when re-checked against the code and tests (4 `[x]`, 2 `[~]`); every 3B follow-up marked; NOTES.md "Phase 3B summary"; README; MILESTONES; "How to test Part 3B in game" at the end of this file. Headless green (485 tests, 0 skipped; `runGameTestServer` 30/30 in each of two runs after part 1; 200 radio links medians 58.9 and 48.9 µs/tick there, above every earlier run's 26-48 and still under 0.1 ms) | 6d99b43; docs b8c9299; tracker "PHASE_3.md, NOTES.md: record the Phase 3B docs commit hash" |
-| 10 | Radio tiers + v3 migration | 3C | [ ] | |
+| 10 | Radio tiers + v3 migration | 3C | [~] `rf/RadioTier` (pure; one rule for the server check, the migration and the screen); `AntennaBlockEntity.radioTier` (mast 1, sector 2), saved: `DATA_VERSION` 2 → 3, v2 → v3 `max(blockDefault, tierOf(currentBand))` grandfathers a band_3500 sector, and the v1 "PCI 0 is unassigned" rule now applies to v1 saves only (it would have re-planned every Phase 2 PCI 0); item `wideband_radio_unit` (use on a sector: tier 3, consumed; breaking drops it, a command does not); `applyOn` rejects a band above the radio tier; `OpenAntennaConfigPayload` appends `radioTier` and the bands' tiers, `PROTOCOL_VERSION` 8; screen greys locked bands ("needs Wideband Radio Unit") and disables Apply on one; RF Lens not tier-gated (VISION.md Q1). Headless green (499 tests, 0 skipped; `runGameTestServer` 32/32, 2 new, each failing with its fix removed); in-game checks below; one spec deviation (payload also carries band tiers) and two owner decisions in follow-ups | 71288f0; docs "Phase 3 slice 10: radio tiers" |
 | 11 | MicrowaveLink + BackhaulGraph + tests | 3C | [ ] | |
 | 12 | Core site, dish, link tool, backhaul state, lens lines, `/rancraft backhaul status` | 3C | [ ] | |
 | 13 | Storage Terminal | 3C | [ ] | |
@@ -685,9 +685,57 @@ Part 3B in game" at the end of this file.
       fix 2 a receiver whose chunk sits in memory outside FULL hears but writes no block, and catches
       up when FULL again (verified at runtime). The walk-away-and-back check is step 6.*
 
+## Slice 10 (radio tiers) checks
+
+Headless (verified by `./gradlew build`, 499 tests, 0 skipped, and `./gradlew runGameTestServer`,
+32 of 32; details in NOTES.md, slice 10):
+
+- [x] `rf/RadioTier` (pure): a radio of tier n takes bands of `capacityTier` ≤ n; an unknown band is
+      refused; Signal Mast 1, Sector Antenna 2, with a Wideband Radio Unit 3 (`RadioTierTest`, 10).
+- [x] 3C test: a band_3500 request on a tier-2 sector is rejected (`RadioTierTest`; **at runtime**
+      through the real `UpdateCellParamsPayload.applyOn`: refused with the band unchanged, band_1800
+      taken, band_3500 taken once the unit is fitted).
+- [x] 3C test: the v2 → v3 migration grandfathers it (`RadioTierTest`; **at runtime** on real entities
+      handed v2 data before `onLoad`: a band_3500 sector comes back tier 3 and still accepts band_3500,
+      a band_1800 sector 2, a mast 1, a v3 tier kept).
+- [x] `DATA_VERSION` 2 → 3 (`RadioTier` saved); a v2 PCI 0 is kept, only a v1 PCI 0 is re-planned
+      (**at runtime**; the game test fails with the old rule).
+- [x] **At runtime**, the Wideband Radio Unit through the real `ServerPlayerGameMode.useItemOn`: the
+      sector's screen does not open instead, tier 3, one of two units consumed; a second unit refused
+      and kept; a Signal Mast untouched.
+- [x] **At runtime**, a survival pickaxe break (`ServerPlayerGameMode.destroyBlock`) drops the sector
+      and the unit; a grandfathered sector drops one too; a `/setblock`-style replacement drops none.
+- [x] `OpenAntennaConfigPayload` appends `radioTier` and each band's capacity tier, round-trips, caps
+      at 64 and rejects a larger tier count; the screen's lock rule is the server's
+      (`OpenAntennaConfigPayloadTest`, 4). `PROTOCOL_VERSION` 7 → 8.
+- [x] The RF Lens is not tier-gated (`RfLensItem` javadoc; VISION.md open question 1 marked resolved).
+- [x] Both new game tests fail with their fix removed (the `applyOn` check; the v1-only PCI rule).
+- [x] No hot path touched; the cost lines of the run stay in their recorded ranges (200 radio links
+      median 53.5 µs/tick, 200 fixed receivers 23.0 µs/tick).
+
+Needs a human in game (creative unless noted):
+
+- [ ] Place a Sector Antenna and right-click it with an empty hand. The screen says "Radio tier: 2"
+      under Apply. Cycle the band: band_3500 reads "band_3500 (locked)" in grey, hovering it says
+      "needs Wideband Radio Unit", Apply is greyed and the same reason shows under it. band_700,
+      band_900 and band_1800 are white and Apply works.
+- [ ] Right-click the sector with a Wideband Radio Unit (creative tab): the action bar says it was
+      fitted, a smithing sound plays, and the screen does not open. Open the screen: "Radio tier: 3",
+      band_3500 is white; apply it, and the Field Test Meter near the sector shows band_3500.
+- [ ] Right-click it again with a unit: "already has a Wideband Radio Unit", the unit stays in hand.
+      A unit used on a Signal Mast does nothing.
+- [ ] Survival, iron pickaxe: fitting consumes one unit; breaking the sector drops the sector and the
+      unit; placed again it is tier 2 until a unit is fitted.
+- [ ] (Optional, needs a Phase 2 world) A world saved on `main` with a sector set to band_3500: loaded
+      on this branch, its screen shows "Radio tier: 3" and band_3500 unlocked; breaking it drops a unit.
+      A sector there with PCI 0 keeps PCI 0.
+
 ## 3C done-when
 
-- [ ] A tier-2 sector cannot use band_3500 until it gets a Wideband Radio Unit.
+- [~] A tier-2 sector cannot use band_3500 until it gets a Wideband Radio Unit. *Server half verified
+      at runtime (slice 10: refused through the real `applyOn`, accepted after a unit is fitted through
+      the real item use path). The greyed band and the disabled Apply on the screen need the client
+      (slice 10 checks above).*
 - [ ] With requireBackhaul on: three microwave-chained sites are on air; breaking the middle dish takes
       the far site off air and the lens greys it.
 - [ ] A tree grown into a link path → DEGRADED, cells behind read BH: LIMITED, Storage Terminal stops,
@@ -1009,7 +1057,10 @@ centroid, so 7 × 16 + 1 = 113). (g)
 - **[ ] Open, minor (from slice 6).** The census line ("N stacked masts now form M columns...") is
   logged on every server start, not only the first after the upgrade: slice 6 persists nothing that
   would mark a world converted (§3B.1: no persisted field changes in 3B). If once-per-world is
-  wanted, the next save-format change (slice 10's `DATA_VERSION` 3) could carry a marker.
+  wanted, the next save-format change (slice 10's `DATA_VERSION` 3) could carry a marker. *(Slice 10:
+  still open. `DATA_VERSION` 3 alone is not a reliable marker: a loaded entity is re-saved only when its
+  chunk is saved for another reason, so an unchanged column's masts stay v2 on disk and would be
+  counted again. A marker needs a per-world flag (a `SavedData`), which is not slice 10's scope.)*
 - **[ ] Open, note for slices 12 and 15 (from slice 6).** `AntennaBlockEntity.onAir` is set only by
   `refreshRegistration`, from `isTransmitting()`. Backhaul (§3C.2 "Unregister and set OnAir false")
   and power (§3C.5) should feed `isTransmitting()` (or the mast's column rule) and call
@@ -1126,6 +1177,35 @@ centroid, so 7 × 16 + 1 = 113). (g)
   first, the reloaded receiver starts from its last save: it looks its remembered transmitters up on
   its first turn, and the next delivered message (about a second later) corrects a missed state.
   Nothing stays stuck (NOTES.md, "Phase 3B review, round 1", fix 2).
+- **[x] Decided in slice 10, spec vs tree (NOTES.md, slice 10, decision 1).** §4 lists only
+  `OpenAntennaConfigPayload + radioTier`. The screen cannot grey a band without that band's tier, and
+  a client on a dedicated server has no band table, so the payload also appends `bandCapacityTiers`
+  (parallel to the band ids) and the screen applies the server's rule (`rf/RadioTier`) to the server's
+  numbers. One protocol bump (7 → 8) covers both.
+- **[x] Fixed in slice 10 (NOTES.md, slice 10, decision 2).** `AntennaBlockEntity.migrate` applied
+  Phase 1's "PCI 0 means never assigned" to every save older than `DATA_VERSION`; with the bump to 3 it
+  would have re-planned every deliberate PCI 0 in a Phase 2 world. It now applies to v1 saves only
+  (`RadioTierGameTests` fails with the old condition).
+- **[x] Decided in slice 10 (NOTES.md, slice 10, decisions 3 and 4).** A sector at tier 3 or above
+  counts as holding one Wideband Radio Unit, fitted or grandfathered, and drops it on any removal of
+  the block (a chest's contents: any tool, creative, explosions, regardless of `doTileDrops`); a command
+  replacing it clears it first (`Clearable`) and drops nothing. A grandfathered Phase 2 band_3500 sector
+  therefore yields one unit when broken, so moving it keeps band_3500.
+- **[x] Noted in slice 10 (NOTES.md, slice 10, decision 5).** The Signal Mast's "band_900 only" is its
+  missing screen: its tier 1 also covers band_700, which a crafted configuration packet could set, as
+  before. band_1800 and band_3500 are refused there now.
+- **[ ] Open, decision for the owner (from slice 10).** The tier is enforced when a band is chosen, as
+  §3C.1 says. If a datapack raises a band's `capacityTier` above an antenna's tier, the antenna keeps
+  the band on the air (nothing reads the tier at run time), but its screen shows the current band
+  locked and Apply stays off until another band is picked. Option: let `applyOn` accept the band the
+  antenna already has. No shipped data does this.
+- **[ ] Open, decision for the owner (from slice 10, found while verifying).** The Sector Antenna's
+  screen opens on use with any item in the main hand (vanilla calls `useWithoutItem` for the main hand
+  whatever it holds; sneak + use places a block against it), not only with an empty hand as its old
+  comment said. Comment fixed, behaviour kept (a Phase 2 world plays as before). The Wideband Radio Unit
+  is the one item that skips the screen.
+- **[ ] Note for slice 16 (from slice 10).** The Wideband Radio Unit is creative-only until its recipe
+  exists (§3C.6: gold, amethyst, redstone block).
 
 ### Phase 3B review round 1: the four findings
 

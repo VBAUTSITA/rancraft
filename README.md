@@ -62,6 +62,12 @@ To run a headless dedicated server instead: `.\gradlew.bat runServer`
     about once a second by design, and at low SINR some are lost (a lost update leaves the old
     state; at FAIR or better the link is solid). The lamp on top lights while the block has service.
     Creative tab only for now (recipes come in Phase 3C).
+- **Phase 3C** (in progress) — infrastructure and progression:
+  - *Radio tiers:* a Sector Antenna's radio takes band_700, band_900 and band_1800; band_3500 needs a
+    **Wideband Radio Unit** (right-click the sector with it; breaking the sector drops it again). The
+    configuration screen shows band_3500 greyed with "needs Wideband Radio Unit" until then. A sector
+    already on band_3500 in an older world keeps it. The RF Lens is never tier-gated. Creative tab
+    only for now.
 
 See `VISION.md` for the full design of the vision feature, `VISION_STEP3.md` for Step 3 (the
 drive-test log, and the planned automatic problem diagnosis), and `NOTES.md` for the full build log,

@@ -3897,3 +3897,187 @@ every fixed receiver (keep it hysteretic); the region-epoch recipe for a microwa
 Radio Link blocks have no recipe yet (slice 16). Test harness: still no runtime test of the
 per-player ticker path. And every in-game check (`PHASE_3.md`, "How to test Part 3B in game", 8
 steps).
+
+---
+
+## Slice 10 — radio tiers and the v3 save migration (§3C.1)
+
+The first slice of Part 3C: `capacityTier` now gates which bands an antenna may be set to, and the
+Wideband Radio Unit is the first progression item. Code in `71288f0` (part 1 of 2); these notes and
+the tracker in the commit "Phase 3 slice 10: radio tiers".
+
+### What was built
+
+- **`rf/RadioTier`** (pure, no Minecraft imports): `allows(radioTier, capacityTier)` is
+  `capacityTier <= radioTier`; `allows(radioTier, bands, bandId)` (an unknown band is never allowed);
+  `migrated(blockDefault, tierOf(currentBand))` = `max(...)`, the §3C.1 formula, a band the table
+  does not hold granting nothing; `loaded(blockDefault, saved)` raises a saved tier below the block's
+  own; `unlockedByWideband` for the screen's reason; `MIN` 1, `WIDEBAND` 3. The server's check, the
+  migration and the screen's greying all call it, so the screen cannot show a band open that the
+  server would refuse.
+- **`AntennaBlockEntity.radioTier`**, saved as `RadioTier`: **`DATA_VERSION` 2 → 3**. The block
+  default comes in through the constructor: `SignalMastBlockEntity.RADIO_TIER` 1,
+  `SectorAntennaBlockEntity.RADIO_TIER` 2. It is in the update tag (every saved field is), so the
+  client knows it; it is the antenna's hardware, declared configuration like its band.
+- **Migration v2 → v3** in `AntennaBlockEntity.migrate`: `radioTier = RadioTier.migrated(default,
+  RfDataLoader.bands(), bandId)`. A Phase 2 sector on band_3500 loads at tier 3, keeps its band, and
+  still accepts band_3500 from the screen. A v1 save goes through the same step.
+- **Item `rancraft:wideband_radio_unit`** (`item/WidebandRadioUnitItem`): `useOn` a Sector Antenna
+  fits it (`SectorAntennaBlockEntity.installWidebandUnit`: tier 3, `setChanged`, synced), consumes one
+  (`ItemStack.consume`, so creative keeps it), plays the smithing-table sound and says so on the action
+  bar; on a sector that already has one it refuses ("already has a Wideband Radio Unit") and keeps the
+  item; on anything else it passes. Tooltip: "Use on a Sector Antenna: radio tier 3, unlocks
+  band_3500" / "Breaking the antenna drops it again". Creative tab, lang, placeholder model (vanilla
+  amethyst shard). No recipe until slice 16 (gold, amethyst, redstone block in §3C.6).
+- **`SectorAntennaBlock.useItemOn`** returns `SKIP_DEFAULT_BLOCK_INTERACTION` for the unit, so vanilla
+  goes on to the item's `useOn` instead of opening the configuration screen (`useWithoutItem`).
+- **`SectorAntennaBlock.onRemove`** drops one unit when a sector at tier 3 or above is removed (block
+  changed, server side), as a chest spills its contents: any break, any tool, creative too, an
+  explosion, regardless of `doTileDrops`. **`SectorAntennaBlockEntity implements Clearable`**:
+  `/setblock`, `/fill`, `/clone` and structure placement clear it first (tier back to 2), so a command
+  spills nothing, as with a chest.
+- **`UpdateCellParamsPayload.applyOn`** rejects, after the existing validation, any band whose
+  `capacityTier` exceeds the antenna's radio tier, with its own log line ("band_3500 is capacity tier
+  3, the antenna's radio is tier 2").
+- **`OpenAntennaConfigPayload`** appends `radioTier` and `bandCapacityTiers` (parallel to
+  `availableBandIds`, at most 64, a larger count rejected on read), plus `capacityTierOf` and
+  `bandLocked`. **`PROTOCOL_VERSION` 7 → 8.**
+- **`AntennaConfigScreen`**: every band stays in the cycle; a locked one reads "band_3500 (locked)" in
+  grey, its tooltip says "needs Wideband Radio Unit" (or "needs radio tier N: no radio unit reaches it"
+  for a datapack band above tier 3), Apply is inactive while it is selected and the same reason is
+  drawn under Apply; "Radio tier: N" is shown under Apply too.
+- **The RF Lens is not tier-gated** (`RfLensItem` javadoc; VISION.md open question 1 marked resolved):
+  radio tiers gate antennas, and devices gate on the serving band's tier (`DeviceRequirement`), but the
+  teaching tool works with every band from the first mast and gets a cheap early recipe in slice 16.
+
+### Where each part of §3C.1 lives
+
+| §3C.1 | Where | Pinned by |
+|---|---|---|
+| `radioTier` on `AntennaBlockEntity`, `DATA_VERSION` 2 → 3 | `AntennaBlockEntity` (`RADIO_TIER_TAG`) | `RadioTierGameTests` (the fitted tier is saved; a v3 save keeps it) |
+| Signal Mast 1, Sector 2, Sector + unit 3 | `SignalMastBlockEntity.RADIO_TIER`, `SectorAntennaBlockEntity.RADIO_TIER`, `RadioTier.WIDEBAND` | `RadioTierTest` (3 cases); game test: a fresh sector is 2, a mast 1 |
+| The unit raises a sector to 3 and is consumed | `WidebandRadioUnitItem.useOn`, `SectorAntennaBlock.useItemOn` (SKIP) | game test through `ServerPlayerGameMode.useItemOn`: 2 → 1 units, tier 3; a second refused; a mast untouched |
+| Breaking the antenna drops it back | `SectorAntennaBlock.onRemove` | game test: a survival pickaxe break (`ServerPlayerGameMode.destroyBlock`) drops 1 sector + 1 unit |
+| `applyOn` rejects a band above the radio tier, on the server | `UpdateCellParamsPayload.applyOn` | `RadioTierTest.tierTwoSectorRejectsBand3500`; game test: band_3500 refused (band unchanged), band_1800 taken, band_3500 taken after the unit |
+| `OpenAntennaConfigPayload` + `radioTier` (append), protocol bump | `OpenAntennaConfigPayload`, `ModPayloads` "8" | `OpenAntennaConfigPayloadTest` (4) |
+| Screen greys locked bands, "needs Wideband Radio Unit" | `AntennaConfigScreen` (`bandLabel`, `lockReason`, `updateApplyButton`) | `OpenAntennaConfigPayloadTest.lockRule`; the drawing is an in-game check |
+| Migration `max(blockDefault, tierOf(currentBand))`, band_3500 grandfathered | `AntennaBlockEntity.migrate`, `RadioTier.migrated` | `RadioTierTest.migrationGrandfathersBand3500`; game test on real entities with v2 data |
+| The RF Lens is not tier-gated | `RfLensItem` javadoc, VISION.md | (nothing gates it) |
+
+### Decisions and deviations
+
+1. **The payload also carries each band's capacity tier** (spec vs tree). §4 lists only
+   `OpenAntennaConfigPayload + radioTier`. To grey a band the screen needs that band's tier, and the
+   band table is server data: a client on a dedicated server has only the built-in band_900. So the
+   payload appends `bandCapacityTiers`, parallel to the band ids, and the screen applies
+   `RadioTier.allows` to the server's numbers. Both are declared configuration, nothing measured.
+   One protocol bump covers both.
+2. **A v2 PCI 0 is no longer re-planned** (a latent bug the bump would have caused). `migrate` ran its
+   one rule, "PCI 0 means never assigned", for every save older than `DATA_VERSION`. That rule is
+   Phase 1's (v1 wrote PCI 0 everywhere). With `DATA_VERSION` 3 every Phase 2 antenna would have gone
+   through it, and every deliberate PCI 0 in a Phase 2 world would have been re-planned on upgrade. It
+   now applies to v1 saves only. The game test fails with the old condition
+   ("a v2 PCI 0 was marked for re-planning"); `MastColumnGameTests`' migration test now hands its
+   "Phase 2" mast `DataVersion` 2 (it used `DATA_VERSION`, which would have become 3 and stopped
+   exercising the Phase 2 path), though on its own it does not catch this bug (the re-plan lands on 0
+   again there).
+3. **A sector at tier 3 or above counts as holding one unit**, fitted or grandfathered. So breaking a
+   grandfathered Phase 2 band_3500 sector drops a unit. The alternative (no unit) would make moving it
+   lose band_3500, which reads against "nothing that worked before stops working"; the cost is one free
+   unit per pre-existing band_3500 sector, once.
+4. **Unit drop semantics are a container's**: dropped on any removal of the block (not only a player's
+   harvest), in creative too, regardless of `doTileDrops`; a command replacement clears it first
+   (`Clearable`). Tying it to the loot table instead would lose the unit when a survival player breaks
+   the sector by hand (the sector needs a pickaxe to drop itself).
+5. **The mast's "band_900 only" is its missing screen.** Tier 1 also covers band_700 (capacity tier 1),
+   so a crafted configuration packet could still put a mast on band_700, as it could before. The tier
+   check blocks band_1800 and band_3500 there. Nothing else about crafted mast packets changes.
+6. **The tier is enforced only when a band is chosen**, as §3C.1 says (`applyOn`). The engine never
+   reads `radioTier`, so an antenna keeps transmitting on whatever band it is on. One consequence: if a
+   datapack later raises a band's `capacityTier` above an antenna's tier, the antenna keeps that band
+   on the air, but its screen shows the band locked and Apply stays off until another band is chosen
+   (a band change the server would refuse). Recorded as an open follow-up; no shipped data does this.
+7. **Saved tiers above 3 are kept** (`RadioTier.loaded` raises only). Migration can grandfather a
+   datapack band of tier 4, and a crafted `block_entity_data` (creative only) can only open bands.
+8. **The migration result is not forced to disk.** As with the Phase 1 → 2 migration, a migrated
+   entity is written as v3 the next time its chunk is saved for another reason; until then each load
+   migrates it again, to the same tier while the band table is the same. The log line "RANCraft
+   migrated N site(s) from dataVersion 2 to 3" can therefore repeat on later starts.
+
+### Found while verifying (behaviour unchanged)
+
+`SectorAntennaBlock.useItemOn` said "only an empty hand opens the screen". Vanilla's
+`ServerPlayerGameMode.useItemOn` calls `useWithoutItem` for the main hand whatever it holds, so the
+screen has always opened with any item in hand, like a crafting table (sneak + use places a block
+against it). The comment and the class javadoc now say so; the behaviour is kept so a Phase 2 world
+plays as before. Recorded as an open follow-up in case the owner wants empty-hand only.
+
+### Honest-abstraction notes (also at the code sites)
+
+- **A radio tier is one integer per antenna** (`RadioTier` javadoc, `WidebandRadioUnitItem` javadoc). A
+  real site adds a band by fitting a radio unit built for it: the band's filters and power amplifier,
+  and the instantaneous bandwidth (n78 at 3.5 GHz uses 100 MHz carriers). RANCraft compares one integer
+  with the band's `capacityTier`: no per-band filter, no multi-band radio, no carrier aggregation, and
+  one Wideband Radio Unit opens every band up to tier 3 on its antenna.
+- **The RF Lens is not tier-gated** (`RfLensItem` javadoc): a design choice, not a model.
+
+### Measured
+
+Nothing on a hot path changed: no ticker, cache or engine code reads `radioTier`. The new work is one
+band-table lookup when a configuration packet arrives and when the screen is opened, and one in
+`migrate` per antenna loaded from an older save. The game tests' cost lines in the final run of this
+step stay within the ranges recorded before: 200 radio links 53.5, 59.0 and 49.5 µs/tick (median 53.5;
+recorded medians 26.1-58.9, single windows 19.6-66.4), 200 fixed receivers 23.0 µs/tick in steady
+state (recorded 18.6-42).
+
+### Tests
+
+- `RadioTierTest` (10, headless): the 3C test "a band_3500 request on a tier-2 sector is rejected";
+  the 3C test "the v2 → v3 migration grandfathers it"; tier 3 opens everything; the mast's tier 1;
+  unknown bands; the boundary; migration never lowers the default; an unknown band grants nothing and
+  a tier-4 band is grandfathered; loaded tiers; the screen's reason.
+- `OpenAntennaConfigPayloadTest` (4, headless): round trip with the appended fields; the lock rule on
+  a tier-2 and a tier-3 sector; an unlisted band; the 64 caps and a rejected tier count.
+- `RadioTierGameTests` (2, runtime, FakePlayer):
+  - `tier_2_sector_needs_a_wideband_unit_for_band_3500`: the 3C done-when, through the real
+    `applyOn`, the real `ServerPlayerGameMode.useItemOn` and a real survival pickaxe break. Fails with
+    the `applyOn` check removed ("a tier-2 sector accepted band_3500").
+  - `v2_to_v3_migration_grandfathers_band_3500`: v2 data on four fresh entities before `onLoad`
+    (band_3500 sector → 3, band_1800 sector → 2, mast → 1, a v3 tier 3 kept), the grandfathered sector
+    accepts band_3500 and the migrated tier-2 one refuses it, a v2 PCI 0 is neither marked for nor
+    given a re-plan, a `/setblock`-style replacement drops no unit, and breaking the grandfathered
+    sector drops one. Fails with the old PCI rule ("a v2 PCI 0 was marked for re-planning").
+- `MastColumnGameTests.migrated_mast_plans_after_the_whole_load_registered`: its "Phase 2" mast now
+  loads real v2 data (above, decision 2).
+- No block added, so `HarvestGameTests` is unchanged (4 generated tests).
+
+### APIs verified against sources (new to this codebase)
+
+- `ServerPlayerGameMode.useItemOn` (1.21.1, NeoForge-patched): `onItemUseFirst`; then, unless sneaking
+  with an item, the block's `useItemOn`; `PASS_TO_DEFAULT_BLOCK_INTERACTION` on the main hand calls
+  `useWithoutItem` whatever the hand holds; `SKIP_DEFAULT_BLOCK_INTERACTION` goes straight to
+  `ItemStack.useOn`; in creative the stack's count is restored after `useOn`.
+- `ItemInteractionResult` (the six values, `result()`), `Item.useOn(UseOnContext)`,
+  `UseOnContext` getters, `ItemStack.consume(int, LivingEntity)` (skips `shrink` for infinite
+  materials), `InteractionResult.sidedSuccess`.
+- `BlockBehaviour.onRemove` (default removes the entity when the block changes), `Containers.dropItemStack`
+  (no `doTileDrops` check, unlike `Block.popResource`), `Clearable` and its use in `SetBlockCommand`.
+- `CycleButton.Builder.withTooltip(OptionInstance.TooltipSupplier)` (a null tooltip is allowed), the
+  value stringifier's component kept inside "Band: ..."; `Tooltip.create(Component)`;
+  `AbstractWidget.active`.
+- `SoundEvents.SMITHING_TABLE_USE`, `Level.playSound(Player, BlockPos, SoundEvent, SoundSource, float, float)`.
+- Game tests: `ServerPlayerGameMode.destroyBlock(BlockPos)` for a survival `FakePlayer` (default game
+  mode survival; `blockActionRestricted` false in survival), `BlockHitResult(Vec3, Direction, BlockPos,
+  boolean)`, `GameTestHelper.assertItemEntityCountIs` / `assertItemEntityNotPresent` /
+  `killAllEntities`.
+
+### Verification
+
+| Check | Result |
+|---|---|
+| `./gradlew build` | **499 passed, 0 failed, 0 skipped** (485 + 10 + 4) |
+| `rf` / `util` purity | `PackagePurityTest` passes (`RadioTier` has no Minecraft imports) |
+| `./gradlew runGameTestServer` | "32 tests are now running", "All 32 required tests passed" (30 + 2) on the committed code, and on the state before the `Clearable` step was added |
+| Mutation check | with the `applyOn` tier check and the v1-only PCI condition both removed: "2 required tests failed", one per new test, each with its own message |
+| Versions | `PROTOCOL_VERSION` 7 → 8; `AntennaBlockEntity.DATA_VERSION` 2 → 3; `SignalSamplePayload.VERSION` unchanged |
+| In game | not run by the agent (no `runClient`); the checks are in `PHASE_3.md`, "Slice 10 (radio tiers) checks" |
