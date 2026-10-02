@@ -60,7 +60,7 @@ Legend: `[x]` done and verified · `[~]` partly done / needs a manual in-game ch
 | 10 | Radio tiers + v3 migration | 3C | [~] `rf/RadioTier` (pure; one rule for the server check, the migration and the screen); `AntennaBlockEntity.radioTier` (mast 1, sector 2), saved: `DATA_VERSION` 2 → 3, v2 → v3 `max(blockDefault, tierOf(currentBand))` grandfathers a band_3500 sector, and the v1 "PCI 0 is unassigned" rule now applies to v1 saves only (it would have re-planned every Phase 2 PCI 0); item `wideband_radio_unit` (use on a sector: tier 3, consumed; breaking drops it, a command does not); `applyOn` rejects a band above the radio tier; `OpenAntennaConfigPayload` appends `radioTier` and the bands' tiers, `PROTOCOL_VERSION` 8; screen greys locked bands ("needs Wideband Radio Unit") and disables Apply on one; RF Lens not tier-gated (VISION.md Q1). Headless green (499 tests, 0 skipped; `runGameTestServer` 32/32, 2 new, each failing with its fix removed); in-game checks below; one spec deviation (payload also carries band tiers) and two owner decisions in follow-ups | 71288f0; 4b3ce10; tracker "PHASE_3.md, NOTES.md: record slice 10 commit hash" |
 | 11 | MicrowaveLink + BackhaulGraph + tests | 3C | [x] `rf/MicrowaveLink` (pure: the §3C.2 budget, FSPL with n = 2, RSL, UP / DEGRADED / DOWN at −50 / −70, the 60 % Fresnel check over four offset paths with a flat 6 dB (simplified knife-edge), approximate rain fade (thunder the higher figure, snow nothing); plus `withWeather`, `fresnelOffsetMidpoints` and `dependencyBins` for slice 12), its figures from `rf/backhaul/microwave.json` through `RfDataLoader` and never a cellular band; `rf/BackhaulGraph` (pure: implicit fiber by horizontal radius, dish-to-cell site edges through which a site relays, hops with their state; two BFS passes give FULL / LIMITED / NONE); config `requireBackhaul` false, `fiberRadiusBlocks` 24, `siteRadiusBlocks` 8, `backhaulRecomputeTicks` 100, `enableRainFade` true (the radii and rain fade appended to `RfConfig`). Headless green (539 tests, 0 skipped; `runGameTestServer` 32/32, the microwave figures loaded at runtime beside 4 bands); no version bump; nothing in game reads it until slice 12; two interpretations, an owner decision and notes for slice 12 in follow-ups | 0d45aca; docs 53ce35f; tracker "PHASE_3.md, NOTES.md: record slice 11 commit hash" |
 | 12 | Core site, dish, link tool, backhaul state, lens lines, `/rancraft backhaul status` | 3C | [~] blocks `core_site` and `backhaul_dish` (drop themselves, pickaxe tag, placeholder art) and item `link_tool` (select, pair, sneak + use unpairs; both dish entities store the partner; alignment automatic, labelled); `world/BackhaulNetwork` (a per-dimension `SavedData` of cores, dishes, pairings and eligible cells, so unloaded relays count; marches each hop with the live `WorldProbe` in one fixed order with a cap it cannot run out of, weather from `Biome.getPrecipitationAt` at the midpoint and the level's rain and thunder; solves `BackhaulGraph`; recomputes on the site registry version, a pairing, a region epoch on a hop's bins or the weather, at most once per `backhaulRecomputeTicks`). With `requireBackhaul` on, NONE → not transmitting (unregistered, `OnAir` false, through `refreshRegistration`), LIMITED → devices capped at FAIR in `DeviceContext` and their verdicts with the `SignalSample` untouched, meter "BH: LIMITED (capped FAIR)" (`SignalSamplePayload` v4); off (default) changes nothing. `BackhaulLinksPayload` v1 (cap 64) to lens wearers, hops drawn with the lobes layer; `/rancraft backhaul status [radius]`; `PROTOCOL_VERSION` 9. Headless green (559 tests, 0 skipped; `runGameTestServer` 36/36: the chain and weather tests, both new blocks in the harvest tests); a hop 0.14 µs per block live, quiet tick about 1 µs; ten decisions in NOTES.md; in-game checks below | ea9c98d; docs 8f2a31a; tracker "PHASE_3.md, NOTES.md: record slice 12 commit hash" |
-| 13 | Storage Terminal | 3C | [ ] | |
+| 13 | Storage Terminal | 3C | [~] item `storage_terminal` (a `SignalDevice`, GOOD tier 2): sneak + use binds a chest or barrel within `fiberRadiusBlocks` of a Core Site (the graph's fiber rule, any core of the dimension), saved as a `GlobalPos` data component; use opens a `RemoteContainerMenu` (a vanilla `ChestMenu` on the 9x3 / 9x6 menu types: nothing new on the wire) on an OK verdict, a FULL chunk and 27 or 54 slots; its `stillValid` reads the player's last verdict (`TerminalLink`, at most two intervals old), never a fresh evaluation, and a failed rule closes it with "connection lost (reason)"; same dimension only; never loads a chunk ("storage unreachable"); the LIMITED cap ends a session ("backhaul limited", told apart from a weak signal); the lid is never lifted (opener counter safe). Headless green (567 tests, 0 skipped; `runGameTestServer` 39/39, 3 new, including the 3C done-when: a LIMITED cell closes the session while a Radio Link on it keeps working); session check 0.44 µs/tick; no version bump; in-game checks below | 6a0ab89; docs "Phase 3 slice 13: Wireless Storage Terminal" |
 | 14 | Proximity Scanner | 3C | [ ] | |
 | 15 | Power + generator | 3C | [ ] | |
 | 16 | Recipes + loot tables + survival playthrough | 3C | [ ] | |
@@ -832,7 +832,8 @@ it; at 1000 blocks the margin is 16.45 dB, as §3C.2's numbers assume.
       will reach the line, and bone-meal it. Within 5 s of the tree growing: the line is orange
       ("DEGRADED"), the dish reads DEGRADED with the leaves' loss, and the Field Test Meter served by a
       site behind the hop shows "BH: LIMITED (capped FAIR)" (its bars stay the radio's own). Cut the
-      leaves out of the line: green again. *Needs the client; the Storage Terminal half is slice 13.*
+      leaves out of the line: green again. *Needs the client; the Storage Terminal half is slice 13
+      (slice 13 checks, step 4).*
 - [~] **4. A storm.** On the 1000-block hop, put one stone block on the line (the label reads about
       −69.5 dBm, orange). `/weather thunder`: within 5 s the line turns red (DOWN), the dish reads "rain
       6.0 dB". `/weather clear`: orange again. (The midpoint must be in a biome where it rains: not a
@@ -842,6 +843,113 @@ it; at 1000 blocks the margin is 16.45 dB, as §3C.2's numbers assume.
       because requireBackhaul is off". *Needs the client.*
 - [~] **6. Survival.** `/gamemode survival`, iron pickaxe: a Core Site and a Backhaul Dish each break
       with the crack animation and drop as an item (headless: `HarvestGameTests`). *Needs the client.*
+
+## Slice 13 (Storage Terminal) checks
+
+Headless (verified by `./gradlew build`, 567 tests, 0 skipped, and `./gradlew runGameTestServer`,
+39 of 39 in 26 batches; details in NOTES.md, slice 13). The game tests run vanilla's own
+`ServerPlayer.openMenu` and the `stillValid` check in `ServerPlayer.tick` that closes a menu.
+
+- [x] **Binding, at runtime**, through the real `ItemStack.useOn`:
+  - a plain use binds nothing;
+  - sneak + use on a chest 40 blocks from the Core Site is refused, and so is a dispenser;
+  - a chest, a double chest (at its left half) and a barrel within 24 blocks are bound, as dimension and
+    position in the data component;
+  - with the core broken, a bind is refused and the old binding kept.
+- [x] **The requirement, at runtime:**
+  - GOOD+ on band_900 is refused with "needs band tier 2, you're on band_900 (tier 1)";
+  - band_1800 opens;
+  - a use before any dispatch is refused with "no signal reading".
+- [x] **A session, at runtime:**
+  - a chest opens as 3 rows and a double chest as 6, with both halves in vanilla's order; a barrel opens
+    as 3 rows;
+  - each on vanilla's chest menu type;
+  - a stack put in through the menu is in the real chest, one put in the chest shows in the menu, and
+    shift-click works;
+  - the chest's opener count stays 0 through a remote open and close, so the lid is never lifted and
+    the next player's lid still works.
+- [x] **`stillValid` checks the last verdict, at runtime:**
+  - the session holds over three intervals of OK verdicts, and over two more with the terminal in the
+    hotbar;
+  - it closes, with "connection lost (reason)" told to the player, when:
+    - the signal drops below GOOD (a real evaluation 195 blocks out: FAIR);
+    - the terminal stops being dispatched (41-42 ticks after its last dispatch, at interval 20);
+    - a half of the double chest is broken;
+    - the Core Site is broken;
+  - closed by the player, nothing is reported lost.
+- [x] **Same dimension only, at runtime:** a Nether binding is refused before anything else, and no
+      Nether chunk is loaded.
+- [x] **Never force-load, at runtime:**
+  - the storage's chunk released during a session closes it with "storage unreachable: its chunk is
+    not loaded", while the radio verdict is still OK;
+  - a use is then refused and leaves the chunk out of FULL, before and after it really unloads.
+- [x] **3C done-when, the Storage Terminal half, at runtime** (`requireBackhaul` on): six leaves placed
+      with their events on a 1000-block hop (18 dB, DEGRADED, Fresnel clear) make the sector behind it
+      LIMITED.
+  - The open session closes with "backhaul limited: the serving cell is capped at FAIR, needs GOOD".
+  - The sample's own level stays GOOD+.
+  - A Radio Link on the same cell follows its transmitter off and on.
+  - With the leaves cut out, the terminal opens again.
+- [x] Unit (`StorageTerminalTest`, 8):
+  - the requirement;
+  - the kept record (a replay keeps the dispatch's tick and the cap);
+  - two intervals of freshness;
+  - each reason, with BACKHAUL_LIMITED told from WEAK_SIGNAL;
+  - the reasons' arguments;
+  - 27 or 54 slots;
+  - "near a core", equal to the graph's fiber rule.
+- [x] No version bump: no payload, block or save format added, and nothing new on the wire.
+      `rf` / `util` untouched (`PackagePurityTest`). The session check costs 0.44 µs per tick.
+
+Needs a human in game (creative). Set a Sector Antenna to band_1800 in its configuration screen, aimed
+at where you stand; the Field Test Meter shows the level.
+
+- [~] **1. Bind.**
+  - Place a Core Site, a chest 5 blocks from it, and a second chest 30 blocks away.
+  - Sneak + use a Storage Terminal (creative tab) on the far chest: "no Core Site within 24 blocks of
+    this Chest".
+  - Sneak + use the near chest: "bound to the Chest at x, y, z (Core Site 5 blocks away)". The tooltip
+    shows "Bound to …".
+  - Sneak + use a furnace: "only a chest or a barrel can be bound".
+
+  *Needs the client (action bar, tooltip).*
+- [~] **2. Open.**
+  - Stand where the meter reads GOOD or EXCELLENT on band_1800 and carry the terminal for a second.
+  - Use it in the air, not on a block. The ordinary chest screen opens, titled "Storage Terminal:
+    Chest", with the chest's items.
+  - Move items in and out, then open the chest by hand: they are there. If the chest is in view behind
+    the screen, its lid stays shut.
+  - Set the sector to band_900 and use the terminal: "needs band tier 2, you're on band_900 (tier 1)".
+
+  *Needs the client (screen).*
+- [~] **3. Losing the session.**
+  - With the screen open, move the terminal out of the hotbar, into the chest or the backpack. Within
+    about 2 s the screen closes and the action bar reads "connection lost (no signal reading …)".
+  - Walk out along the sector's beam until the meter reads FAIR (about 200 blocks in open air), then
+    use the terminal: "signal too weak: FAIR, needs GOOD".
+  - Optional: ride a minecart out of coverage with the screen open. It closes with "connection lost
+    (signal too weak …)".
+
+  *Needs the client (screen closing).*
+- [~] **4. A backhaul-limited cell (3C done-when).**
+  - Set `requireBackhaul = true` (game closed).
+  - Build slice 12 step 3's 1000-block hop, with the band_1800 sector behind it and a chest near the
+    core. Bind the chest; the terminal opens.
+  - Open the terminal and grow the tree into the line, or have it grown. Once the meter reads "BH:
+    LIMITED (capped FAIR)", the screen closes with "connection lost (backhaul limited: the serving cell
+    is capped at FAIR, needs GOOD)", and a use is refused with the same words.
+  - A Radio Link pair beside the sector still follows its transmitter.
+  - Cut the leaves out: the terminal opens again.
+  - Set the flag back to `false`.
+
+  *Needs the client.*
+- [~] **5. Unreachable.**
+  - Bind a chest near a core and go 300+ blocks away, past the view distance so its chunk unloads, to a
+    spot with GOOD band_1800 coverage. Use the terminal: "storage unreachable: its chunk is not loaded
+    (x, y, z)".
+  - In the Nether: "storage unreachable: it is in minecraft:overworld …".
+
+  *Needs the client.*
 
 ## 3C done-when
 
@@ -855,14 +963,20 @@ it; at 1000 blocks the margin is 16.45 dB, as §3C.2's numbers assume.
       runtime, `BackhaulGameTests` chain: real blocks paired with the real Link Tool, all three FULL and
       on the air; the middle dish broken, the far sites unregistered with `OnAir` false in the update tag,
       which is what the lens greys. The grey lobe on screen needs the client: slice 12 checks, step 2.)*
-- [ ] A tree grown into a link path → DEGRADED, cells behind read BH: LIMITED, Storage Terminal stops,
+- [~] A tree grown into a link path → DEGRADED, cells behind read BH: LIMITED, Storage Terminal stops,
       Radio Link keeps working. *(Slice 11: six leaves on a hop is DEGRADED and a DEGRADED hop makes the
       cells behind it LIMITED, both headless. Slice 12, at runtime with a stone placed with its event
       standing in for the tree (tree growth bumps its bins: slice 7, `RegionEpochGameTests`): the hop
       DEGRADED at the next recompute, the cells behind it LIMITED and capped at FAIR, a GOOD requirement
       (the Storage Terminal's) refused and a POOR one (the Radio Link's) kept on a live sample, the
-      meter's line "BH: LIMITED (capped FAIR)". A real tree and the meter on screen need the client
-      (slice 12 checks, step 3); the Storage Terminal itself is slice 13.)*
+      meter's line "BH: LIMITED (capped FAIR)". Slice 13: the server half end to end at runtime,
+      `StorageTerminalGameTests.a_limited_cell_stops_the_terminal_the_radio_link_keeps_working`. Six oak
+      leaves, placed with their events on a 1000-block hop, stand in for the canopy and make it DEGRADED
+      by exactly 18 dB. The sector behind it goes LIMITED. The real Storage Terminal's open session
+      closes with "backhaul limited" and its use is refused, while the real Radio Link on the same cell
+      follows its transmitter off and on. With the leaves cut out, the terminal opens again. A real tree,
+      the meter and the closing screen need the client: slice 12 checks, step 3, and slice 13 checks,
+      step 4.)*
 - [~] A marginal link drops in a thunderstorm and recovers after. *(Slice 11: pinned headless,
       `MicrowaveLinkTest.marginalHopInAThunderstorm`. Slice 12: server half verified at runtime,
       `BackhaulGameTests` weather: a one-stone 1000-block hop, DEGRADED, goes DOWN in a thunderstorm and
@@ -1082,6 +1196,10 @@ centroid, so 7 × 16 + 1 = 113). (g)
   *(Row 9b: still open. The 3B done-when on a player's cache is verified through `canReplay` on a real
   evaluation, the region epochs on a live level and the same replay rule on the real fixed-receiver
   ticker; the per-player path is step 3 of "How to test Part 3B in game".)*
+  *(Slice 13: still open. The Storage Terminal's game tests use a `SilentServerPlayer`, a real
+  `ServerPlayer` whose connection drops every packet and which is not on the list. They reach the
+  ticker's carried-device scan and capped dispatch through `SignalTicker.dispatchToCarried`, but not
+  the per-player loop. The follow-up from slice 13 below gives an option for the loop.)*
 - **[x] Done in slice 8 (02d1790) (from slice 4).** *`FixedReceiverTicker.staleCandidateGapTicks(interval,
   lag)` is the receiver's own gap, `interval + lag` (lag = server ticks it was served past its due
   tick); `ReceiverStateStore.resume` is reused with it. A budget overrun keeps an armed candidate, a
@@ -1419,7 +1537,11 @@ centroid, so 7 × 16 + 1 = 113). (g)
   with no backhaul transmits until the next recompute (at most `backhaulRecomputeTicks`, 5 s) before
   it goes off the air: a short-lived lit lobe. Option: when a cell is first noted, solve the graph for
   it at once without marching (marches stay bound by the interval). Not needed for the done-when.
-- **[ ] Note for slice 13 (from slice 12).** The Storage Terminal's GOOD requirement is already refused
+- **[x] Done in slice 13 (from slice 12).** *The cap needed no code of its own in the terminal, and
+  "near a core" uses `BackhaulNetwork.cores()` with the graph's own fiber rule. Instead of
+  `backhaulLimited()`, the terminal tells "backhaul limited" from "weak signal" by whether the radio
+  alone meets GOOD (`TerminalLink.problemOf`). `backhaulLimited()` is true under any capped cell, even
+  when the radio itself is short (NOTES.md, slice 13, decision 2).* The Storage Terminal's GOOD requirement is already refused
   under a LIMITED cell through the capped verdict (both tickers pass the cap); its HUD can say
   "backhaul limited" rather than "weak signal" with `DeviceContext.backhaulLimited()`. "Within
   `fiberRadiusBlocks` of a core site" can use `BackhaulNetwork.of(level).cores()` (every core of the
@@ -1432,6 +1554,28 @@ centroid, so 7 × 16 + 1 = 113). (g)
 - **[ ] Note for slice 16 (from slice 12).** Core Site, Backhaul Dish and Link Tool are creative-only
   until their recipes exist (§3C.6: iron block, redstone block, chest; iron, copper, lightning rod;
   stick, copper).
+- **[ ] Note for slice 16 (from slice 13).** The Storage Terminal is creative-only until its recipe
+  exists (§3C.6: ender pearl, copper, gold; late-mid). It is an item, so `HarvestGameTests` does not
+  cover it. It needs only the recipe.
+- **[ ] Note for slice 14 (from slice 13).** The Proximity Scanner can follow the terminal's pattern:
+  - keep the verdict per player in a `DeviceMemory`, as `TerminalLink` does;
+  - tell "backhaul limited" from "weak signal" with `TerminalLink.problemOf`'s rule (the radio level
+    against the requirement), or reuse it.
+
+  `SilentServerPlayer` and `SignalTicker.dispatchToCarried` let a game test check it through the
+  ticker's own scan and dispatch.
+- **[ ] Open, option for the slice 4 follow-up (from slice 13).** `SilentServerPlayer` drops every
+  packet in `send(Packet)`, before NeoForge's channel check runs. So it could stand on the real player
+  list, and a game test could run the ticker's per-player loop itself, the part still only checked in
+  game.
+  - It would have to be added to `PlayerList.getPlayers()` directly and removed after.
+    `placeNewPlayer` would send join packets and add it to the level.
+  - While it is on the list, an autosave would write its player data.
+  - Not done: the slice 13 tests call `dispatchToCarried`, which runs the ticker's scan, cap and
+    dispatch but not the loop, the stagger or the cache.
+- **[ ] Note (from slice 13).** The terminal keeps one record per player, not per terminal. Every
+  terminal has the same requirement, so two carried terminals share it with no difference. If a later
+  slice adds a terminal with another requirement (an upgraded one), key the record by requirement.
 
 ### Phase 3B review round 1: the four findings
 

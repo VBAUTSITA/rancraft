@@ -80,6 +80,15 @@ To run a headless dedicated server instead: `.\gradlew.bat runServer`
     devices it serves at FAIR (the meter shows `BH: LIMITED (capped FAIR)`). `/rancraft backhaul status
     [radius]` lists off-air and limited cells and every link's figures. Also `backhaulRecomputeTicks`
     and `enableRainFade`. Creative tab only for now.
+  - *Storage Terminal:* opens a chest or barrel in the data centre over the mobile network.
+    - **Binding:** sneak + use it on a chest or barrel within `fiberRadiusBlocks` (24) of a Core Site.
+    - **Opening:** use it in the air. The chest's ordinary screen opens if you have GOOD service on
+      band_1800 or band_3500 (carry it in a hand or the hotbar for a moment first), the chest's chunk
+      is loaded and it is in your dimension. Otherwise the action bar says why ("storage unreachable",
+      "needs band tier 2", "signal too weak", "backhaul limited").
+    - **Losing the session:** the screen closes with "connection lost" when you lose that service, as
+      a download stops.
+    - It never loads a chunk and never lifts the chest's lid. Creative tab only for now.
 
 See `VISION.md` for the full design of the vision feature, `VISION_STEP3.md` for Step 3 (the
 drive-test log, and the planned automatic problem diagnosis), and `NOTES.md` for the full build log,

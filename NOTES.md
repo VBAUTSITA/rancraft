@@ -4580,3 +4580,281 @@ run, after a warm-up; wall-clock in a shared JVM, an order of magnitude:
 | `./gradlew runGameTestServer` | 23 batches run, "All 36 required tests passed" (32 + 2 harvest + 2 backhaul); the log shows the status command's output and the cost line |
 | Versions | `PROTOCOL_VERSION` 9, `SignalSamplePayload.VERSION` 4, `BackhaulLinksPayload.VERSION` 1; `AntennaBlockEntity.DATA_VERSION` 3 (unchanged); dish entity and network file `DataVersion` 1 |
 | In game | needs the user (`PHASE_3.md`, slice 12 checks): the lens lines and the greyed lobe, the meter's line, a real tree, a real storm |
+
+## Slice 13 — Wireless Storage Terminal (§3C.3)
+
+A Storage Terminal item that opens a chest or barrel in the data centre over the mobile network. It
+rides the player's existing evaluation (a `SignalDevice`, GOOD on band tier 2), it opens a session only
+on an OK verdict, and it closes the session when the verdict fails. The code went in `6a0ab89`
+(part 1 of 2). The game tests, these notes and the tracker went in "Phase 3 slice 13: Wireless Storage
+Terminal".
+
+An earlier attempt at this slice was interrupted. It had written the item, the menu, the terminal's
+per-player record, its unit tests and two game-test helpers. That work was uncommitted but green (567
+tests). This step reviewed it against §3C.3 and against the 1.21.1 and NeoForge 21.1.251 sources, kept
+it and committed it as a checkpoint. It then wrote the runtime tests (`StorageTerminalGameTests`), ran
+them and measured.
+
+### What was built
+
+- **`storage_terminal`** (`StorageTerminalItem`): stacks to 1. It is in the creative tab and has
+  placeholder art (the bundle texture). Its tooltip gives the requirement and what it is bound to. It
+  is a `SignalDevice` with `StorageTerminal.REQUIREMENT` = GOOD, tier 2 (band_1800 or band_3500). The
+  ticker dispatches the player's one sample to it like any device. It keeps the verdict and computes
+  nothing.
+- **Binding** (sneak + use on a block, `StorageTerminal.bind`):
+  - It binds a chest (a trapped chest too) or a barrel, and only one within `fiberRadiusBlocks` (24) of
+    a Core Site of the same dimension.
+  - The distance is horizontal and inclusive, by the backhaul graph's own fiber rule
+    (`BackhaulGraph.Topology.onFiber`).
+  - Any core counts, loaded or not (`BackhaulNetwork.cores()`).
+  - The binding is the data component `rancraft:storage_terminal_target`, a `GlobalPos` (dimension and
+    position), persistent and synced so the tooltip can show it.
+  - Anything else is refused with the reason, and the old binding is kept.
+- **Opening** (use, `StorageTerminal.open`): it opens nothing, and says why on the action bar
+  ("Storage Terminal: …"), unless all of these hold:
+  - the terminal is bound;
+  - the storage is in this dimension ("storage unreachable: it is in …");
+  - the terminal's last verdict is OK and at most two intervals old;
+  - a Core Site is still within reach of the storage;
+  - the storage's chunk is FULL (`getChunkNow`; for a double chest, the other half's chunk too);
+  - it is still a chest or barrel of 27 or 54 slots;
+  - vanilla's container lock (`canOpen`) allows it.
+
+  It then unpacks a loot table as vanilla's chest does, and opens a `RemoteContainerMenu` titled
+  "Storage Terminal: <name>".
+- **`RemoteContainerMenu`** (new package `dev.rancraft.menu`): a `ChestMenu` on vanilla's
+  `GENERIC_9x3` or `GENERIC_9x6` menu type. The client therefore opens its ordinary chest screen. No
+  menu type is registered, no payload is added and no client code is written. Its `stillValid` replaces
+  "within 4 blocks". Vanilla's `ServerPlayer.tick` runs it every tick and closes the menu when it fails,
+  and the server's click handler runs it on every click. It holds while all of these hold:
+  1. the player is in the storage's dimension;
+  2. the **last verdict** for that player (`TerminalLink`) is OK and at most two evaluation intervals
+     old. That is the verdict the ticker computed, with the backhaul cap already applied. Nothing is
+     evaluated here (§3C.3);
+  3. a Core Site is still within reach. If the session's core goes, another core in reach takes over;
+  4. every block entity behind the container still exists and its chunk is FULL. Nothing is loaded
+     here: a chunk that leaves FULL ends the session.
+
+  The first rule to fail is kept. When the menu closes, the player is told "Storage Terminal:
+  connection lost (<reason>)", for example "(signal too weak: FAIR, needs GOOD)". That is the lesson
+  of §3C.3: your download stopped.
+- **`RemoteContainer`**: the view the menu's slots use. Every slot read, write, stack limit and change
+  goes straight to the real container, so hoppers and a player standing at the chest see the same
+  items. It does not pass on `startOpen` / `stopOpen` (see decision 5) or `stillValid`.
+- **`TerminalLink`** (`device`): the terminal's record for one player. It holds:
+  - the verdict, and the dispatch's game time (not the sample's timestamp, so a replay is a current
+    verdict);
+  - the radio's own level and the backhaul cap;
+  - the serving band and its tier.
+
+  `problemOf` turns a record into NO_READING, NO_SERVICE, WEAK_SIGNAL, BACKHAUL_LIMITED or LOW_TIER.
+  The record lives in a `DeviceMemory` ("storage_terminal.link"), so it is forgotten on logout,
+  dimension change and respawn.
+- `RanCraftConfig.evaluationIntervalTicks()`, so the session check reads the interval without building
+  a `snapshot()` every tick.
+- **Game-test support:**
+  - `SilentServerPlayer` (`gametest`): a real `ServerPlayer`, neither on the player list nor in the
+    level, whose connection drops every packet and which keeps every message it is told.
+  - `SignalTicker.dispatchToCarried` (public, for game tests only): the ticker's own carried-device scan
+    and dispatch, with the serving cell's cap.
+  - The chunk and placement helpers of `BackhaulGameTests` are now package-private.
+- Language entries for the item, the tooltip, the binding and every reason.
+
+### Where each part of §3C.3 lives
+
+| §3C.3 | Where | Pinned by |
+|---|---|---|
+| Item; sneak + use a chest or barrel to bind (dimension + position) | `StorageTerminalItem.useOn`, `StorageTerminal.bind`, `ModDataComponents.STORAGE_TERMINAL_TARGET` | session game test: plain use binds nothing, a far chest and a dispenser refused, chest, double chest and barrel bound |
+| Bound container within `fiberRadiusBlocks` of a core site | `StorageTerminal.nearestCore` / `coreServes` (the graph's fiber rule), at bind, open and every session tick | `StorageTerminalTest.nearCore` (same rule as `BackhaulGraph`, 53 × 53 offsets); session test: 40 blocks refused; the core broken mid-session closes it, and bind and open are then refused |
+| Requirement GOOD, tier 2 (a `SignalDevice`) | `StorageTerminal.REQUIREMENT`, `StorageTerminalItem` | `StorageTerminalTest.requirement`; session test: band_900 refused "needs band tier 2", band_1800 opens |
+| Opens on an OK verdict, a loaded chunk, still 27 or 54 slots; `RemoteContainerMenu` wrapping `ChestMenu` | `StorageTerminal.open` / `resolve`, `RemoteContainerMenu` | session test: chest 3 rows, double chest 6 rows (both halves, vanilla's order), barrel 3 rows; a barrel replaced by a dispenser is refused |
+| `stillValid` checks the last verdict for that player, not a fresh evaluation | `RemoteContainerMenu.check`, `TerminalLink` | session test: held over 3 intervals (from the hotbar too); a weak signal, the terminal going unheard (closed 41-42 ticks after its last dispatch), a broken half and the core going each close it, through vanilla's `ServerPlayer.tick` |
+| Losing service closes the menu | as above, with `removed` telling the player | session test (weak signal); backhaul test (LIMITED) |
+| Same dimension only | `StorageTerminal.open`, `RemoteContainerMenu.check` | session test: a Nether binding refused, no Nether chunk loaded |
+| Never force-load a chunk; "storage unreachable" | `StorageTerminal.resolve` (`getChunkNow` only), `RemoteContainerMenu.check` | unloaded test: the chunk released closes the session; a use is refused and loads nothing, before and after the chunk really unloads |
+| Respect the LIMITED backhaul cap | the ticker's capped verdict (slice 12) kept in `TerminalLink`; BACKHAUL_LIMITED told apart | `StorageTerminalTest.limitedCellStopsTheTerminal`; backhaul test (the 3C done-when) |
+
+### Decisions and deviations
+
+1. **How old the "last verdict" may be: two evaluation intervals** (`TerminalLink.maxAgeTicks`).
+   - The ticker renews the verdict only while the terminal is carried. A terminal put away, dropped,
+     or moved into the very chest it opened would otherwise keep an OK session forever.
+   - The limit is two intervals, not one, so a single missed dispatch does not cut a session. That
+     happens when the terminal sits on the cursor at the dispatch tick.
+   - Measured: the session ends 41 or 42 ticks after the last dispatch, at interval 20.
+   - Losing service is noticed at the next dispatch, at most one interval (1 s) later.
+2. **LOW_QUALITY is told as "weak signal" or "backhaul limited"** (`TerminalLink.problemOf`). It is
+   "backhaul limited" when the radio alone meets the requirement and only the cap fails it, and "weak
+   signal" otherwise.
+   - Slice 12's note suggested `DeviceContext.backhaulLimited()`. That is true whenever the cell is
+     capped, even when the radio itself is short, and then the player would fix the wrong thing.
+   - There is no new verdict (slice 12, decision 6).
+3. **"Near a core" holds whatever `requireBackhaul` says.**
+   - The terminal is a new item, so a Phase 2 world plays exactly as before.
+   - Storage in the data centre is the item's premise (§3C.3).
+   - The rule is the graph's fiber rule: horizontal, inclusive, height ignored. It is checked at bind,
+     at open and on every tick of a session.
+4. **"A RemoteContainerMenu wrapping ChestMenu" is a subclass of `ChestMenu`** on vanilla's menu types.
+   - The slot layout, quick-move and client screen are vanilla's.
+   - Nothing new crosses the wire: no menu type, no payload, `PROTOCOL_VERSION` unchanged (9).
+   - The client decides nothing about the session.
+5. **A remote session does not open the lid.** `RemoteContainer` does not pass on `startOpen` /
+   `stopOpen`, so there is no lid, no sound, no `CONTAINER_OPEN` game event for a sculk sensor and no
+   trapped-chest signal. This is also a correctness fix, checked in the 1.21.1 sources:
+   - Vanilla's opener counter rechecks five ticks after an open, counting only players within a few
+     blocks whose menu holds the chest. It would reset a remote open to 0.
+   - The remote close would then take the count to −1.
+   - The next player to open the chest by hand would then not lift its lid.
+   - The session test checks that the count stays 0 through a remote open and close.
+6. **A double chest is resolved by vanilla's own `ChestBlock.getContainer`** with `ignoreBlocked`.
+   - It runs only after both halves' chunks are FULL, because it reads the neighbour through the level,
+     which would load a chunk.
+   - A missing half makes the chest a single chest, as in vanilla. An unloaded half is refused as
+     "unloaded".
+   - A cat or a block on the lid does not stop a remote session: nothing is lifted.
+7. **Vanilla's lock applies** (`BaseContainerBlockEntity.canOpen`). The key is checked in the main hand,
+   so a locked chest opens only with a terminal named after the lock, held in the main hand. Vanilla
+   tells the player the chest is locked.
+8. **No reading, no session.** A use before the terminal has been carried through one dispatch is
+   refused: "no signal reading. Carry it in a hand or the hotbar for a moment". The terminal never
+   triggers an evaluation: devices never compute RF, and each receiver gets one evaluation per
+   interval.
+9. **Another dimension is refused before anything else is looked at**, so it needs no coverage there,
+   and nothing is loaded in that dimension.
+10. **No HUD of its own.** The action bar gives the reason, and a carried Field Test Meter already reads
+    "BH: LIMITED (capped FAIR)".
+11. **The backhaul cap needed no code of its own.** Since slice 12 the verdict the ticker hands the
+    terminal is the capped one, so a cell turning LIMITED ends the session at the next dispatch.
+
+### Honest-abstraction notes (also at the code sites)
+
+- **Network-attached storage in the data centre** (`StorageTerminal` class comment): a chest within
+  `fiberRadiusBlocks` of a Core Site stands in for storage on the core network, by the same implicit
+  fiber the graph uses. It is not "any chest anywhere".
+- **GOOD on tier 2 stands in for a session's throughput** (`StorageTerminal`): there is no traffic or
+  throughput model (Phase 4).
+- **An unloaded data centre is unreachable** (`StorageTerminal` class comment): real storage is always
+  on. Here, to keep the server's cost bounded, the storage is read only from a FULL chunk.
+- **A remote session does not lift the lid** (`RemoteContainer`): decision 5.
+- **The session lives on the last verdict, up to two intervals old** (`TerminalLink`): decision 1. It
+  stands in for a session that notices a dropped link within about a second.
+
+### Measured
+
+`StorageTerminalGameTests` on the live game-test server (flat world, forced chunks, JDK 21, this
+machine), one run, after a warm-up of 5,000 calls:
+
+| What | Cost |
+|---|---|
+| An open session's per-tick check (`stillValid` with every rule holding: dimension, verdict, core, two chunk lookups) | 0.437 µs |
+| The terminal's work per dispatch | one map write; it adds no evaluation (it rides the player's one) |
+
+- Along a default band_1800 sector's boresight in open air (flat world, 100 blocks up), the signal
+  drops below GOOD 195 blocks out. There it is FAIR on RSRP with SINR 23.0 dB. That point is the test's
+  "weak signal".
+- The other cost lines in this run were higher than in slice 12. This slice touches none of those
+  paths, so the likely cause is a busier machine: two VS Code Java language servers were running
+  beside the game test.
+  - 200 radio links: median 75.3 µs/tick (window range 51.7-77.3), still under the 100 µs gate.
+  - 200 fixed receivers: 29.5 µs/tick.
+  - The backhaul march: 0.40 µs per block.
+  - A recompute marching three hops: 576 µs.
+
+### Tests
+
+- **Unit** (8 new, 567 in all), `StorageTerminalTest`:
+  - the requirement;
+  - the record from a context (a replay keeps the dispatch's tick, the cap and the serving band and
+    tier);
+  - freshness (two intervals inclusive);
+  - every reason, including BACKHAUL_LIMITED against WEAK_SIGNAL under a capped cell;
+  - the 3C done-when's terminal half (a LIMITED cell stops it, the same radio uncapped does not, and
+    the sample is untouched);
+  - the player's words and their arguments;
+  - rows for 27 and 54 slots and no others;
+  - "near a core", equal to the graph's fiber rule over a 53 × 53 grid of offsets.
+- **Game** (`StorageTerminalGameTests`, 3 new, 39 in all, 26 batches). The player is a
+  `SilentServerPlayer` that each test ticks every tick, so vanilla's `stillValid` check and close run.
+  Once per interval the test evaluates the player's eye position against the site registry and
+  dispatches with `dispatchToCarried`:
+  - `binds_near_a_core_opens_and_closes_when_service_is_lost`:
+    - Binding: a plain use binds nothing; a chest 40 blocks from the core and a dispenser are refused;
+      a chest is bound.
+    - Refusals: no reading; a Nether binding (and no Nether chunk loaded); band_900 at GOOD+ refused
+      with (2, "band_900", 1).
+    - On band_1800, a session over the single chest:
+      - a stack put in through the menu is in the chest, and one put in the chest shows in the menu;
+      - shift-click moves a stack in;
+      - the chest's opener count stays 0;
+      - the cost is measured.
+    - The session held over three intervals, and over two more with the terminal in the hotbar (not
+      held).
+    - Walked out to the first point below GOOD: closed with "weak signal", then refused with
+      ("FAIR", "GOOD"); the opener count is still 0.
+    - Back in coverage, opened, then no longer dispatched: closed with "no reading" 41-42 ticks after
+      the last dispatch.
+    - A double chest bound at its left half: 6 rows, both halves in vanilla's order. Its right half
+      broken: closed with "not storage".
+    - A barrel: 3 rows. Closed by the player: nothing is reported lost. Replaced by a dispenser:
+      refused.
+    - The core broken during a session: closed with "no core", then open and bind are refused and the
+      old binding is kept.
+  - `an_unloaded_chunk_is_unreachable_and_never_loaded`: the storage's chunk is released while a
+    session is open. The session closes with "storage unreachable: its chunk is not loaded" while the
+    radio verdict is still OK. A use is refused and the chunk stays out of FULL, before and after it
+    really unloads (its chest entity removed; `hasChunk` false).
+  - `a_limited_cell_stops_the_terminal_the_radio_link_keeps_working` (`requireBackhaul` on): **the 3C
+    done-when**.
+    - Setup: a core, a chest beside it, a 1000-block hop (−33.55 dBm, UP), a band_1800 sector behind it
+      (FULL, uncapped), and a Radio Link pair on the same cell.
+    - With a session open, six oak leaves are placed with their events on the hop's midpoint, standing
+      in for a tree's canopy. Slice 7 showed tree growth moves the same region epochs.
+    - At the next allowed recompute the hop is DEGRADED by exactly 18 dB with the Fresnel zone clear,
+      and the cell is LIMITED, still on the air, capped at FAIR.
+    - The session closes with "backhaul limited". The terminal's record reads LOW_QUALITY, radio GOOD+
+      and cap FAIR, and the sample's own level is GOOD+. A use is refused with ("FAIR", "GOOD").
+    - The Radio Link (POOR) is served under the cap and follows its transmitter off and on again.
+    - The leaves cut out with their events: UP, FULL, and the terminal opens again.
+  - `HarvestGameTests` is unchanged: the slice adds no block.
+
+### APIs verified against sources (new to this codebase)
+
+- **`ServerPlayer`:**
+  - `openMenu(MenuProvider)` (NeoForge-patched; `OptionalInt`; it closes an open menu first, creates
+    the menu, sends `ClientboundOpenScreenPacket`, `initMenu`s it and posts `PlayerContainerEvent.Open`).
+  - `tick()`: `broadcastChanges`, then `if (!containerMenu.stillValid(this)) closeContainer()`.
+  - `closeContainer` and `doCloseContainer` (`menu.removed`, `PlayerContainerEvent.Close`).
+  - `ServerGamePacketListenerImpl.handleContainerClick` checks `stillValid` before every click.
+- **`ChestMenu`:**
+  - `ChestMenu(MenuType, int, Inventory, Container, int)` calls `container.startOpen`; `removed` calls
+    `stopOpen`; `stillValid` asks the container.
+  - `getRowCount`, `getContainer`, `quickMoveStack`; `MenuType.GENERIC_9x3` / `GENERIC_9x6`.
+- **`ChestBlock`:**
+  - `getContainer(ChestBlock, BlockState, Level, BlockPos, boolean ignoreBlocked)`.
+  - `getConnectedDirection` (LEFT is clockwise of the facing).
+  - The combiner puts the RIGHT half first (`getBlockType`: RIGHT is FIRST).
+  - The neighbour is read through the level, which loads a chunk.
+- **`ContainerOpenersCounter`:** `incrementOpeners` / `decrementOpeners` / `recheckOpeners` (decision
+  5); `ChestBlockEntity.getOpenCount(BlockGetter, BlockPos)`.
+- **Locks and loot:** `BaseContainerBlockEntity.canOpen(Player)` (the lock key in the main hand, with
+  its own message and sound); `RandomizableContainer.unpackLootTable(Player)`.
+- **Chunk lookups:** `ServerChunkCache.getChunkNow` (main thread only; a chunk only at FULL, never a
+  load) and `hasChunk`.
+- **The silent player** (as NeoForge's `FakePlayer` builds its own):
+  - `ServerGamePacketListenerImpl(MinecraftServer, Connection, ServerPlayer, CommonListenerCookie)`,
+    `CommonListenerCookie.createInitial(GameProfile, boolean)`;
+  - `Connection(PacketFlow)` with `setListenerForServerboundHandshake` overridden;
+  - NeoForge's `FakePlayer` overrides `openMenu` (opens nothing) and `tick` (does nothing), which is
+    why the tests use `SilentServerPlayer` instead.
+- **Game test:** `GameTestHelper.onEachTick(Runnable)`.
+
+### Verification
+
+| Check | Result |
+|---|---|
+| `./gradlew build` | **567 passed, 0 failed, 0 skipped** (559 + 8) |
+| `rf` / `util` purity | `PackagePurityTest` passes (this slice adds nothing to `rf` or `util`) |
+| `./gradlew runGameTestServer` | 26 batches run, "All 39 required tests passed" (36 + 3); the log shows the cost line and the weak point |
+| Versions | unchanged: `PROTOCOL_VERSION` 9, `SignalSamplePayload.VERSION` 4, `AntennaBlockEntity.DATA_VERSION` 3; no new payload, no new block, no new save format (the binding is an item data component) |
+| In game | needs the user (`PHASE_3.md`, slice 13 checks): the chest screen opening and closing on the client, the action-bar text |
