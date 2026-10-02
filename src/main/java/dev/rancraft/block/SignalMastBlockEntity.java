@@ -107,12 +107,13 @@ public class SignalMastBlockEntity extends AntennaBlockEntity {
 
     /**
      * Only a column's base transmits, and not when a sector antenna sits on top (a mounting pole).
-     * With {@code requireRedstone} on, the column needs any of its masts powered.
+     * With {@code requireRedstone} on, the column needs any of its masts powered. Backhaul (slice 12)
+     * is applied on top, in {@link #isTransmitting()}, to the base's cell.
      */
     @Override
-    public boolean isTransmitting() {
+    protected boolean eligibleToTransmit() {
         if (level == null) {
-            return super.isTransmitting();
+            return super.eligibleToTransmit();
         }
         BlockPos pos = getBlockPos();
         if (!MastColumn.isBase(level, pos)) {

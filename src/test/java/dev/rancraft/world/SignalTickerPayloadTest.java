@@ -71,6 +71,18 @@ class SignalTickerPayloadTest {
         return ByteBufUtil.hexDump(buf);
     }
 
+    /**
+     * The captured v3 bytes as v4 writes them (Phase 3 slice 12): the version byte (the first, a
+     * one-byte VarInt) becomes 04 and the backhaul cap is appended, 04 (EXCELLENT, no cap: the ticker
+     * sets a cap only when it sends). Every byte in between is the capture's, so the gate still holds.
+     */
+    private static String v4(String v3Bytes) {
+        if (!v3Bytes.startsWith("03")) {
+            throw new IllegalArgumentException("not a v3 capture");
+        }
+        return "04" + v3Bytes.substring(2) + "04";
+    }
+
     // Captured from commit bd996d6 (slice 0 + gate fixes), before the slice 4 refactor.
     private static final String SERVED_BYTES = "030400000000000000640a50ecffffff0fc051d00000000000405ee000000000004058b0"
             + "000000000000000000000000000862616e645f39303007402d000000000000c028000000000000c00200000000000000"
@@ -98,7 +110,7 @@ class SignalTickerPayloadTest {
                 served(), CANDIDATES, 1_200_345L, RfConfig.DEFAULTS, BANDS, -1234.5, 71.62, 987.25);
         assertEquals("PCI 10 collides with site at -150, 90, 60", payload.servingConflictNote(),
                 "fixture: the collision outranks the mod-3 warning");
-        assertEquals(SERVED_BYTES, hex(payload));
+        assertEquals(v4(SERVED_BYTES), hex(payload));
     }
 
     @Test
@@ -107,7 +119,7 @@ class SignalTickerPayloadTest {
         SignalSamplePayload payload = SignalTicker.toPayload(
                 SignalSample.empty(1_200_365L, 3), CANDIDATES, 1_200_365L, RfConfig.DEFAULTS, BANDS,
                 -1234.0, 71.62, 988.0);
-        assertEquals(EMPTY_BYTES, hex(payload));
+        assertEquals(v4(EMPTY_BYTES), hex(payload));
     }
 
     @Test
@@ -116,6 +128,6 @@ class SignalTickerPayloadTest {
         SignalSamplePayload payload = SignalTicker.toPayload(
                 unknownBand(), CANDIDATES, 1_200_385L, RfConfig.DEFAULTS, BANDS, 5.5, 67.62, 17.0);
         assertEquals("band_900", payload.servingBandId());
-        assertEquals(UNKNOWN_BAND_BYTES, hex(payload));
+        assertEquals(v4(UNKNOWN_BAND_BYTES), hex(payload));
     }
 }

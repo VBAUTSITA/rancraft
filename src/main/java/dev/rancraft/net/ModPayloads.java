@@ -45,9 +45,14 @@ public final class ModPayloads {
      *       appends the antenna's radio tier and each band's capacity tier. A slice 9 client would
      *       stop reading early. The antennas' update tag also gains {@code RadioTier} (a saved field,
      *       {@code DATA_VERSION} 3).
+     *   <li><b>9</b> -- Phase 3 slice 12 (backhaul, §3C.2): {@link SignalSamplePayload} v4 appends the
+     *       serving cell's backhaul cap (the meter's "BH: LIMITED (capped FAIR)"), and
+     *       {@link BackhaulLinksPayload} is new (the lens's microwave hops). The Link Tool's data
+     *       component is synced. A slice 11 client would stop reading the sample one field early and has
+     *       no handler for the hops.
      * </ul>
      */
-    private static final String PROTOCOL_VERSION = "8";
+    private static final String PROTOCOL_VERSION = "9";
 
     @SubscribeEvent
     public static void register(RegisterPayloadHandlersEvent event) {
@@ -87,6 +92,13 @@ public final class ModPayloads {
                 LocatorFixPayload.TYPE,
                 LocatorFixPayload.STREAM_CODEC,
                 (payload, context) -> context.enqueueWork(() -> ClientLocatorState.accept(payload)));
+
+        // Phase 3 slice 12: the microwave hops near a lens wearer, with the server's measured state.
+        // Same pattern: the client state class is named only inside the handler.
+        registrar.playToClient(
+                BackhaulLinksPayload.TYPE,
+                BackhaulLinksPayload.STREAM_CODEC,
+                (payload, context) -> context.enqueueWork(() -> ClientLensState.acceptBackhaul(payload)));
 
         registrar.playToServer(
                 UpdateCellParamsPayload.TYPE,

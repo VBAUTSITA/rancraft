@@ -5,6 +5,7 @@ import dev.rancraft.RanCraft;
 import dev.rancraft.item.LensSettings;
 import dev.rancraft.item.LocatorWaypoints;
 import java.util.function.Supplier;
+import net.minecraft.core.GlobalPos;
 import net.minecraft.core.component.DataComponentType;
 import net.minecraft.network.codec.ByteBufCodecs;
 import net.neoforged.bus.api.IEventBus;
@@ -48,6 +49,15 @@ public final class ModDataComponents {
             DATA_COMPONENTS.registerComponentType("locator_waypoints", builder -> builder
                     .persistent(LocatorWaypoints.CODEC)
                     .networkSynchronized(LocatorWaypoints.STREAM_CODEC));
+
+    /**
+     * The Link Tool's first dish (Phase 3 slice 12, §3C.2): set when it is used on a dish, cleared when
+     * it pairs that dish with the next one. Synced so the tooltip can show it.
+     */
+    public static final Supplier<DataComponentType<GlobalPos>> LINK_TOOL_SOURCE =
+            DATA_COMPONENTS.registerComponentType("link_tool_source", builder -> builder
+                    .persistent(GlobalPos.CODEC)
+                    .networkSynchronized(GlobalPos.STREAM_CODEC));
 
     public static void register(IEventBus modBus) {
         DATA_COMPONENTS.register(modBus);

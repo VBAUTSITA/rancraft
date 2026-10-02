@@ -1,0 +1,9 @@
+{
+  "_comment": "Placeholder art: vanilla textures, no PNGs shipped. A daylight-detector face on iron stands in for a dish. Swap when real art exists.",
+  "parent": "minecraft:block/cube_bottom_top",
+  "textures": {
+    "top": "minecraft:block/daylight_detector_top",
+    "side": "minecraft:block/iron_block",
+    "bottom": "minecraft:block/iron_block"
+  }
+}

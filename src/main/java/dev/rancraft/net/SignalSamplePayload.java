@@ -43,6 +43,13 @@ import net.minecraft.resources.ResourceLocation;
  *                              can exceed the {@value #MAX_CELLS} carried in {@link #cells()}. The
  *                              drive-test log's {@code cells} column needs the real count: capped at
  *                              four it would hide exactly the pilot-pollution case it exists for.
+ * @param serviceCap            <b>Phase 3 slice 12 (VERSION 4).</b> The ceiling the serving cell's
+ *                              backhaul puts on its devices' service level, as the server applied it
+ *                              when it dispatched this sample ({@code BackhaulGraph.serviceCap}): FAIR
+ *                              for a backhaul-limited cell while {@code requireBackhaul} is on,
+ *                              {@link ServiceLevel#EXCELLENT} (no cap) otherwise. The meter shows it
+ *                              as a note ({@link #backhaulNote()}); every other field is the radio
+ *                              link alone, untouched by it. The client computes no backhaul.
  */
 public record SignalSamplePayload(
         int version,
@@ -63,7 +70,9 @@ public record SignalSamplePayload(
         double rxX,
         double rxY,
         double rxZ,
-        int cellsHeard
+        int cellsHeard,
+        // ---- Phase 3 slice 12 (VERSION 4) ----
+        ServiceLevel serviceCap
 ) implements CustomPacketPayload {
 
     public static final int MAX_CELLS = 4;
@@ -75,9 +84,11 @@ public record SignalSamplePayload(
      *   <li><b>2</b> -- Phase 2 added SINR, the serving cell id and the pattern figures.
      *   <li><b>3</b> -- RF Vision Step 3a appended the evaluation point ({@code rxX, rxY, rxZ}) and
      *       {@code cellsHeard}, for the drive-test trail.
+     *   <li><b>4</b> -- Phase 3 slice 12 appended {@code serviceCap}, the serving cell's backhaul cap
+     *       (§3C.2), for the meter's "BH: LIMITED (capped FAIR)".
      * </ul>
      */
-    public static final int VERSION = 3;
+    public static final int VERSION = 4;
 
     private static final int MAX_NOTE_LENGTH = 160;
 
@@ -123,7 +134,51 @@ public record SignalSamplePayload(
                 metersPerBlock,
                 conflictNote == null ? "" : conflictNote,
                 rxX, rxY, rxZ,
-                cells.size());
+                cells.size(),
+                ServiceLevel.EXCELLENT);
+    }
+
+    /**
+     * Slice 12: a missing backhaul cap ({@code null}) is no cap. Nothing else is checked here, as
+     * before.
+     */
+    public SignalSamplePayload {
+        if (serviceCap == null) {
+            serviceCap = ServiceLevel.EXCELLENT;
+        }
+    }
+
+    /**
+     * This payload with the serving cell's backhaul cap as of now (slice 12). The ticker caches a
+     * payload with its evaluation and sets the cap each time it sends it, replays included, because a
+     * cell's backhaul can change while nothing the evaluation depends on does.
+     */
+    public SignalSamplePayload withServiceCap(ServiceLevel cap) {
+        ServiceLevel value = cap == null ? ServiceLevel.EXCELLENT : cap;
+        if (value == serviceCap) {
+            return this;
+        }
+        return new SignalSamplePayload(
+                version, cells, timestampTick, servingCellId, sinrDb, interferenceDbm, noiseDbm,
+                serviceLevel, handoverCount, coChannelCount, servingBandId, servingFrequencyMhz,
+                metersPerBlock, servingConflictNote, rxX, rxY, rxZ, cellsHeard, value);
+    }
+
+    /**
+     * The meter's backhaul line (§3C.2), or empty when the backhaul caps nothing:
+     * {@code "BH: LIMITED (capped FAIR)"} for a backhaul-limited serving cell, {@code "BH: NONE (no
+     * backhaul)"} for one with none (with {@code requireBackhaul} on such a cell goes off the air, so
+     * this shows only for the moment before it does). Built from the server's cap; the client judges
+     * nothing.
+     */
+    public String backhaulNote() {
+        if (serviceCap == ServiceLevel.EXCELLENT || !hasServing()) {
+            return "";
+        }
+        if (serviceCap == ServiceLevel.NONE) {
+            return "BH: NONE (no backhaul)";
+        }
+        return "BH: LIMITED (capped " + serviceCap.label() + ")";
     }
 
     /** An out-of-service sample evaluated at this point. */
@@ -132,7 +187,7 @@ public record SignalSamplePayload(
                 VERSION, List.of(), tick, ReceiverState.NO_CELL,
                 Double.NEGATIVE_INFINITY, Double.NEGATIVE_INFINITY, 0.0,
                 ServiceLevel.NONE, handoverCount, 0, "", 0.0, 1.0, "",
-                rxX, rxY, rxZ, 0);
+                rxX, rxY, rxZ, 0, ServiceLevel.EXCELLENT);
     }
 
     /**
@@ -251,6 +306,8 @@ public record SignalSamplePayload(
         buf.writeDouble(payload.rxY);
         buf.writeDouble(payload.rxZ);
         buf.writeVarInt(payload.cellsHeard);
+        // ---- VERSION 4 ----
+        buf.writeByte(payload.serviceCap.ordinal());
     }
 
     private static SignalSamplePayload read(FriendlyByteBuf buf) {
@@ -281,11 +338,12 @@ public record SignalSamplePayload(
         double rxY = buf.readDouble();
         double rxZ = buf.readDouble();
         int cellsHeard = buf.readVarInt();
+        ServiceLevel serviceCap = serviceLevelOf(buf.readByte());
 
         return new SignalSamplePayload(
                 version, cells, tick, servingCellId, sinrDb, interferenceDbm, noiseDbm,
                 serviceLevel, handoverCount, coChannelCount, bandId, frequencyMhz, metersPerBlock, note,
-                rxX, rxY, rxZ, cellsHeard);
+                rxX, rxY, rxZ, cellsHeard, serviceCap);
     }
 
     private static ServiceLevel serviceLevelOf(byte ordinal) {

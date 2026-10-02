@@ -1,5 +1,6 @@
 package dev.rancraft.client;
 
+import dev.rancraft.net.BackhaulLinksPayload;
 import dev.rancraft.net.CoverageSurveyPayload;
 import dev.rancraft.net.LensLinksPayload;
 
@@ -50,6 +51,12 @@ public final class ClientLensState {
     /** The last observed gap between link payloads, or 0 before two have arrived. */
     private static volatile long linksGapMillis = 0L;
     private static volatile CoverageSurveyPayload coverage = null;
+    /**
+     * Phase 3 slice 12: the microwave hops near the wearer, with the state the server measured. Kept
+     * until the next payload replaces it: the server sends the set when it changes, and an empty one
+     * when it empties, so it never goes stale by age.
+     */
+    private static volatile BackhaulLinksPayload backhaul = BackhaulLinksPayload.empty();
 
     public static void acceptLinks(LensLinksPayload payload) {
         long now = System.currentTimeMillis();
@@ -70,6 +77,15 @@ public final class ClientLensState {
      */
     public static void acceptCoverage(CoverageSurveyPayload payload) {
         coverage = payload;
+    }
+
+    public static void acceptBackhaul(BackhaulLinksPayload payload) {
+        backhaul = payload;
+    }
+
+    /** The latest microwave hops; never {@code null}, empty before the first arrives. */
+    public static BackhaulLinksPayload backhaul() {
+        return backhaul;
     }
 
     /** The latest links; never {@code null}, empty before the first arrives. */
@@ -104,5 +120,6 @@ public final class ClientLensState {
         linksReceivedMillis = 0L;
         linksGapMillis = 0L;
         coverage = null;
+        backhaul = BackhaulLinksPayload.empty();
     }
 }

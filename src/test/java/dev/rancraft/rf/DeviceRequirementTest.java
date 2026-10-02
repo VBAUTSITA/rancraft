@@ -110,6 +110,32 @@ class DeviceRequirementTest {
     }
 
     @Test
+    @DisplayName("slice 12: a service cap is checked against the capped level; EXCELLENT caps nothing; the sample is untouched")
+    void serviceCap() {
+        SignalSample goodOn3500 = served(1L, ServiceLevel.GOOD, cell(1L, -75.0, "band_3500"));
+        SignalSample copy = served(1L, ServiceLevel.GOOD, cell(1L, -75.0, "band_3500"));
+        assertEquals(Verdict.OK, GOOD_TIER_3.check(goodOn3500, BANDS, ServiceLevel.EXCELLENT));
+        assertEquals(Verdict.LOW_QUALITY, GOOD_TIER_3.check(goodOn3500, BANDS, ServiceLevel.FAIR),
+                "LIMITED backhaul: GOOD radio, FAIR delivered");
+        assertEquals(Verdict.OK, new DeviceRequirement(ServiceLevel.FAIR, 3).check(goodOn3500, BANDS, ServiceLevel.FAIR));
+        assertEquals(Verdict.OK, new DeviceRequirement(ServiceLevel.POOR, 1).check(goodOn3500, BANDS, ServiceLevel.FAIR));
+        assertEquals(copy, goodOn3500, "the check reads the sample, never changes it");
+
+        // The order of the reasons holds: no service is still NO_SERVICE, and a cap is LOW_QUALITY before LOW_TIER.
+        assertEquals(Verdict.NO_SERVICE, GOOD_TIER_3.check(SignalSample.empty(1L), BANDS, ServiceLevel.FAIR));
+        SignalSample excellentOn1800 = served(1L, ServiceLevel.EXCELLENT, cell(1L, -60.0, "band_1800"));
+        assertEquals(Verdict.LOW_QUALITY, GOOD_TIER_3.check(excellentOn1800, BANDS, ServiceLevel.FAIR));
+        assertThrows(NullPointerException.class, () -> GOOD_TIER_3.check(goodOn3500, BANDS, null));
+
+        // EXCELLENT is the two-argument check, for every level.
+        for (ServiceLevel level : ServiceLevel.values()) {
+            SignalSample sample = served(1L, level, cell(1L, -75.0, "band_3500"));
+            assertEquals(GOOD_TIER_3.check(sample, BANDS), GOOD_TIER_3.check(sample, BANDS, ServiceLevel.EXCELLENT),
+                    level.name());
+        }
+    }
+
+    @Test
     @DisplayName("NONE asks for nothing; a null level is rejected")
     void noneAndValidation() {
         assertEquals(ServiceLevel.NONE, DeviceRequirement.NONE.minServiceLevel());

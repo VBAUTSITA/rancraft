@@ -1,6 +1,8 @@
 package dev.rancraft.registry;
 
 import dev.rancraft.RanCraft;
+import dev.rancraft.block.BackhaulDishBlock;
+import dev.rancraft.block.CoreSiteBlock;
 import dev.rancraft.block.RadioLinkReceiverBlock;
 import dev.rancraft.block.RadioLinkTransmitterBlock;
 import dev.rancraft.block.SectorAntennaBlock;
@@ -58,6 +60,26 @@ public final class ModBlocks {
                     .strength(3.0F, 6.0F)
                     .requiresCorrectToolForDrops()
                     .sound(SoundType.COPPER));
+
+    /** Phase 3 slice 12, §3C.2: the core network; cells and dishes near it are on fiber. */
+    public static final DeferredBlock<CoreSiteBlock> CORE_SITE = BLOCKS.registerBlock(
+            "core_site",
+            CoreSiteBlock::new,
+            BlockBehaviour.Properties.of()
+                    .mapColor(MapColor.METAL)
+                    .strength(5.0F, 6.0F)
+                    .requiresCorrectToolForDrops()
+                    .sound(SoundType.METAL));
+
+    /** Phase 3 slice 12, §3C.2: one end of a point-to-point microwave backhaul hop. */
+    public static final DeferredBlock<BackhaulDishBlock> BACKHAUL_DISH = BLOCKS.registerBlock(
+            "backhaul_dish",
+            BackhaulDishBlock::new,
+            BlockBehaviour.Properties.of()
+                    .mapColor(MapColor.METAL)
+                    .strength(3.0F, 6.0F)
+                    .requiresCorrectToolForDrops()
+                    .sound(SoundType.METAL));
 
     public static void register(IEventBus modBus) {
         BLOCKS.register(modBus);

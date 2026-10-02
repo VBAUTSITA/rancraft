@@ -348,4 +348,34 @@ class BackhaulGraphTest {
             assertSame(expected, result.cell(1000L + i), "site " + i);
         }
     }
+
+    // ---- slice 12: the effects ------------------------------------------------------------------
+
+    @Test
+    @DisplayName("slice 12: with requireBackhaul on, LIMITED caps at FAIR, NONE at NONE, FULL and unknown cap nothing")
+    void serviceCapWithRequireBackhaul() {
+        assertSame(ServiceLevel.FAIR, BackhaulGraph.LIMITED_SERVICE_CAP);
+        assertSame(ServiceLevel.EXCELLENT, BackhaulGraph.serviceCap(BackhaulState.FULL, true));
+        assertSame(ServiceLevel.FAIR, BackhaulGraph.serviceCap(BackhaulState.LIMITED, true));
+        assertSame(ServiceLevel.NONE, BackhaulGraph.serviceCap(BackhaulState.NONE, true));
+        assertSame(ServiceLevel.EXCELLENT, BackhaulGraph.serviceCap(null, true), "not judged yet: no cap");
+    }
+
+    @Test
+    @DisplayName("slice 12: with requireBackhaul off (the default) backhaul caps nothing and keeps nothing off the air")
+    void requireBackhaulOffChangesNothing() {
+        for (BackhaulState state : new BackhaulState[] {BackhaulState.FULL, BackhaulState.LIMITED, BackhaulState.NONE, null}) {
+            assertSame(ServiceLevel.EXCELLENT, BackhaulGraph.serviceCap(state, false), String.valueOf(state));
+            assertEquals(true, BackhaulGraph.allowsOnAir(state, false), String.valueOf(state));
+        }
+    }
+
+    @Test
+    @DisplayName("slice 12: with requireBackhaul on only NONE is off the air; LIMITED and unknown cells transmit")
+    void onAirWithRequireBackhaul() {
+        assertEquals(true, BackhaulGraph.allowsOnAir(BackhaulState.FULL, true));
+        assertEquals(true, BackhaulGraph.allowsOnAir(BackhaulState.LIMITED, true));
+        assertEquals(false, BackhaulGraph.allowsOnAir(BackhaulState.NONE, true));
+        assertEquals(true, BackhaulGraph.allowsOnAir(null, true), "a cell newer than the last solve transmits until it");
+    }
 }

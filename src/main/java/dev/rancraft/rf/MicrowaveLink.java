@@ -174,6 +174,23 @@ public record MicrowaveLink(
             double marginDb,
             LinkState state,
             boolean outOfRange) {
+
+        /**
+         * One line for the dish's status and {@code /rancraft backhaul status} (Phase 3 slice 12): the
+         * state, RSL, margin to UP, Fresnel state and rain loss (§3C.2), then the length and the
+         * obstruction. Dot decimals whatever the locale.
+         */
+        public String describe() {
+            if (outOfRange) {
+                return String.format(java.util.Locale.ROOT, "DOWN, out of range (%.0f m)", distanceMeters);
+            }
+            String fresnel = fresnelClear
+                    ? "Fresnel clear"
+                    : String.format(java.util.Locale.ROOT, "Fresnel obstructed (+%.1f dB)", fresnelLossDb);
+            return String.format(java.util.Locale.ROOT,
+                    "%s, RSL %.1f dBm, margin %+.1f dB, %s, rain %.1f dB (%.0f m, obstruction %.1f dB)",
+                    state, rslDbm, marginDb, fresnel, rainLossDb, distanceMeters, obstructionDb);
+        }
     }
 
     /**
@@ -408,6 +425,32 @@ public record MicrowaveLink(
             perSegment[2 + 2 * i] = BinTraversal.binsAlong(o[0], o[2], bx, bz, binSize);
         }
         return BinTraversal.union(perSegment);
+    }
+
+    /**
+     * A voxel cap for {@link #evaluate} that no march of this hop can run out of (Phase 3 slice 12):
+     * the hop is then never {@link Budget#outOfRange() out of range}, however long, and its cost is
+     * set by its length alone. A march between two points enters exactly {@code |Δx| + |Δy| + |Δz|}
+     * voxels (the differences of their voxel coordinates, {@link RayMarcher}); a Fresnel segment
+     * covers about half the line plus the offset, so the line's count plus six offsets and a margin
+     * covers every march, the bend voxels' rounding included. The server bounds the length instead,
+     * when the dishes are paired.
+     */
+    public int stepsToReach(double ax, double ay, double az,
+                            double bx, double by, double bz,
+                            double metersPerBlock) {
+        long l1 = Math.abs((long) Math.floor(bx) - (long) Math.floor(ax))
+                + Math.abs((long) Math.floor(by) - (long) Math.floor(ay))
+                + Math.abs((long) Math.floor(bz) - (long) Math.floor(az));
+        double dx = bx - ax;
+        double dy = by - ay;
+        double dz = bz - az;
+        double lengthBlocks = Math.sqrt(dx * dx + dy * dy + dz * dz);
+        double offsetBlocks = metersPerBlock > 0.0
+                ? FRESNEL_CLEARANCE * fresnelRadiusMeters(lengthBlocks * metersPerBlock, 0.5) / metersPerBlock
+                : 0.0;
+        long cap = l1 + 6L * (long) Math.ceil(offsetBlocks) + 8L;
+        return (int) Math.min(Integer.MAX_VALUE, cap);
     }
 
     /** Dish A to the offset midpoint to dish B: true at the first voxel with non-zero attenuation. */

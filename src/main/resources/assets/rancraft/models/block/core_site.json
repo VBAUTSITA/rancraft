@@ -1,0 +1,9 @@
+{
+  "_comment": "Placeholder art: vanilla textures, no PNGs shipped. A lodestone-faced block reads as 'the place everything points to'. Swap when real art exists.",
+  "parent": "minecraft:block/cube_bottom_top",
+  "textures": {
+    "top": "minecraft:block/lodestone_top",
+    "side": "minecraft:block/lodestone_side",
+    "bottom": "minecraft:block/iron_block"
+  }
+}

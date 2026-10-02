@@ -60,6 +60,48 @@ public final class BackhaulGraph {
     private BackhaulGraph() {
     }
 
+    /**
+     * The ceiling a {@link BackhaulState#LIMITED} cell puts on the service level of every device it
+     * serves (§3C.2, Phase 3 slice 12). <b>Game abstraction, labelled (§6, "the backhaul cap as a flat
+     * FAIR ceiling"):</b> a real backhaul-limited cell runs out of transport capacity, so its users'
+     * throughput drops as the load grows, and a lightly loaded one may not notice. Here there is no
+     * traffic and no load, so the limit is one flat step: whatever the radio link, the device gets at
+     * most FAIR. The signal itself is not touched (the {@link SignalSample} stays pure RF); the cap is
+     * applied in the network layer, in the device's context.
+     */
+    public static final ServiceLevel LIMITED_SERVICE_CAP = ServiceLevel.FAIR;
+
+    /**
+     * The service cap a cell's backhaul puts on its devices (Phase 3 slice 12): {@link #LIMITED_SERVICE_CAP}
+     * for LIMITED, {@link ServiceLevel#NONE} for NONE (a cell with no backhaul carries nothing; with
+     * {@code requireBackhaul} on it is off the air anyway), and no cap ({@link ServiceLevel#EXCELLENT})
+     * for FULL or an unknown state ({@code null}: not solved yet).
+     *
+     * <p><b>Only with {@code requireBackhaul} on.</b> With it off (the default) backhaul has no effect
+     * at all: a cell with no backhaul transmits at full service, so a LIMITED one cannot be capped
+     * either, and a Phase 2 world plays exactly as before (NOTES.md, slice 12, decision 1).
+     */
+    public static ServiceLevel serviceCap(BackhaulState state, boolean requireBackhaul) {
+        if (!requireBackhaul || state == null) {
+            return ServiceLevel.EXCELLENT;
+        }
+        return switch (state) {
+            case FULL -> ServiceLevel.EXCELLENT;
+            case LIMITED -> LIMITED_SERVICE_CAP;
+            case NONE -> ServiceLevel.NONE;
+        };
+    }
+
+    /**
+     * Whether a cell with this backhaul may be on the air (§3C.2: "NONE and requireBackhaul →
+     * isTransmitting() is false"). An unknown state ({@code null}: the cell is newer than the last
+     * solve) counts as on the air until the next solve says otherwise, so a world loading chunk by
+     * chunk does not take every cell off the air and back (NOTES.md, slice 12, decision 3).
+     */
+    public static boolean allowsOnAir(BackhaulState state, boolean requireBackhaul) {
+        return !requireBackhaul || state != BackhaulState.NONE;
+    }
+
     /** A cell's backhaul, as the meter shows it ("BH: LIMITED"). */
     public enum BackhaulState {
         /** Reached over fiber and UP hops only. */

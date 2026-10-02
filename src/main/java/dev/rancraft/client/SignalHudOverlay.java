@@ -133,6 +133,13 @@ public final class SignalHudOverlay {
 
         drawBars(graphics, font, bars, x, MARGIN);
         graphics.drawString(font, readout, x + glyphWidth + 4, MARGIN, COLOR_BY_BARS[bars], false);
+
+        // Phase 3 slice 12: the serving cell's backhaul cap, as the server applied it. The bars above
+        // stay the radio link's own level.
+        String backhaul = sample.backhaulNote();
+        if (!backhaul.isEmpty()) {
+            drawRight(graphics, font, backhaul, screenWidth - MARGIN, MARGIN + LINE_HEIGHT, COLOR_WARN);
+        }
     }
 
     // ---- detailed -----------------------------------------------------------
@@ -188,6 +195,14 @@ public final class SignalHudOverlay {
 
         if (!sample.servingConflictNote().isEmpty()) {
             graphics.drawString(font, WARN_MARK + " " + sample.servingConflictNote(), x, y, COLOR_WARN, false);
+            y += LINE_HEIGHT;
+        }
+
+        // Phase 3 slice 12 (§3C.2): "BH: LIMITED (capped FAIR)" when the serving cell's backhaul caps
+        // what its devices get. The figures above are the radio link alone, untouched by it.
+        String backhaul = sample.backhaulNote();
+        if (!backhaul.isEmpty()) {
+            graphics.drawString(font, WARN_MARK + " " + backhaul, x, y, COLOR_WARN, false);
             y += LINE_HEIGHT;
         }
         return y;

@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import dev.rancraft.rf.DriveTestLog;
+import dev.rancraft.rf.MicrowaveLink;
 import dev.rancraft.rf.ServiceLevel;
 import java.util.List;
 import java.util.Locale;
@@ -372,5 +373,35 @@ class LensStyleTest {
     private static DriveTestLog.Sample trailSample(double x) {
         return new DriveTestLog.Sample(0L, x, 64.0, 0.0, 1L, 0, "band_900",
                 -80.0, 20.0, ServiceLevel.EXCELLENT, 0, 1);
+    }
+
+    // ---- microwave hops (Phase 3 slice 12) ------------------------------------------------------
+
+    @Test
+    @DisplayName("slice 12: a hop's colour is its server state: green UP, orange DEGRADED, red DOWN, all distinct")
+    void backhaulColours() {
+        assertEquals(LensStyle.BACKHAUL_UP_RGB, LensStyle.backhaulRgb(MicrowaveLink.LinkState.UP));
+        assertEquals(LensStyle.BACKHAUL_DEGRADED_RGB, LensStyle.backhaulRgb(MicrowaveLink.LinkState.DEGRADED));
+        assertEquals(LensStyle.BACKHAUL_DOWN_RGB, LensStyle.backhaulRgb(MicrowaveLink.LinkState.DOWN));
+        assertTrue(green(LensStyle.BACKHAUL_UP_RGB) > red(LensStyle.BACKHAUL_UP_RGB));
+        assertTrue(red(LensStyle.BACKHAUL_DOWN_RGB) > green(LensStyle.BACKHAUL_DOWN_RGB));
+        assertEquals(3, java.util.Set.of(LensStyle.BACKHAUL_UP_RGB, LensStyle.BACKHAUL_DEGRADED_RGB,
+                LensStyle.BACKHAUL_DOWN_RGB).size());
+    }
+
+    @Test
+    @DisplayName("slice 12: a hop's label is the server's RSL and margin, dot decimals; out of range says so")
+    void backhaulLabel() {
+        Locale previous = Locale.getDefault();
+        try {
+            Locale.setDefault(Locale.GERMANY);
+            assertEquals("DEGRADED · -61.2 dBm (-11.2 dB)",
+                    LensStyle.backhaulLabel(MicrowaveLink.LinkState.DEGRADED, -61.2f, -11.2f));
+            assertEquals("UP · -33.5 dBm (+16.5 dB)", LensStyle.backhaulLabel(MicrowaveLink.LinkState.UP, -33.5f, 16.5f));
+            assertEquals("DOWN · out of range",
+                    LensStyle.backhaulLabel(MicrowaveLink.LinkState.DOWN, -Float.MAX_VALUE, -Float.MAX_VALUE));
+        } finally {
+            Locale.setDefault(previous);
+        }
     }
 }

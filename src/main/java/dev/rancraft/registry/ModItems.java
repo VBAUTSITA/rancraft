@@ -2,6 +2,7 @@ package dev.rancraft.registry;
 
 import dev.rancraft.RanCraft;
 import dev.rancraft.item.FieldTestMeterItem;
+import dev.rancraft.item.LinkToolItem;
 import dev.rancraft.item.NetworkLocatorItem;
 import dev.rancraft.item.RfLensItem;
 import dev.rancraft.item.WidebandRadioUnitItem;
@@ -57,6 +58,17 @@ public final class ModItems {
 
     public static final DeferredItem<BlockItem> RADIO_LINK_RECEIVER =
             ITEMS.registerSimpleBlockItem(ModBlocks.RADIO_LINK_RECEIVER);
+
+    /** Phase 3 slice 12, §3C.2. No recipe yet (§3C.6, slice 16): creative-only for now. */
+    public static final DeferredItem<BlockItem> CORE_SITE = ITEMS.registerSimpleBlockItem(ModBlocks.CORE_SITE);
+
+    public static final DeferredItem<BlockItem> BACKHAUL_DISH = ITEMS.registerSimpleBlockItem(ModBlocks.BACKHAUL_DISH);
+
+    /** Phase 3 slice 12, §3C.2: pairs two Backhaul Dishes. No recipe yet (§3C.6, slice 16). */
+    public static final DeferredItem<LinkToolItem> LINK_TOOL = ITEMS.registerItem(
+            "link_tool",
+            LinkToolItem::new,
+            new Item.Properties().stacksTo(1));
 
     public static void register(IEventBus modBus) {
         ITEMS.register(modBus);

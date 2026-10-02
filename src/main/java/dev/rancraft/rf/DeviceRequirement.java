@@ -52,10 +52,27 @@ public record DeviceRequirement(ServiceLevel minServiceLevel, int minCapacityTie
      * exactly as the engine already propagated it ({@link BandTable#getOrFallback}).
      */
     public Verdict check(SignalSample sample, BandTable bands) {
+        return check(sample, bands, ServiceLevel.EXCELLENT);
+    }
+
+    /**
+     * {@link #check(SignalSample, BandTable)} against the sample's service level capped at
+     * {@code serviceCap}: the <b>effective</b> service level, {@code worstOf(sample.serviceLevel(),
+     * serviceCap)}, must reach {@link #minServiceLevel()}, so a cap below it is
+     * {@link Verdict#LOW_QUALITY}. Phase 3 slice 12 (§3C.2): a backhaul-limited serving cell caps what
+     * it carries at FAIR ({@link BackhaulGraph#serviceCap}); the sample itself is pure RF and is not
+     * touched. {@link ServiceLevel#EXCELLENT} caps nothing, which is the two-argument form.
+     *
+     * <p>The order of the reasons is unchanged. A cap does not add a verdict of its own: the device's
+     * context says whether the cap applied ({@code device.DeviceContext.backhaulLimited()}), so a
+     * device's HUD can tell "fix the signal" from "fix the backhaul" without a new verdict.
+     */
+    public Verdict check(SignalSample sample, BandTable bands, ServiceLevel serviceCap) {
+        Objects.requireNonNull(serviceCap, "serviceCap");
         if (sample.isNoService()) {
             return Verdict.NO_SERVICE;
         }
-        if (!sample.serviceLevel().atLeast(minServiceLevel)) {
+        if (!ServiceLevel.worstOf(sample.serviceLevel(), serviceCap).atLeast(minServiceLevel)) {
             return Verdict.LOW_QUALITY;
         }
         // isNoService() is false, so a serving cell is present.

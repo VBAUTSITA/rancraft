@@ -4,6 +4,8 @@
     "rancraft:signal_mast",
     "rancraft:sector_antenna",
     "rancraft:radio_link_transmitter",
-    "rancraft:radio_link_receiver"
+    "rancraft:radio_link_receiver",
+    "rancraft:core_site",
+    "rancraft:backhaul_dish"
   ]
 }

@@ -60,7 +60,7 @@ class SignalSamplePayloadTest {
 
         SignalSamplePayload decoded = roundTrip(payload);
 
-        assertEquals(3, SignalSamplePayload.VERSION);
+        assertEquals(4, SignalSamplePayload.VERSION, "slice 12 appended the backhaul cap");
         assertEquals(SignalSamplePayload.VERSION, decoded.version());
         assertEquals(12.25, decoded.rxX());
         assertEquals(71.62, decoded.rxY());
@@ -136,6 +136,35 @@ class SignalSamplePayloadTest {
         assertTrue(logged.hasServing());
         assertEquals(2, logged.handoverCount());
         assertEquals(6, logged.cellCount());
+    }
+
+    @Test
+    @DisplayName("v4 (slice 12): the backhaul cap round-trips; no cap by default; the meter's note")
+    void backhaulCap() {
+        SignalSamplePayload payload = SignalSamplePayload.of(
+                sample(cells(3), 100L), "band_900", 900.0, 1.0, "", 1.0, 64.0, 2.0);
+        assertEquals(ServiceLevel.EXCELLENT, payload.serviceCap(), "of() caps nothing: the ticker sets the cap");
+        assertEquals("", payload.backhaulNote());
+        assertSame(payload, payload.withServiceCap(ServiceLevel.EXCELLENT), "no change, no copy");
+        assertSame(payload, payload.withServiceCap(null), "null is no cap");
+
+        SignalSamplePayload limited = payload.withServiceCap(ServiceLevel.FAIR);
+        assertEquals("BH: LIMITED (capped FAIR)", limited.backhaulNote(), "§3C.2's wording");
+        SignalSamplePayload decoded = roundTrip(limited);
+        assertEquals(ServiceLevel.FAIR, decoded.serviceCap());
+        assertEquals(limited, decoded);
+        // Every radio figure is the same payload's: the cap is a note beside them.
+        assertEquals(payload, limited.withServiceCap(ServiceLevel.EXCELLENT));
+        assertEquals(payload.serviceLevel(), limited.serviceLevel());
+        assertEquals(payload.sinrDb(), limited.sinrDb());
+        assertEquals(payload.cells(), limited.cells());
+
+        assertEquals("BH: NONE (no backhaul)", payload.withServiceCap(ServiceLevel.NONE).backhaulNote());
+        assertEquals(ServiceLevel.NONE, roundTrip(payload.withServiceCap(ServiceLevel.NONE)).serviceCap());
+        // No serving cell: nothing to cap, no note.
+        SignalSamplePayload empty = SignalSamplePayload.empty(55L, 3, 1.0, 2.0, 3.0);
+        assertEquals(ServiceLevel.EXCELLENT, roundTrip(empty).serviceCap());
+        assertEquals("", empty.withServiceCap(ServiceLevel.FAIR).backhaulNote());
     }
 
     @Test

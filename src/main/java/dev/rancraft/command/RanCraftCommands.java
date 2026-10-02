@@ -6,16 +6,22 @@ import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 import com.mojang.brigadier.context.CommandContext;
 import dev.rancraft.RanCraft;
 import dev.rancraft.RanCraftConfig;
+import dev.rancraft.rf.BackhaulGraph.BackhaulState;
 import dev.rancraft.rf.CellParams;
 import dev.rancraft.rf.PciConflict;
 import dev.rancraft.rf.PciPlanner;
+import dev.rancraft.world.BackhaulNetwork;
 import dev.rancraft.world.SiteRegistry;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Locale;
 import net.minecraft.ChatFormatting;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.SectionPos;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.phys.Vec3;
@@ -29,6 +35,11 @@ import net.neoforged.neoforge.event.RegisterCommandsEvent;
  *
  * <p>A thin wrapper over {@link PciPlanner}, which is pure and unit-tested. Nothing here decides
  * what a conflict is; it only formats.
+ *
+ * <p>{@code /rancraft backhaul status [radius]} (Phase 3 slice 12, §3C.2) -- lists the cells near the
+ * source that are off the air for want of backhaul, the LIMITED cells, and every microwave link near
+ * it with its RSL, margin, Fresnel state and rain loss, as the server's backhaul network last worked
+ * them out ({@link BackhaulNetwork}). It formats; it judges nothing.
  */
 @EventBusSubscriber(modid = RanCraft.MOD_ID)
 public final class RanCraftCommands {
@@ -55,9 +66,16 @@ public final class RanCraftCommands {
                         .executes(context -> checkPci(
                                 context, DoubleArgumentType.getDouble(context, "radius"))));
 
+        LiteralArgumentBuilder<CommandSourceStack> backhaulStatus = Commands.literal("status")
+                .executes(context -> backhaulStatus(context, DEFAULT_RADIUS_BLOCKS))
+                .then(Commands.argument("radius", DoubleArgumentType.doubleArg(MIN_RADIUS, MAX_RADIUS))
+                        .executes(context -> backhaulStatus(
+                                context, DoubleArgumentType.getDouble(context, "radius"))));
+
         dispatcher.register(Commands.literal("rancraft")
                 .requires(source -> source.hasPermission(2))
-                .then(Commands.literal("pci").then(pciCheck)));
+                .then(Commands.literal("pci").then(pciCheck))
+                .then(Commands.literal("backhaul").then(backhaulStatus)));
     }
 
     private static int checkPci(CommandContext<CommandSourceStack> context, double radius) {
@@ -97,17 +115,127 @@ public final class RanCraftCommands {
             source.sendSuccess(() -> Component.literal(line).withStyle(colour), false);
         }
 
+        more(source, total);
+        return total;
+    }
+
+    private static String format(double radius) {
+        return String.valueOf((long) radius);
+    }
+
+    // ---- /rancraft backhaul status ----------------------------------------------------------------
+
+    /**
+     * The header (the flag, counts, the weather and the age of the measurement), then three lists, each
+     * nearest first and capped at {@value #MAX_LINES} lines: cells with no backhaul (off the air when
+     * {@code requireBackhaul} is on), LIMITED cells, and the links. Cells are filtered by their base,
+     * links by their nearest point to the source. Returns the number of entries listed.
+     */
+    private static int backhaulStatus(CommandContext<CommandSourceStack> context, double radius) {
+        CommandSourceStack source = context.getSource();
+        ServerLevel level = source.getLevel();
+        Vec3 origin = source.getPosition();
+        BackhaulNetwork network = BackhaulNetwork.peek(level);
+        if (network == null || !network.solved()) {
+            source.sendSuccess(() -> Component.translatable("commands.rancraft.backhaul.not_solved")
+                    .withStyle(ChatFormatting.GRAY), false);
+            return 0;
+        }
+        boolean required = RanCraftConfig.requireBackhaul();
+        double radiusSq = radius * radius;
+
+        List<BackhaulNetwork.CellStatus> none = new ArrayList<>();
+        List<BackhaulNetwork.CellStatus> limited = new ArrayList<>();
+        for (BackhaulNetwork.CellStatus cell : network.cells()) {
+            if (cell.base().distToCenterSqr(origin) > radiusSq) {
+                continue;
+            }
+            if (cell.state() == BackhaulState.NONE) {
+                none.add(cell);
+            } else if (cell.state() == BackhaulState.LIMITED) {
+                limited.add(cell);
+            }
+        }
+        Comparator<BackhaulNetwork.CellStatus> nearest =
+                Comparator.comparingDouble(cell -> cell.base().distToCenterSqr(origin));
+        none.sort(nearest);
+        limited.sort(nearest);
+
+        List<BackhaulNetwork.HopStatus> allLinks = network.hops();
+        List<BackhaulNetwork.HopStatus> links = new ArrayList<>();
+        for (BackhaulNetwork.HopStatus hop : allLinks) {
+            if (BackhaulNetwork.distanceSqToHop(origin.x, origin.y, origin.z, hop) <= radiusSq) {
+                links.add(hop);
+            }
+        }
+        links.sort(Comparator.comparingDouble(
+                hop -> BackhaulNetwork.distanceSqToHop(origin.x, origin.y, origin.z, hop)));
+
+        String weather = level.isThundering() ? "thunder" : level.isRaining() ? "rain" : "clear";
+        long age = Math.max(0L, level.getGameTime() - network.lastRecomputeTick());
+        int linkCount = allLinks.size();
+        source.sendSuccess(() -> Component.translatable("commands.rancraft.backhaul.header",
+                format(radius), required ? "ON" : "OFF", network.coreCount(), network.dishCount(),
+                linkCount, weather, age).withStyle(ChatFormatting.YELLOW), false);
+
+        source.sendSuccess(() -> Component.translatable(
+                required ? "commands.rancraft.backhaul.off_air" : "commands.rancraft.backhaul.no_backhaul",
+                none.size()).withStyle(ChatFormatting.WHITE), false);
+        cellLines(source, level, none, ChatFormatting.RED);
+
+        source.sendSuccess(() -> Component.translatable(
+                required ? "commands.rancraft.backhaul.limited" : "commands.rancraft.backhaul.limited_off",
+                limited.size()).withStyle(ChatFormatting.WHITE), false);
+        cellLines(source, level, limited, ChatFormatting.GOLD);
+
+        source.sendSuccess(() -> Component.translatable("commands.rancraft.backhaul.links", links.size())
+                .withStyle(ChatFormatting.WHITE), false);
+        if (links.isEmpty()) {
+            source.sendSuccess(() -> Component.translatable("commands.rancraft.backhaul.none")
+                    .withStyle(ChatFormatting.GRAY), false);
+        }
+        for (BackhaulNetwork.HopStatus hop : links.subList(0, Math.min(links.size(), MAX_LINES))) {
+            ChatFormatting colour = switch (hop.budget().state()) {
+                case UP -> ChatFormatting.GREEN;
+                case DEGRADED -> ChatFormatting.GOLD;
+                case DOWN -> ChatFormatting.RED;
+            };
+            String line = "  " + xyz(hop.a()) + " <-> " + xyz(hop.b()) + ": " + hop.budget().describe()
+                    + ", weather " + hop.weather().name().toLowerCase(Locale.ROOT);
+            source.sendSuccess(() -> Component.literal(line).withStyle(colour), false);
+        }
+        more(source, links.size());
+        return none.size() + limited.size() + links.size();
+    }
+
+    /** One line per cell, nearest first, with "(unloaded)" for a cell whose chunk is not loaded. */
+    private static void cellLines(CommandSourceStack source, ServerLevel level,
+                                  List<BackhaulNetwork.CellStatus> cells, ChatFormatting colour) {
+        if (cells.isEmpty()) {
+            source.sendSuccess(() -> Component.translatable("commands.rancraft.backhaul.none")
+                    .withStyle(ChatFormatting.GRAY), false);
+            return;
+        }
+        for (BackhaulNetwork.CellStatus cell : cells.subList(0, Math.min(cells.size(), MAX_LINES))) {
+            BlockPos base = cell.base();
+            boolean loaded = level.getChunkSource().getChunkNow(
+                    SectionPos.blockToSectionCoord(base.getX()), SectionPos.blockToSectionCoord(base.getZ())) != null;
+            String line = "  cell at " + xyz(base) + (loaded ? "" : " (unloaded)");
+            source.sendSuccess(() -> Component.literal(line).withStyle(colour), false);
+        }
+        more(source, cells.size());
+    }
+
+    private static void more(CommandSourceStack source, int total) {
         if (total > MAX_LINES) {
             int hidden = total - MAX_LINES;
             source.sendSuccess(() -> Component
                     .literal("  ... and " + hidden + " more")
                     .withStyle(ChatFormatting.GRAY), false);
         }
-
-        return total;
     }
 
-    private static String format(double radius) {
-        return String.valueOf((long) radius);
+    private static String xyz(BlockPos pos) {
+        return "[" + pos.getX() + ", " + pos.getY() + ", " + pos.getZ() + "]";
     }
 }

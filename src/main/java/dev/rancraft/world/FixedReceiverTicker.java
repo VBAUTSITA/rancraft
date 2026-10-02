@@ -11,6 +11,7 @@ import dev.rancraft.rf.DeviceRequirement;
 import dev.rancraft.rf.ReceiverState;
 import dev.rancraft.rf.RfConfig;
 import dev.rancraft.rf.RfEngine;
+import dev.rancraft.rf.ServiceLevel;
 import dev.rancraft.rf.SignalSample;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -419,19 +420,24 @@ public final class FixedReceiverTicker {
                     lane.epochs.snapshot(evaluation.dependencyBins(RegionEpochs.BIN_SIZE)), siteVersion);
             statEvaluations++;
         }
-        dispatch(level, BlockPos.of(key), entry.device, sample, bands, config, gameTime);
+        dispatch(level, BlockPos.of(key), entry.device, sample, bands, config, gameTime,
+                BackhaulNetwork.serviceCapAt(level, sample.servingCellId()));
     }
 
     /**
      * Hands the sample to the device with its verdict. A device that throws costs its own dispatch,
      * not the server: a device block in a spawn chunk that crashed the tick would make the world
      * unloadable. The failure is logged (at most every 30 s) and counted.
+     *
+     * <p>Slice 12 (§3C.2): {@code serviceCap} is the serving cell's backhaul cap, read at dispatch (a
+     * replay gets today's cap). The verdict is checked against the capped level and the context carries
+     * the cap; the sample is handed over untouched.
      */
     static void dispatch(ServerLevel level, BlockPos pos, FixedDevice device, SignalSample sample, BandTable bands,
-                         RfConfig config, long tick) {
+                         RfConfig config, long tick, ServiceLevel serviceCap) {
         try {
-            DeviceRequirement.Verdict verdict = device.requirement().check(sample, bands);
-            device.onSample(level, pos, new DeviceContext(sample, verdict, bands, config, level, tick));
+            DeviceRequirement.Verdict verdict = device.requirement().check(sample, bands, serviceCap);
+            device.onSample(level, pos, new DeviceContext(sample, verdict, bands, config, level, tick, serviceCap));
         } catch (RuntimeException failure) {
             statFailures++;
             long now = System.currentTimeMillis();

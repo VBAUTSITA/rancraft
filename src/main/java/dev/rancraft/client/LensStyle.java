@@ -1,6 +1,7 @@
 package dev.rancraft.client;
 
 import dev.rancraft.rf.DriveTestLog;
+import dev.rancraft.rf.MicrowaveLink;
 import dev.rancraft.rf.ServiceLevel;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -126,6 +127,39 @@ public final class LensStyle {
     public static String linkLabel(int pci, String bandId, double rsrpDbm, boolean serving) {
         String text = String.format(Locale.ROOT, "PCI %d · %s · %.1f dBm", pci, bandId, rsrpDbm);
         return serving ? text + " [serving]" : text;
+    }
+
+    // ---- microwave backhaul hops (Phase 3 slice 12) -----------------------------------------
+
+    /** An UP hop: green, as a clear link ray. */
+    public static final int BACKHAUL_UP_RGB = 0x55FF55;
+    /** A DEGRADED hop (adaptive modulation stepped down): orange, as FAIR service. */
+    public static final int BACKHAUL_DEGRADED_RGB = 0xFFAA00;
+    /** A DOWN hop: red. */
+    public static final int BACKHAUL_DOWN_RGB = 0xFF5555;
+
+    /**
+     * A hop's line colour, from the state the server measured ({@code BackhaulLinksPayload}); the
+     * client never judges a hop. 0xRRGGBB.
+     */
+    public static int backhaulRgb(MicrowaveLink.LinkState state) {
+        return switch (state) {
+            case UP -> BACKHAUL_UP_RGB;
+            case DEGRADED -> BACKHAUL_DEGRADED_RGB;
+            case DOWN -> BACKHAUL_DOWN_RGB;
+        };
+    }
+
+    /**
+     * {@code <state> · <rsl> dBm (<margin> dB)} at a hop's midpoint, both figures the server's, to one
+     * decimal with a full stop whatever the locale. An out-of-range hop (its RSL sent as the most
+     * negative float) reads {@code DOWN · out of range}.
+     */
+    public static String backhaulLabel(MicrowaveLink.LinkState state, float rslDbm, float marginDb) {
+        if (rslDbm <= -Float.MAX_VALUE || !Float.isFinite(rslDbm)) {
+            return state + " · out of range";
+        }
+        return String.format(Locale.ROOT, "%s · %.1f dBm (%+.1f dB)", state, rslDbm, marginDb);
     }
 
     // ---- coverage painting ------------------------------------------------------------------

@@ -399,6 +399,42 @@ class SignalTickerTest {
         SignalTicker.dispatch(null, List.of(), servedOn900(1L), BANDS, RfConfig.DEFAULTS, null, 1L);
     }
 
+    @Test
+    @DisplayName("3C test: a LIMITED cell's FAIR cap reaches each verdict and context; the sample is untouched")
+    void backhaulCapIsAppliedInTheNetworkLayerOnly() {
+        RecordingDevice terminal = new RecordingDevice(new DeviceRequirement(ServiceLevel.GOOD, 1));
+        RecordingDevice radioLink = new RecordingDevice(new DeviceRequirement(ServiceLevel.POOR, 1));
+        SignalSample sample = servedOn900(2_000L);
+        SignalSample copy = servedOn900(2_000L);
+        assertEquals(ServiceLevel.GOOD, sample.serviceLevel());
+
+        SignalTicker.dispatch(null,
+                List.of(new CarriedDevice(null, terminal, true), new CarriedDevice(null, radioLink, false)),
+                sample, BANDS, RfConfig.DEFAULTS, null, 2_000L, ServiceLevel.FAIR);
+
+        DeviceContext terminalCtx = terminal.contexts.get(0);
+        DeviceContext linkCtx = radioLink.contexts.get(0);
+        assertEquals(Verdict.LOW_QUALITY, terminalCtx.verdict(), "GOOD is above the FAIR cap: the terminal stops");
+        assertEquals(Verdict.OK, linkCtx.verdict(), "POOR is below it: the radio link keeps working");
+        for (DeviceContext ctx : List.of(terminalCtx, linkCtx)) {
+            assertSame(sample, ctx.sample(), "the one evaluation, handed on as is");
+            assertEquals(ServiceLevel.GOOD, ctx.sample().serviceLevel(), "the radio link's own level, uncapped");
+            assertEquals(ServiceLevel.FAIR, ctx.serviceCap());
+            assertEquals(ServiceLevel.FAIR, ctx.effectiveServiceLevel());
+            assertTrue(ctx.backhaulLimited());
+        }
+        assertEquals(copy, sample, "nothing in the sample changed");
+
+        // No cap (FULL backhaul, or requireBackhaul off): exactly the uncapped dispatch.
+        RecordingDevice uncapped = new RecordingDevice(new DeviceRequirement(ServiceLevel.GOOD, 1));
+        SignalTicker.dispatch(null, List.of(new CarriedDevice(null, uncapped, true)),
+                sample, BANDS, RfConfig.DEFAULTS, null, 2_000L);
+        assertEquals(Verdict.OK, uncapped.contexts.get(0).verdict());
+        assertEquals(ServiceLevel.EXCELLENT, uncapped.contexts.get(0).serviceCap());
+        assertFalse(uncapped.contexts.get(0).backhaulLimited());
+        assertEquals(ServiceLevel.GOOD, uncapped.contexts.get(0).effectiveServiceLevel());
+    }
+
     /** A device that changes state once per evaluation and outputs on every dispatch, as {@link ReplayGuard} says. */
     private static final class CountingDevice implements SignalDevice {
         final ReplayGuard fresh = new ReplayGuard("test.counting");

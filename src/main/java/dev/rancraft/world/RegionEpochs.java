@@ -129,6 +129,8 @@ public final class RegionEpochs {
     private final Long2LongOpenHashMap epochs = new Long2LongOpenHashMap();
     private final ArrayDeque<Deferred> deferred = new ArrayDeque<>();
     private long total;
+    /** Every bump, chunk bumps included (unlike {@link #total}). See {@link #bumps()}. */
+    private long bumps;
 
     /** A bump that waits for moved blocks to settle. */
     private record Deferred(long[] bins, long dueGameTime) {
@@ -179,6 +181,15 @@ public final class RegionEpochs {
         return total;
     }
 
+    /**
+     * How many bumps the dimension has had, of any kind: block changes and chunks crossing FULL alike
+     * ({@link #total()} leaves the chunk bumps out). Phase 3 slice 12: while it has not moved, no bin's
+     * epoch has, so a holder of many snapshots (the backhaul hops) can skip checking them one by one.
+     */
+    public synchronized long bumps() {
+        return bumps;
+    }
+
     /** One bin's epoch; 0 for a bin nothing has bumped. */
     public synchronized long epochOf(long binKey) {
         return epochs.get(binKey);
@@ -198,6 +209,7 @@ public final class RegionEpochs {
     public synchronized void bumpBin(long binKey) {
         epochs.addTo(binKey, 1L);
         total++;
+        bumps++;
     }
 
     /** Blocks in each of these bins changed: each epoch up by one (a key listed twice counts once). */
@@ -207,6 +219,7 @@ public final class RegionEpochs {
             epochs.addTo(key, 1L);
         }
         total += distinct.length;
+        bumps += distinct.length;
     }
 
     /**
@@ -218,6 +231,7 @@ public final class RegionEpochs {
         // A chunk's 16 blocks never straddle a bin edge (BIN_SIZE is a multiple of 16), so its
         // minimum corner names its bin.
         epochs.addTo(BinTraversal.keyOfBlock(chunkX << 4, chunkZ << 4, BIN_SIZE), 1L);
+        bumps++;
     }
 
     /**

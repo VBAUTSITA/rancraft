@@ -8,6 +8,7 @@ import dev.rancraft.rf.ParabolicPattern;
 import dev.rancraft.rf.PciPlanner;
 import dev.rancraft.rf.RadioTier;
 import dev.rancraft.util.ColumnScan;
+import dev.rancraft.world.BackhaulNetwork;
 import dev.rancraft.world.SiteRegistry;
 import java.util.concurrent.atomic.AtomicInteger;
 import net.minecraft.core.BlockPos;
@@ -137,6 +138,9 @@ public abstract class AntennaBlockEntity extends BlockEntity {
      * until a tag is written: then no client holds an old value, and the next tag is written fresh.
      */
     private int sentRadiatingY = ColumnScan.UNKNOWN_Y;
+
+    /** Set by {@link #onChunkUnloaded()}: the coming {@link #setRemoved()} is an unload, not a removal. */
+    private boolean unloading;
 
     protected AntennaBlockEntity(BlockEntityType<?> type, BlockPos pos, BlockState state, int defaultRadioTier) {
         super(type, pos, state);
@@ -274,7 +278,24 @@ public abstract class AntennaBlockEntity extends BlockEntity {
 
     // ---- registry lifecycle -------------------------------------------------
 
+    /**
+     * Whether this antenna is on the air: it would transmit by its own rules
+     * ({@link #eligibleToTransmit()}) and its backhaul allows it. Phase 3 slice 12 (§3C.2): with
+     * {@code requireBackhaul} on, a cell with no path to a Core Site (backhaul NONE) is not
+     * transmitting ({@code world.BackhaulNetwork}). With it off (the default) this is exactly
+     * {@link #eligibleToTransmit()}, as before. The client has no backhaul verdict and asks nothing.
+     */
     public boolean isTransmitting() {
+        return eligibleToTransmit() && backhaulAllows();
+    }
+
+    /**
+     * Whether this antenna would transmit by its own rules, backhaul aside: {@code requireRedstone}
+     * here, the mast column's rules in {@link SignalMastBlockEntity}. Until slice 12 this was
+     * {@link #isTransmitting()}; the backhaul graph needs the cells that pass it, including those its
+     * own verdict keeps off the air.
+     */
+    protected boolean eligibleToTransmit() {
         if (!RanCraftConfig.REQUIRE_REDSTONE.get()) {
             return true;
         }
@@ -285,6 +306,11 @@ public abstract class AntennaBlockEntity extends BlockEntity {
                 && state.getValue(BlockStateProperties.POWERED);
     }
 
+    /** The backhaul's verdict on this cell (server); always yes on the client or with no level. */
+    private boolean backhaulAllows() {
+        return !(level instanceof ServerLevel serverLevel) || BackhaulNetwork.allowsOnAir(serverLevel, cellId());
+    }
+
     @Override
     public void onLoad() {
         super.onLoad();
@@ -292,9 +318,24 @@ public abstract class AntennaBlockEntity extends BlockEntity {
         refreshRegistration();
     }
 
+    /**
+     * The chunk is unloading: {@link #setRemoved()} follows, and must not take the cell out of the
+     * backhaul topology (slice 12: a relay site in an unloaded chunk still relays). NeoForge calls this
+     * from {@code LevelChunk.clearAllBlockEntities}, just before {@code setRemoved}; a broken or
+     * replaced antenna gets {@code setRemoved} alone.
+     */
+    @Override
+    public void onChunkUnloaded() {
+        super.onChunkUnloaded();
+        unloading = true;
+    }
+
     @Override
     public void setRemoved() {
         unregister();
+        if (!unloading && level instanceof ServerLevel serverLevel) {
+            BackhaulNetwork.of(serverLevel).removeCell(cellId());
+        }
         super.setRemoved();
     }
 
@@ -306,7 +347,13 @@ public abstract class AntennaBlockEntity extends BlockEntity {
     public void refreshRegistration() {
         if (level instanceof ServerLevel serverLevel) {
             SiteRegistry registry = SiteRegistry.of(serverLevel);
-            boolean transmitting = isTransmitting();
+            // Slice 12: the backhaul graph learns every cell that passes its own rules, on or off the
+            // air, and its verdict decides the rest. The network refreshes this antenna when its
+            // verdict changes, so the flag below is never written from anywhere else.
+            boolean eligible = eligibleToTransmit();
+            BackhaulNetwork backhaul = BackhaulNetwork.of(serverLevel);
+            backhaul.noteCell(cellId(), eligible);
+            boolean transmitting = eligible && backhaul.allowsOnAir(cellId());
             BlockPos point = radiatingPoint();
             if (transmitting) {
                 registry.register(cellParamsAt(point));
@@ -321,6 +368,10 @@ public abstract class AntennaBlockEntity extends BlockEntity {
         }
     }
 
+    /**
+     * Off the air: the antenna was removed or its chunk unloaded. The backhaul topology keeps the cell
+     * on an unload ({@link #setRemoved()} drops it only for a broken or replaced antenna).
+     */
     public void unregister() {
         if (level instanceof ServerLevel serverLevel) {
             SiteRegistry.of(serverLevel).unregister(cellId());

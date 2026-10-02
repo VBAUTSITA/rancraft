@@ -23,6 +23,7 @@ import dev.rancraft.rf.ReceiverState;
 import dev.rancraft.rf.ReceiverStateStore;
 import dev.rancraft.rf.RfConfig;
 import dev.rancraft.rf.RfEngine;
+import dev.rancraft.rf.ServiceLevel;
 import dev.rancraft.rf.SignalSample;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -447,11 +448,30 @@ public final class SignalTicker {
             RfConfig config,
             ServerLevel level,
             long tick) {
+        dispatch(player, devices, sample, bands, config, level, tick, ServiceLevel.EXCELLENT);
+    }
+
+    /**
+     * {@link #dispatch(ServerPlayer, List, SignalSample, BandTable, RfConfig, ServerLevel, long)} with the
+     * serving cell's backhaul cap (Phase 3 slice 12, §3C.2): each verdict is checked against the sample's
+     * service level capped at {@code serviceCap}, and the context carries the cap. The sample itself is
+     * handed over untouched: the cap lives in the network layer, never in the RF result.
+     */
+    static void dispatch(
+            ServerPlayer player,
+            List<CarriedDevice> devices,
+            SignalSample sample,
+            BandTable bands,
+            RfConfig config,
+            ServerLevel level,
+            long tick,
+            ServiceLevel serviceCap) {
 
         for (CarriedDevice carried : devices) {
-            DeviceRequirement.Verdict verdict = carried.device().requirement(carried.stack()).check(sample, bands);
+            DeviceRequirement.Verdict verdict =
+                    carried.device().requirement(carried.stack()).check(sample, bands, serviceCap);
             carried.device().onSample(player, carried.stack(), carried.held(),
-                    new DeviceContext(sample, verdict, bands, config, level, tick));
+                    new DeviceContext(sample, verdict, bands, config, level, tick, serviceCap));
         }
     }
 
@@ -494,10 +514,14 @@ public final class SignalTicker {
         Cached cached = CACHE.get(receiverKey);
         if (canReplay(cached, config.enableSampleCaching(), RECEIVERS.get(receiverKey).hasCandidate(),
                 eyeX, eyeY, eyeZ, epochs, siteVersion, linkLens, linkCap)) {
-            send(player, cached.payload(), linkLens == null ? null : cached.links());
+            // Slice 12: the serving cell's backhaul cap is read now, not cached with the sample. A cell
+            // becoming LIMITED changes no antenna and no block, so the replay is still the right sample;
+            // only the cap on it moved.
+            ServiceLevel cap = BackhaulNetwork.serviceCapAt(level, cached.sample().servingCellId());
+            send(player, cached.payload().withServiceCap(cap), linkLens == null ? null : cached.links());
             // Replays are dispatched too (§3A.3). The sample keeps the tick of the evaluation it
             // replays, which is what devices are idempotent on.
-            dispatch(player, devices, cached.sample(), bands, config, level, level.getGameTime());
+            dispatch(player, devices, cached.sample(), bands, config, level, level.getGameTime(), cap);
             return;
         }
 
@@ -538,8 +562,9 @@ public final class SignalTicker {
         CACHE.put(receiverKey, new Cached(
                 sample, payload, links, linkLens == null ? LensSettings.ALL_BANDS : linkLens.bandFilter(), linkCap,
                 eyeX, eyeY, eyeZ, dependencies, siteVersion));
-        send(player, payload, links);
-        dispatch(player, devices, sample, bands, config, level, gameTime);
+        ServiceLevel cap = BackhaulNetwork.serviceCapAt(level, sample.servingCellId());
+        send(player, payload.withServiceCap(cap), links);
+        dispatch(player, devices, sample, bands, config, level, gameTime, cap);
     }
 
     /** The sample always; the link rays when the lens wants them ({@code links} is null otherwise). */
@@ -736,6 +761,8 @@ public final class SignalTicker {
         }
         for (BlockEntity blockEntity : levelChunk.getBlockEntities().values()) {
             if (blockEntity instanceof AntennaBlockEntity antenna) {
+                // Off the air. The backhaul topology keeps the cell (slice 12): an unloaded site still
+                // relays between its dishes (BackhaulNetwork).
                 registry.unregister(antenna.cellId());
             }
         }

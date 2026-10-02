@@ -1,6 +1,8 @@
 package dev.rancraft.registry;
 
 import dev.rancraft.RanCraft;
+import dev.rancraft.block.BackhaulDishBlockEntity;
+import dev.rancraft.block.CoreSiteBlockEntity;
 import dev.rancraft.block.RadioLinkReceiverBlockEntity;
 import dev.rancraft.block.RadioLinkTransmitterBlockEntity;
 import dev.rancraft.block.SectorAntennaBlockEntity;
@@ -37,6 +39,16 @@ public final class ModBlockEntities {
     public static final Supplier<BlockEntityType<RadioLinkReceiverBlockEntity>> RADIO_LINK_RECEIVER =
             BLOCK_ENTITIES.register("radio_link_receiver", () -> BlockEntityType.Builder
                     .of(RadioLinkReceiverBlockEntity::new, ModBlocks.RADIO_LINK_RECEIVER.get())
+                    .build(null));
+
+    public static final Supplier<BlockEntityType<CoreSiteBlockEntity>> CORE_SITE =
+            BLOCK_ENTITIES.register("core_site", () -> BlockEntityType.Builder
+                    .of(CoreSiteBlockEntity::new, ModBlocks.CORE_SITE.get())
+                    .build(null));
+
+    public static final Supplier<BlockEntityType<BackhaulDishBlockEntity>> BACKHAUL_DISH =
+            BLOCK_ENTITIES.register("backhaul_dish", () -> BlockEntityType.Builder
+                    .of(BackhaulDishBlockEntity::new, ModBlocks.BACKHAUL_DISH.get())
                     .build(null));
 
     public static void register(IEventBus modBus) {

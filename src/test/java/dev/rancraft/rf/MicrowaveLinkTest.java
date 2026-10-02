@@ -462,6 +462,68 @@ class MicrowaveLinkTest {
         return java.util.Arrays.binarySearch(sortedKeys, key) >= 0;
     }
 
+    // ---- slice 12 -------------------------------------------------------------------------------
+
+    @Test
+    @DisplayName("slice 12: stepsToReach never leaves a hop out of range, and caps nothing a larger cap would read")
+    void stepsToReachIsEnough() {
+        // The slice 11 note: a 1000-block diagonal hop enters about 1414 voxels, past maxRaySteps 1200.
+        double[] diagonal = {0.5, 64.5, 0.5, 707.5, 64.5, 707.5};
+        assertTrue(LINK.evaluate(WorldProbe.AIR, diagonal[0], diagonal[1], diagonal[2], diagonal[3], diagonal[4],
+                diagonal[5], 1.0, Weather.CLEAR, 1200).outOfRange(), "fixture: the default cap is too short");
+        int steps = LINK.stepsToReach(diagonal[0], diagonal[1], diagonal[2], diagonal[3], diagonal[4], diagonal[5], 1.0);
+        assertFalse(LINK.evaluate(WorldProbe.AIR, diagonal[0], diagonal[1], diagonal[2], diagonal[3], diagonal[4],
+                diagonal[5], 1.0, Weather.CLEAR, steps).outOfRange());
+
+        Random random = new Random(1212L);
+        for (int trial = 0; trial < 400; trial++) {
+            double ax = random.nextInt(2000) - 1000 + random.nextDouble();
+            double ay = random.nextInt(300) - 60 + random.nextDouble();
+            double az = random.nextInt(2000) - 1000 + random.nextDouble();
+            double bx = ax + random.nextInt(1400) - 700 + random.nextDouble();
+            double by = random.nextInt(300) - 60 + random.nextDouble();
+            double bz = az + random.nextInt(1400) - 700 + random.nextDouble();
+            double metersPerBlock = new double[] {0.25, 0.5, 1.0, 2.0, 4.0}[trial % 5];
+            int cap = LINK.stepsToReach(ax, ay, az, bx, by, bz, metersPerBlock);
+            // A scatter world, so the Fresnel paths run to their first hit or to the end.
+            WorldProbe world = new TestProbes.Scatter(trial % 2 == 0 ? 0.0 : 1.0);
+            Budget capped = LINK.evaluate(world, ax, ay, az, bx, by, bz, metersPerBlock, Weather.CLEAR, cap);
+            Budget unbounded = LINK.evaluate(world, ax, ay, az, bx, by, bz, metersPerBlock, Weather.CLEAR,
+                    Integer.MAX_VALUE);
+            assertFalse(capped.outOfRange(), "trial " + trial);
+            assertEquals(unbounded, capped, "trial " + trial + ": the cap cut a march short");
+        }
+    }
+
+    @Test
+    @DisplayName("slice 12: a cap of 0 is out of range and DOWN without reading a block (a hop past the range)")
+    void zeroStepsReadsNothing() {
+        TestProbes.Counting counting = new TestProbes.Counting(12.0);
+        Budget budget = LINK.evaluate(counting, 0.5, 64.5, 0.5, 2000.5, 64.5, 0.5, 1.0, Weather.CLEAR, 0);
+        assertTrue(budget.outOfRange());
+        assertSame(LinkState.DOWN, budget.state());
+        assertEquals(0, counting.calls);
+        assertEquals("DOWN, out of range (2000 m)", budget.describe());
+    }
+
+    @Test
+    @DisplayName("slice 12: describe() gives the state, RSL, margin, Fresnel state and rain loss, dot decimals")
+    void describe() {
+        java.util.Locale previous = java.util.Locale.getDefault();
+        try {
+            java.util.Locale.setDefault(java.util.Locale.GERMANY);
+            assertEquals("UP, RSL -33.5 dBm, margin +16.5 dB, Fresnel clear, rain 0.0 dB (1000 m, obstruction 0.0 dB)",
+                    hop(WorldProbe.AIR).describe());
+            Budget oneStone = hop(new TestProbes.Sparse(STONE_DB).add(500, 64, 0), Weather.THUNDER);
+            assertEquals("DOWN, RSL -75.5 dBm, margin -25.5 dB, Fresnel clear, rain 6.0 dB (1000 m, obstruction 36.0 dB)",
+                    oneStone.describe());
+            Budget grazing = hop(new TestProbes.Sparse(STONE_DB).add(500, 65, 0));
+            assertTrue(grazing.describe().contains("Fresnel obstructed (+6.0 dB)"), grazing.describe());
+        } finally {
+            java.util.Locale.setDefault(previous);
+        }
+    }
+
     private static RfConfig withRainFadeAndScale(RfConfig base, boolean enableRainFade, double metersPerBlock) {
         return new RfConfig(
                 metersPerBlock, base.maxEvaluationRangeBlocks(), base.maxCellsEvaluated(),

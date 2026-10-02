@@ -31,6 +31,9 @@ public final class ModCreativeTabs {
                         output.accept(ModItems.NETWORK_LOCATOR.get());
                         output.accept(ModItems.RADIO_LINK_TRANSMITTER.get());
                         output.accept(ModItems.RADIO_LINK_RECEIVER.get());
+                        output.accept(ModItems.CORE_SITE.get());
+                        output.accept(ModItems.BACKHAUL_DISH.get());
+                        output.accept(ModItems.LINK_TOOL.get());
                     })
                     .build());
 
