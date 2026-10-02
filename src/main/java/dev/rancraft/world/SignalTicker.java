@@ -475,6 +475,22 @@ public final class SignalTicker {
         }
     }
 
+    /**
+     * What {@link #evaluate} does once it has a sample: finds the devices the player carries
+     * ({@link #carried}) and dispatches the sample to them with the serving cell's backhaul cap of now
+     * ({@link BackhaulNetwork#serviceCapAt}), at the level's game time.
+     *
+     * <p><b>For game tests only</b> (Phase 3 slice 13). A game test cannot run the per-player path itself
+     * (a mock {@code ServerPlayer} on the player list cannot receive the mod's payloads; see PHASE_3.md),
+     * so it evaluates the player's position with the engine and hands the sample here, to reach the
+     * carried devices exactly as a real evaluation does: the same scan, the same cap, the same verdicts.
+     */
+    public static void dispatchToCarried(ServerPlayer player, SignalSample sample, BandTable bands, RfConfig config) {
+        ServerLevel level = player.serverLevel();
+        dispatch(player, carried(player), sample, bands, config, level, level.getGameTime(),
+                BackhaulNetwork.serviceCapAt(level, sample.servingCellId()));
+    }
+
     /** The worn lens's settings, or {@code null} when no lens is worn. */
     private static LensSettings wornLensOf(ServerPlayer player) {
         ItemStack lens = RfLensItem.wornBy(player);

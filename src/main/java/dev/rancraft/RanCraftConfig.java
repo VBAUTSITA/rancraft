@@ -383,6 +383,15 @@ public final class RanCraftConfig {
         return SPEC.isLoaded() ? FIBER_RADIUS_BLOCKS.get() : FIBER_RADIUS_BLOCKS.getDefault();
     }
 
+    /**
+     * The evaluation interval alone, without building a {@link #snapshot()} (Phase 3 slice 13): the
+     * Storage Terminal's open menu reads it every tick to judge how old its last verdict may be. Falls
+     * back to the default if read before the config has loaded.
+     */
+    public static int evaluationIntervalTicks() {
+        return SPEC.isLoaded() ? EVALUATION_INTERVAL_TICKS.get() : EVALUATION_INTERVAL_TICKS.getDefault();
+    }
+
     /** Immutable snapshot handed to the engine, so the engine never touches a config API. */
     public static RfConfig snapshot() {
         return new RfConfig(

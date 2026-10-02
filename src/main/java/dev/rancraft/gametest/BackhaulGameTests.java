@@ -799,7 +799,7 @@ public final class BackhaulGameTests {
         return dish;
     }
 
-    private static long chunkKey(BlockPos pos) {
+    static long chunkKey(BlockPos pos) {
         return ChunkPos.asLong(pos);
     }
 
@@ -807,7 +807,7 @@ public final class BackhaulGameTests {
      * Forces each chunk and loads, now, every chunk its ticket makes FULL: a chunk reaching FULL bumps
      * its region bin, and left to load in the background it would re-march a hop mid-test.
      */
-    private static void force(ServerLevel level, Set<Long> chunks, List<Long> forced) {
+    static void force(ServerLevel level, Set<Long> chunks, List<Long> forced) {
         for (long key : chunks) {
             int x = ChunkPos.getX(key);
             int z = ChunkPos.getZ(key);
@@ -817,7 +817,7 @@ public final class BackhaulGameTests {
         }
     }
 
-    private static void release(ServerLevel level, List<Long> forced) {
+    static void release(ServerLevel level, List<Long> forced) {
         for (long key : forced) {
             level.setChunkForced(ChunkPos.getX(key),
                     ChunkPos.getZ(key), false);
@@ -826,7 +826,7 @@ public final class BackhaulGameTests {
     }
 
     /** Back to air, without drops; a dish, core or mast leaves the network on its way. */
-    private static void removeAll(ServerLevel level, List<BlockPos> positions) {
+    static void removeAll(ServerLevel level, List<BlockPos> positions) {
         for (BlockPos pos : positions) {
             if (!level.getBlockState(pos).isAir()) {
                 level.setBlock(pos, Blocks.AIR.defaultBlockState(), 3);
@@ -838,7 +838,7 @@ public final class BackhaulGameTests {
      * Places {@code stack} at {@code target} the way a player does (NeoForge's placement hook fires the
      * placement event, which bumps the block's region bin), as {@code RegionEpochGameTests} does.
      */
-    private static void placeWithItem(GameTestHelper helper, Player player, BlockPos target, ItemStack stack) {
+    static void placeWithItem(GameTestHelper helper, Player player, BlockPos target, ItemStack stack) {
         ServerLevel level = helper.getLevel();
         if (!level.getBlockState(target).canBeReplaced()) {
             helper.fail("cannot place at " + target + ": " + level.getBlockState(target));

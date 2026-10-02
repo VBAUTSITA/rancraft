@@ -5,6 +5,7 @@ import dev.rancraft.item.FieldTestMeterItem;
 import dev.rancraft.item.LinkToolItem;
 import dev.rancraft.item.NetworkLocatorItem;
 import dev.rancraft.item.RfLensItem;
+import dev.rancraft.item.StorageTerminalItem;
 import dev.rancraft.item.WidebandRadioUnitItem;
 import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.Item;
@@ -68,6 +69,15 @@ public final class ModItems {
     public static final DeferredItem<LinkToolItem> LINK_TOOL = ITEMS.registerItem(
             "link_tool",
             LinkToolItem::new,
+            new Item.Properties().stacksTo(1));
+
+    /**
+     * Phase 3 slice 13, §3C.3: opens a chest or barrel near a Core Site over the mobile network. A
+     * {@code SignalDevice} (GOOD, tier 2). No recipe yet (§3C.6, slice 16): creative-only for now.
+     */
+    public static final DeferredItem<StorageTerminalItem> STORAGE_TERMINAL = ITEMS.registerItem(
+            "storage_terminal",
+            StorageTerminalItem::new,
             new Item.Properties().stacksTo(1));
 
     public static void register(IEventBus modBus) {

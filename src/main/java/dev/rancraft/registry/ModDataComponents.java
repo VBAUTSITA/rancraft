@@ -59,6 +59,15 @@ public final class ModDataComponents {
                     .persistent(GlobalPos.CODEC)
                     .networkSynchronized(GlobalPos.STREAM_CODEC));
 
+    /**
+     * The chest or barrel a Wireless Storage Terminal is bound to (Phase 3 slice 13, §3C.3): dimension and
+     * position, set by sneak + use on the container. Synced so the tooltip can show it.
+     */
+    public static final Supplier<DataComponentType<GlobalPos>> STORAGE_TERMINAL_TARGET =
+            DATA_COMPONENTS.registerComponentType("storage_terminal_target", builder -> builder
+                    .persistent(GlobalPos.CODEC)
+                    .networkSynchronized(GlobalPos.STREAM_CODEC));
+
     public static void register(IEventBus modBus) {
         DATA_COMPONENTS.register(modBus);
     }
