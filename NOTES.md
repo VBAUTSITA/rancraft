@@ -4309,7 +4309,7 @@ The game half of backhaul, on slice 11's pure `MicrowaveLink` and `BackhaulGraph
 Backhaul Dish blocks, the Link Tool, the dimension's backhaul network that measures every hop on the
 live level and solves the graph, the effects of `requireBackhaul`, the meter's backhaul line, the hops on
 the RF Lens and `/rancraft backhaul status`. Code in `ea9c98d` (part 1 of 2); these notes and the
-tracker in "Phase 3 slice 12: backhaul in game".
+tracker in `8f2a31a` "Phase 3 slice 12: backhaul in game".
 
 An earlier attempt at this slice was interrupted after writing the blocks, the item, the network, the
 payload, the renderer, the command and their unit tests (uncommitted, green: 559 tests). This step
