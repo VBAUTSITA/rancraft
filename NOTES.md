@@ -4586,8 +4586,8 @@ run, after a warm-up; wall-clock in a shared JVM, an order of magnitude:
 A Storage Terminal item that opens a chest or barrel in the data centre over the mobile network. It
 rides the player's existing evaluation (a `SignalDevice`, GOOD on band tier 2), it opens a session only
 on an OK verdict, and it closes the session when the verdict fails. The code went in `6a0ab89`
-(part 1 of 2). The game tests, these notes and the tracker went in "Phase 3 slice 13: Wireless Storage
-Terminal".
+(part 1 of 2). The game tests, these notes and the tracker went in `b1735d2` "Phase 3 slice 13: Wireless
+Storage Terminal".
 
 An earlier attempt at this slice was interrupted. It had written the item, the menu, the terminal's
 per-player record, its unit tests and two game-test helpers. That work was uncommitted but green (567
