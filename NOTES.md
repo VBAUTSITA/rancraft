@@ -4302,3 +4302,281 @@ a synthetic probe (a counting lambda, not the server's block lookups); medians o
 | `./gradlew runGameTestServer` | "32 tests are now running", "All 32 required tests passed"; the log shows the microwave figures loaded through the real reload listener beside 4 bands, and the config file gains the five keys at their defaults |
 | Versions | none changed: `PROTOCOL_VERSION` 8, `SignalSamplePayload.VERSION` unchanged, `DATA_VERSION` 3 |
 | In game | nothing to see yet (no block reads the link or the graph); the done-when checks come with slice 12 |
+
+## Slice 12 — backhaul in game (§3C.2: core site, dish, link tool, backhaul state, lens lines, status)
+
+The game half of backhaul, on slice 11's pure `MicrowaveLink` and `BackhaulGraph`: the Core Site and
+Backhaul Dish blocks, the Link Tool, the dimension's backhaul network that measures every hop on the
+live level and solves the graph, the effects of `requireBackhaul`, the meter's backhaul line, the hops on
+the RF Lens and `/rancraft backhaul status`. Code in `ea9c98d` (part 1 of 2); these notes and the
+tracker in "Phase 3 slice 12: backhaul in game".
+
+An earlier attempt at this slice was interrupted after writing the blocks, the item, the network, the
+payload, the renderer, the command and their unit tests (uncommitted, green: 559 tests). This step
+reviewed that work against §3C.2 and the 1.21.1 / NeoForge 21.1.251 sources, kept it, wrote the
+runtime tests (`BackhaulGameTests`), measured, ran the game tests and committed.
+
+### What was built
+
+- **`core_site`** (`CoreSiteBlock`, `CoreSiteBlockEntity`): the core network. Use shows the fiber
+  radius. The entity holds nothing; its lifecycle tells the dimension's network a core is here
+  (`clearRemoved` and `onLoad` announce it; `setRemoved` removes it when broken or replaced, not when
+  its chunk unloads: NeoForge's `LevelChunk.clearAllBlockEntities` calls `onChunkUnloaded` first).
+- **`backhaul_dish`** (`BackhaulDishBlock`, `BackhaulDishBlockEntity`): one end of a hop. The entity
+  stores its partner (`Partner`, a packed position, with its own `DataVersion` 1), as §3C.2 asks. Use
+  (anything but a Link Tool) prints the hop as last measured: far dish, state, RSL, margin to UP,
+  Fresnel state, rain loss, length, obstruction, weather, and the dish's own reach to the core. A
+  Link Tool skips the block interaction (`SKIP_DEFAULT_BLOCK_INTERACTION`) and goes to the item.
+  Breaking a dish unpairs its partner.
+- **`link_tool`** (`LinkToolItem`): use on dish A (selected: a `GlobalPos` data component,
+  `rancraft:link_tool_source`, persistent and synced; the tool glints), then on dish B: paired, both
+  entities hold the other, the selection clears. Sneak + use on a dish unpairs it and its partner.
+  Refused: the same dish twice, another dimension (re-selects), a first dish that is gone
+  (re-selects), and a hop longer than `maxEvaluationRangeBlocks` (1400). Pairing a dish that already
+  has a partner unpairs the old one.
+- **`world/BackhaulNetwork`** (a `SavedData` per dimension, `data/rancraft_backhaul.dat`, its own
+  `DataVersion` 1): the cores, dishes, pairings and the cells that pass their own rules, saved, so a
+  hop's far end, a relay site or the core may sit in an unloaded chunk and still count (a block cannot
+  change while its chunk is unloaded, so the last thing it told the network stays true). The network is
+  the record of who is paired with whom; a loaded dish entity mirrors it (`dishLoaded`), so a dish
+  paired while its partner was unloaded catches up when it loads. An entry whose block is gone when its
+  chunk loads (an edited world) is dropped then (`validate`, on `ChunkEvent.Load`).
+  - **Recompute** (`tick`, on `ServerTickEvent.Post`): when the site registry version moves, a dish is
+    paired or unpaired (or a core, dish or cell comes or goes), a region epoch moves on a bin any hop
+    crosses (`MicrowaveLink.dependencyBins` with `RegionEpochs.snapshot` / `unchanged`, slice 7's bins
+    and `BinTraversal`), the weather changes, or the link figures, material table, `metersPerBlock`,
+    range, radii, `enableRainFade` or `requireBackhaul` change; at most once per
+    `backhaulRecomputeTicks` (100). Only a new hop or one whose bins moved is marched; a weather change
+    re-budgets every hop with `withWeather` (no block read); the graph is solved whenever anything
+    changed. `RegionEpochs.bumps()` (new: every bump, chunk bumps included) lets a quiet tick skip the
+    per-hop snapshot checks.
+  - **Each hop** is marched once, from the lower packed position (one fixed order, slice 11's note),
+    between the two dish centres with `LevelWorldProbe`, with a step cap that no march of it can run
+    out of (`MicrowaveLink.stepsToReach`, new, pinned on 400 random hops). The weather is
+    `Weather.at(level.isRaining(), level.isThundering(), precipitation)`, the precipitation being
+    `Biome.getPrecipitationAt` at the hop's midpoint (NONE → CLEAR, RAIN, SNOW).
+  - **Effects** (only with `requireBackhaul` on): a NONE cell is not transmitting; a LIMITED cell's
+    devices are capped at FAIR (below). With it off nothing a cell or device does changes and no antenna
+    is refreshed; the states are still worked out once a core or dish exists, for the lens, the dish
+    and the command. A dimension with no core, no dish and the flag off costs one map lookup a tick.
+- **Off the air** (`AntennaBlockEntity`): `isTransmitting()` is now `eligibleToTransmit() &&
+  backhaulAllows()`; `eligibleToTransmit()` is the old rule (`requireRedstone`; the mast column's rules
+  in `SignalMastBlockEntity`). `refreshRegistration()` reports every eligible cell to the network
+  (`noteCell`) and registers it only if the backhaul allows; it stays the one writer of `OnAir`, so the
+  registry and the lens cannot disagree (slice 6's follow-up, for backhaul; power can reuse it). The
+  network refreshes exactly the cells whose state changed (all of them when the flag flips). A broken
+  antenna leaves the graph; an unloaded one does not (`onChunkUnloaded`).
+- **The cap** (`BackhaulGraph.LIMITED_SERVICE_CAP` FAIR, `serviceCap(state, requireBackhaul)`,
+  `allowsOnAir(state, requireBackhaul)`; pure): `DeviceContext` appends `serviceCap` (the six-argument
+  constructor is kept, no cap) with `effectiveServiceLevel()` = `worstOf(sample, cap)` and
+  `backhaulLimited()`. `DeviceRequirement.check(sample, bands, serviceCap)` checks the capped level (the
+  two-argument form is EXCELLENT, no cap). Both tickers read the serving cell's cap at dispatch
+  (`BackhaulNetwork.serviceCapAt`), replays included (a cell can turn LIMITED while nothing its sample
+  depends on moves), and hand the sample over untouched.
+- **The meter**: `SignalSamplePayload` v4 appends `serviceCap` (the server's cap as it dispatched);
+  `backhaulNote()` gives "BH: LIMITED (capped FAIR)" (and "BH: NONE (no backhaul)" for the moment
+  before such a cell goes off the air), drawn on both HUD layouts under the bars, which stay the radio
+  link's own level. The ticker caches the payload uncapped and sets the cap each time it sends it.
+- **The lens**: `BackhaulLinksPayload` (S2C, `VERSION` 1, at most 64 hops, a larger count or an
+  unknown state byte rejected on read): each hop's two dish positions, the measured state, RSL and
+  margin. Sent once a second to each player wearing an RF Lens with the lobes layer on, for the hops
+  within the server's view distance of them, nearest first, only when the set changed (an empty one
+  once when it empties). Not a `LensSettings` field (six-field codec ceiling). `BackhaulRenderer` draws
+  each hop dish to dish, faintly through terrain then solid (as link rays), green UP, orange DEGRADED,
+  red DOWN, labelled at the midpoint with the server's RSL and margin (`LensStyle.backhaulRgb`,
+  `backhaulLabel`).
+- **`/rancraft backhaul status [radius]`** (default 500, permission 2): a header (the flag, cores,
+  dishes, links, weather, the measurement's age), the cells off the air for want of backhaul (or, with
+  the flag off, the cells with none, still on the air), the LIMITED cells, and every link within the
+  radius with its state, RSL, margin, Fresnel state, rain loss, length, obstruction and weather; each
+  list nearest first, at most 20 lines. It formats; it judges nothing.
+- **Resources:** loot tables for both blocks (`loot_table/blocks/`, drop themselves), both in
+  `tags/block/mineable/pickaxe.json`, placeholder models from vanilla textures (lodestone for the core,
+  a daylight-detector face for the dish, the spyglass for the tool), lang entries, the creative tab. No
+  recipes yet (slice 16): creative-only.
+- **Versions:** `ModPayloads.PROTOCOL_VERSION` 8 → 9 (one bump: the sample's new field, the new
+  payload, the tool's synced component). `SignalSamplePayload.VERSION` 3 → 4. `AntennaBlockEntity.
+  DATA_VERSION` unchanged (3): no antenna field is saved. New save formats: the dish entity and the
+  network file, each `DataVersion` 1.
+
+### Where each part of §3C.2 lives (this slice's half)
+
+| §3C.2 | Where | Pinned by |
+|---|---|---|
+| `core_site`, `backhaul_dish`, `link_tool` (both entities store the partner; alignment automatic) | `CoreSiteBlock(Entity)`, `BackhaulDishBlock(Entity)`, `LinkToolItem` | `BackhaulGameTests.three_sites_chained...` (real tool use, entities and save), `HarvestGameTests` (both drop themselves), `BackhaulNetworkTest` |
+| Server computes link states (WorldProbe march, midpoint weather) and per-cell backhaul | `BackhaulNetwork.recompute`, `measure`, `precipitationAt` | chain (the network's budget equals a fresh march; −33.55 and −69.55 dBm live), weather |
+| Recompute triggers, at most once per `backhaulRecomputeTicks` | `BackhaulNetwork.tick` | chain (stone with its event: re-marched at ≥ 100 ticks, one hop only; break: topology), weather (each change seen, no march) |
+| NONE and `requireBackhaul` → not transmitting (unregister, OnAir false) | `AntennaBlockEntity.isTransmitting` / `refreshRegistration`, `BackhaulGraph.allowsOnAir` | chain (registry, `onAir()`, update tag), `BackhaulGraphTest.onAirWithRequireBackhaul` |
+| LIMITED → transmits, devices capped at FAIR in `DeviceContext`, sample untouched | `BackhaulGraph.serviceCap`, `DeviceContext`, `DeviceRequirement.check(…, cap)`, both tickers | `SignalTickerTest.backhaulCapIsAppliedInTheNetworkLayerOnly` (the 3C test), `DeviceRequirementTest.serviceCap`, chain (a live evaluation of a LIMITED cell) |
+| Meter "BH: LIMITED (capped FAIR)" | `SignalSamplePayload.serviceCap`, `backhaulNote`, `SignalHudOverlay` | `SignalSamplePayloadTest.backhaulCap`, chain |
+| `requireBackhaul` off: nothing changes | `BackhaulGraph.serviceCap` / `allowsOnAir`, `BackhaulNetwork.recompute` | `BackhaulGraphTest.requireBackhaulOffChangesNothing`, weather (a NONE cell on air, uncapped, registry never moved), chain (flag off: back on air) |
+| `BackhaulLinksPayload` to lens wearers in range; lines with the lobes layer | `BackhaulLinksPayload`, `BackhaulNetwork.sendLensLinks` / `linksNear`, `BackhaulRenderer` | `BackhaulLinksPayloadTest`, `LensStyleTest`, chain (`linksNear`) |
+| `/rancraft backhaul status [radius]` | `RanCraftCommands.backhaulStatus` | chain (run through the dispatcher, output checked) |
+
+### Decisions and deviations
+
+1. **With `requireBackhaul` off, backhaul has no effect at all**, the LIMITED cap included. §3C.2 ties
+   the off-air effect to the flag and states the cap without it; the task and §2 ("a Phase 2 world must
+   play exactly as before") require that nothing changes by default, and a cap on a world with no Core
+   Site would make every cell's devices FAIR at best. So `serviceCap(state, false)` is no cap whatever
+   the state. The states are still worked out (once a core or dish exists) for the lens, the dish and
+   the command, which say "no cap because requireBackhaul is off".
+2. **The topology is saved with the dimension, and the graph's cells are the eligible ones, not the
+   registered ones.** A hop is up to 1400 blocks, so one end, a relay or the core is often in an
+   unloaded chunk; the site registry forgets unloaded cells and, with the flag on, cells off the air
+   for want of backhaul, which must still be found when their backhaul comes back. Entries come and go
+   through the blocks' own lifecycle (never a chunk unload), and a chunk that loads with an entry whose
+   block is gone drops it.
+3. **A cell the graph has not judged yet is on the air** (`allowsOnAir(null, …)` is true) until the
+   next recompute, at most `backhaulRecomputeTicks` later; at a server start that is the first tick.
+   The alternative (off until judged) would take every cell off the air and back as a world loads
+   chunk by chunk. Labelled in `BackhaulNetwork` and `BackhaulGraph`.
+4. **The hop's march cap.** Slice 11's note: `maxRaySteps` (1200) would put a 1000-block diagonal hop
+   out of range. The march gets a cap it cannot run out of (`stepsToReach`: the line's voxel count plus
+   six Fresnel offsets and a margin), and the hop's length is bounded instead by
+   `maxEvaluationRangeBlocks` (1400 by default, the range every cellular march uses): the Link Tool
+   refuses a longer pairing, and a hop that a lowered range leaves too long is DOWN, out of range, with
+   no march.
+5. **The weather at a hop.** The level's rain and thunder (one value per dimension in vanilla) with
+   the precipitation of the biome at the hop's midpoint, from the loaded chunk's 4 x 4 x 4 biome cell or
+   the world generator's (`getUncachedNoiseBiome`), never a chunk load, without vanilla's fuzzy biome
+   zoom. Read when the hop is measured (a biome does not change under a hop). `getPrecipitationAt` is
+   height-adjusted: a hop high above a cold biome can read snow (no fade) where the ground reads rain.
+6. **The cap adds no verdict.** A capped GOOD device is `LOW_QUALITY`; `DeviceContext.backhaulLimited()`
+   lets a device's HUD say "backhaul limited" rather than "weak signal". §3A.1's three reasons stay.
+7. **The payload carries the cap, not a string.** `SignalSamplePayload` v4 appends the server's
+   `ServiceLevel` cap; the meter builds the text. A NONE cap reads "BH: NONE (no backhaul)": with the
+   flag on such a cell is off the air at the next refresh, so the line is seen at most for an instant.
+8. **Lens range** is the server's view distance (blocks), what the client could see anyway; §3C.2 says
+   only "within range". Sent once a second when the set changed.
+9. **Recompute triggers beyond the four in §3C.2**: a datapack reload of the link figures or the
+   material table, `metersPerBlock`, the range, the radii, `enableRainFade` and the flag itself. Each
+   changes a hop's budget or the graph; without them a `/reload` would leave stale states.
+10. **No hysteresis.** Slice 8's follow-up asked for it if a state flaps in rain. A state changes only on
+    an event (a weather change, a block on a path, a pairing, a cell coming or going), at most once per
+    `backhaulRecomputeTicks`; vanilla weather changes are minutes apart, and a block on a path holds
+    until changed. Nothing oscillates, so the site registry (and with it every fixed receiver) moves
+    only when a cell really goes on or off the air.
+
+### Found while verifying (behaviour as intended)
+
+- NeoForge's `CommonHooks.onPlaceItemIntoWorld` wraps every server-side `useOn`, saving the stack's
+  components before the call and applying them again after it. It saves `getComponents()`, which is the
+  stack's live map, so the Link Tool's `remove(link_tool_source)` survives. The game test runs the real
+  path (`ItemStack.useOn` on a mock player) and checks the selection is gone after pairing.
+- `DimensionDataStorage.get` caches a missing file as `null`, so `BackhaulNetwork.peek` (every tick,
+  every dispatch's cap) is a map lookup in a dimension that never had a network, not a disk check.
+
+### Honest-abstraction notes (also at the code sites)
+
+- **Automatic dish alignment** (`LinkToolItem`, `BackhaulDishBlockEntity`): pairing is the whole job;
+  both dishes get their full 32 dBi whatever the geometry. A real crew aligns a 2-degree beam by hand,
+  watching the received level.
+- **Implicit fiber by radius** (`CoreSiteBlock`): being within `fiberRadiusBlocks` of a core is being on
+  fiber; nothing is laid, nothing is cut.
+- **The backhaul cap is a flat FAIR ceiling** (`BackhaulGraph.LIMITED_SERVICE_CAP`, `DeviceContext`): a
+  real backhaul-limited cell runs out of transport capacity, so its users' throughput falls with load,
+  and a lightly loaded one may not notice. Here there is no traffic, so the limit is one step.
+- **Unloaded terrain reads as air** for a hop, as for every cellular ray (`LevelWorldProbe`); the
+  chunk's bin moves when it loads, and the hop is measured again then.
+- **A cell not judged yet is on the air** (decision 3); **the weather is level-wide** with the
+  midpoint's biome deciding rain or snow (decision 5); **a hop past `maxEvaluationRangeBlocks` is DOWN**
+  (decision 4).
+- **A site in an unloaded chunk still relays**, and an unloaded core still feeds its fiber: the
+  topology is the last thing the blocks reported (decision 2).
+
+### Measured
+
+`BackhaulGameTests` on the live game-test server (flat world, forced chunks, JDK 21, this machine), one
+run, after a warm-up; wall-clock in a shared JVM, an order of magnitude:
+
+| What | Cost |
+|---|---|
+| One hop, 99 blocks, over loaded chunks (line + four Fresnel paths, clear air, every path to its end) | 13.9 µs (0.14 µs per block of hop) |
+| One hop, 1000 blocks, mostly over unloaded chunks (read as air) | 64.7 µs (0.065 µs per block) |
+| A recompute marching all three hops of the chain (1070 blocks) | 192 µs |
+| A recompute marching none (graph, weather, effects; 3 cells) | 36 µs |
+| The first recompute after start (cold JIT, three hops) | 10.6 ms, once |
+| The per-tick check, inside the interval | 0.08 µs |
+| The per-tick check, past it with no trigger (config, weather, registry version, bump count) | 1.25 µs |
+
+- On the server a hop costs about 0.14 µs per block of length over loaded ground, five to six times
+  slice 11's synthetic probe (26 µs per 1000 blocks), so a 1000-block hop over loaded ground is about
+  0.14 ms. It is marched only when it is new, its figures change or a block moves in one of its bins,
+  and at most once per 100 ticks. A weather change marches nothing. The average stays far inside the
+  budget, but the re-marches of one recompute run in one tick: 50 long hops invalidated together (one
+  block moving in a bin all of them cross) would make that tick about 7 ms. Not seen at the done-when's
+  scale (a few hops); a follow-up records the fix (spread re-marches over ticks) if a large network
+  shows it.
+- The quiet path every server pays every tick is about a microsecond per dimension with a network.
+- The game tests' existing cost lines in this run, with the cap lookup now in every dispatch: 200 radio
+  links, windows 48.3, 37.3 and 25.5 µs/tick (median 37.3, under the 100 µs gate); 200 fixed receivers,
+  25.5 µs/tick in steady state (25.1 in slice 11).
+
+### Tests
+
+- Unit (20 new, 559 in all): `BackhaulLinksPayloadTest` (4: round trip with world-edge coordinates,
+  empty, the cap of 64 on build and on read, an unknown state byte); `BackhaulNetworkTest` (5: pairing
+  stays mutual and re-pairing unpairs the old partner, a loaded dish adopts the network's record, the
+  saved topology round-trips and a stray pairing is dropped, cores and cells, the lens's distance to a
+  hop); `BackhaulGraphTest` (+3: the caps with the flag on, nothing with it off, on-air rules);
+  `DeviceRequirementTest.serviceCap`; `SignalTickerTest.backhaulCapIsAppliedInTheNetworkLayerOnly`
+  (**the 3C test**: a LIMITED cell's FAIR cap reaches each device's verdict and context, the GOOD device
+  stops, the POOR one keeps working, and the `SignalSample` is the same object, equal to a copy, its own
+  level GOOD); `SignalSamplePayloadTest.backhaulCap` (v4 round trip, the meter's text);
+  `SignalTickerPayloadTest` (the captured v3 bytes as v4: version byte 04, cap byte appended, every
+  byte between unchanged); `MicrowaveLinkTest` (+3: `stepsToReach` never cuts a march short on 400
+  random hops and fixes the 1414-voxel diagonal; a cap of 0 reads nothing; `describe()`);
+  `LensStyleTest` (+2: hop colours, the label in a German locale).
+- Game (`BackhaulGameTests`, 2 new; 36 in all):
+  - `three_sites_chained_limited_then_off_air` (`requireBackhaul` on): a core and three sites along
+    1084 blocks (a 1000-block middle hop), paired with the real Link Tool (select, same dish, pair,
+    sneak-unpair, re-pair; both entities hold and save the partner). All three hops UP, the middle one
+    at FSPL 117.55 dB and −33.55 dBm, equal to a fresh march; all three sites FULL, registered, OnAir,
+    uncapped; the lens's `linksNear` from site 1. A stone placed with its event on the middle hop: at
+    the next allowed recompute (≥ 100 ticks after the last) only that hop is marched again, it is
+    DEGRADED at −69.55 dBm (§3C.2's sanity check, live), sites 2 and 3 are LIMITED and capped at FAIR, a
+    live evaluation of site 2 (GOOD+ radio) refuses a GOOD requirement, keeps a POOR one and leaves the
+    sample's own level alone, and the meter's line reads "BH: LIMITED (capped FAIR)". The stone broken
+    (with its event): UP and FULL again. The middle dish broken: its partner unpaired (network and
+    entity), sites 2 and 3 NONE, unregistered, `onAir()` false and `OnAir` false in the update tag
+    (what the lens greys); site 1 untouched. `/rancraft backhaul status 2000` through the dispatcher:
+    two cells off the air, none LIMITED, two links with RSL, margin, Fresnel state and rain loss. The
+    flag turned off: sites 2 and 3 back on the air, still NONE, uncapped.
+  - `a_marginal_hop_drops_in_a_thunderstorm_and_recovers` (flag off): one stone on a 1000-block hop,
+    DEGRADED at −69.55 dBm under a clear sky; the server's own recompute sees a thunderstorm (THUNDER,
+    6.0 dB, DOWN at −75.55, no march), rain (2.5 dB, DOWN) and the sky clearing (DEGRADED −69.55 again).
+    A mast beside one dish, with no core anywhere, is NONE, on the air, uncapped throughout, and the
+    site registry's version never moved.
+  - `HarvestGameTests` covers both new blocks with no edit (6 tests now): mined with an iron pickaxe in
+    survival, each drops itself.
+
+### APIs verified against sources (new to this codebase)
+
+- `DimensionDataStorage.computeIfAbsent(SavedData.Factory, String)` / `get` (1.21.1): `get` caches a
+  missing file as `null`; `readSavedData` accepts a null `DataFixTypes`. `SavedData.save(CompoundTag,
+  HolderLookup.Provider)`.
+- `LevelChunk.clearAllBlockEntities()` (NeoForge-patched): `onChunkUnloaded` on every entity, then
+  `setRemoved`; `ServerLevel.unload(LevelChunk)` calls it. `LevelChunk.removeBlockEntity` (a block
+  broken or replaced) calls `setRemoved` alone. `ChunkStatusTasks.full` promotes on the main-thread
+  mailbox, so `clearRemoved` during a chunk load runs on the server thread.
+- `ServerLevel.getUncachedNoiseBiome(qx, qy, qz)` (the generator's biome source, no chunk),
+  `ChunkAccess.getNoiseBiome(qx, qy, qz)`, `QuartPos.fromBlock`, `Biome.getPrecipitationAt(BlockPos)`.
+- `ServerLevel.setWeatherParameters(clear, rain, raining, thundering)`, `Level.setRainLevel` /
+  `setThunderLevel` (set both the current and previous level), `isRaining()` (rain level > 0.2),
+  `isThundering()` (thunder × rain level > 0.9, overworld-like skies only); the game-test server
+  starts clear with `doWeatherCycle` off, and the levels still ramp toward the flags each tick.
+- `CommonHooks.onPlaceItemIntoWorld` (NeoForge 21.1.251): see "Found while verifying".
+- `CommandSourceStack(CommandSource, Vec3, Vec2, ServerLevel, int, String, Component, MinecraftServer,
+  Entity)`, `CommandSource`, `Commands.performPrefixedCommand` (game test only).
+- `GlobalPos.CODEC` / `STREAM_CODEC` for the tool's component.
+
+### Verification
+
+| Check | Result |
+|---|---|
+| `./gradlew build` | **559 passed, 0 failed, 0 skipped** (539 + 20) |
+| `rf` / `util` purity | `PackagePurityTest` passes (`BackhaulGraph`, `DeviceRequirement`, `MicrowaveLink` changes have no Minecraft import) |
+| `./gradlew runGameTestServer` | 23 batches run, "All 36 required tests passed" (32 + 2 harvest + 2 backhaul); the log shows the status command's output and the cost line |
+| Versions | `PROTOCOL_VERSION` 9, `SignalSamplePayload.VERSION` 4, `BackhaulLinksPayload.VERSION` 1; `AntennaBlockEntity.DATA_VERSION` 3 (unchanged); dish entity and network file `DataVersion` 1 |
+| In game | needs the user (`PHASE_3.md`, slice 12 checks): the lens lines and the greyed lobe, the meter's line, a real tree, a real storm |

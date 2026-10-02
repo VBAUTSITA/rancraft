@@ -68,12 +68,18 @@ To run a headless dedicated server instead: `.\gradlew.bat runServer`
     configuration screen shows band_3500 greyed with "needs Wideband Radio Unit" until then. A sector
     already on band_3500 in an older world keeps it. The RF Lens is never tier-gated. Creative tab
     only for now.
-  - *Backhaul (the maths so far; the blocks come next):* an 18 GHz point-to-point microwave link
-    budget (free-space loss, line of sight, first Fresnel zone clearance, rain fade; figures in
-    `data/rancraft/rf/backhaul/microwave.json`) and the graph that decides whether each cell reaches a
-    core network at full rate, limited, or not at all. New COMMON config: `requireBackhaul` (off by
-    default, so existing worlds are unaffected), `fiberRadiusBlocks`, `siteRadiusBlocks`,
-    `backhaulRecomputeTicks`, `enableRainFade`.
+  - *Backhaul:* a **Core Site** (the core network; cells and dishes within `fiberRadiusBlocks`, 24,
+    are on fiber), **Backhaul Dishes** (a dish within `siteRadiusBlocks`, 8, of a cell's base serves
+    it) and the **Link Tool** (use it on one dish, then on the far one, to pair them; sneak + use
+    unpairs). The server measures each 18 GHz hop on the real terrain (free-space loss, line of sight,
+    first Fresnel zone clearance, rain fade in rain and thunderstorms; figures in
+    `data/rancraft/rf/backhaul/microwave.json`): UP, DEGRADED or DOWN. Use a dish to read its hop's RSL
+    and margin. With the RF Lens on (lobes layer), hops are drawn green, orange or red. With
+    `requireBackhaul` on (COMMON config, **off by default**, so existing worlds are unaffected), a cell
+    with no path to a Core Site goes off the air, and one reached only over a DEGRADED hop caps the
+    devices it serves at FAIR (the meter shows `BH: LIMITED (capped FAIR)`). `/rancraft backhaul status
+    [radius]` lists off-air and limited cells and every link's figures. Also `backhaulRecomputeTicks`
+    and `enableRainFade`. Creative tab only for now.
 
 See `VISION.md` for the full design of the vision feature, `VISION_STEP3.md` for Step 3 (the
 drive-test log, and the planned automatic problem diagnosis), and `NOTES.md` for the full build log,
@@ -101,8 +107,9 @@ stacked masts form one cell per column, and extending, breaking, splitting, reds
 cap behave as specified; block changes invalidate only the cached measurements whose paths they
 touch; fixed receivers are evaluated, replayed, unloaded and reloaded correctly; Radio Links follow
 their transmitters, drop about half their updates at POOR (SINR about 1 dB) and none at FAIR,
-and survive a chunk reload; the costs are logged too), and exits. The task fails if
-any test fails. It is separate from `build`.
+and survive a chunk reload; microwave backhaul chains go LIMITED and off the air as specified, and a
+marginal hop drops in a thunderstorm and recovers; the costs are logged too), and exits. The task fails
+if any test fails. It is separate from `build`.
 
 Phases 3A and 3B are complete in code and every headless check passes; what still needs a person
 at the client is listed step by step at the end of `PHASE_3.md` ("How to test Part 3A in game",

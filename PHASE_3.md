@@ -59,7 +59,7 @@ Legend: `[x]` done and verified · `[~]` partly done / needs a manual in-game ch
 | 9b | Phase 3B docs and tracker: code-site labels, done-when re-checked, follow-ups, summary, in-game checklist | 3B | [x] five abstractions NOTES.md called labelled at their code sites were not, or only in part, and now are (`SignalMastBlock`: a column is one site, the mounting-pole rule; the `maxMastHeight` comment, which also still described the pre-review lens; `RegionEpochs`: bins are a cache granularity; `SignalTicker.Cached`: a replay is the evaluation at the cached point; `RadioLinkBlock`: `LIT` is public state), and `LensRenderer` now says the lobe's height is the server's; the 3B done-when re-checked against the code and tests (4 `[x]`, 2 `[~]`); every 3B follow-up marked; NOTES.md "Phase 3B summary"; README; MILESTONES; "How to test Part 3B in game" at the end of this file. Headless green (485 tests, 0 skipped; `runGameTestServer` 30/30 in each of two runs after part 1; 200 radio links medians 58.9 and 48.9 µs/tick there, above every earlier run's 26-48 and still under 0.1 ms) | 6d99b43; docs b8c9299; tracker "PHASE_3.md, NOTES.md: record the Phase 3B docs commit hash" |
 | 10 | Radio tiers + v3 migration | 3C | [~] `rf/RadioTier` (pure; one rule for the server check, the migration and the screen); `AntennaBlockEntity.radioTier` (mast 1, sector 2), saved: `DATA_VERSION` 2 → 3, v2 → v3 `max(blockDefault, tierOf(currentBand))` grandfathers a band_3500 sector, and the v1 "PCI 0 is unassigned" rule now applies to v1 saves only (it would have re-planned every Phase 2 PCI 0); item `wideband_radio_unit` (use on a sector: tier 3, consumed; breaking drops it, a command does not); `applyOn` rejects a band above the radio tier; `OpenAntennaConfigPayload` appends `radioTier` and the bands' tiers, `PROTOCOL_VERSION` 8; screen greys locked bands ("needs Wideband Radio Unit") and disables Apply on one; RF Lens not tier-gated (VISION.md Q1). Headless green (499 tests, 0 skipped; `runGameTestServer` 32/32, 2 new, each failing with its fix removed); in-game checks below; one spec deviation (payload also carries band tiers) and two owner decisions in follow-ups | 71288f0; 4b3ce10; tracker "PHASE_3.md, NOTES.md: record slice 10 commit hash" |
 | 11 | MicrowaveLink + BackhaulGraph + tests | 3C | [x] `rf/MicrowaveLink` (pure: the §3C.2 budget, FSPL with n = 2, RSL, UP / DEGRADED / DOWN at −50 / −70, the 60 % Fresnel check over four offset paths with a flat 6 dB (simplified knife-edge), approximate rain fade (thunder the higher figure, snow nothing); plus `withWeather`, `fresnelOffsetMidpoints` and `dependencyBins` for slice 12), its figures from `rf/backhaul/microwave.json` through `RfDataLoader` and never a cellular band; `rf/BackhaulGraph` (pure: implicit fiber by horizontal radius, dish-to-cell site edges through which a site relays, hops with their state; two BFS passes give FULL / LIMITED / NONE); config `requireBackhaul` false, `fiberRadiusBlocks` 24, `siteRadiusBlocks` 8, `backhaulRecomputeTicks` 100, `enableRainFade` true (the radii and rain fade appended to `RfConfig`). Headless green (539 tests, 0 skipped; `runGameTestServer` 32/32, the microwave figures loaded at runtime beside 4 bands); no version bump; nothing in game reads it until slice 12; two interpretations, an owner decision and notes for slice 12 in follow-ups | 0d45aca; docs 53ce35f; tracker "PHASE_3.md, NOTES.md: record slice 11 commit hash" |
-| 12 | Core site, dish, link tool, backhaul state, lens lines, `/rancraft backhaul status` | 3C | [ ] | |
+| 12 | Core site, dish, link tool, backhaul state, lens lines, `/rancraft backhaul status` | 3C | [~] blocks `core_site` and `backhaul_dish` (drop themselves, pickaxe tag, placeholder art) and item `link_tool` (select, pair, sneak + use unpairs; both dish entities store the partner; alignment automatic, labelled); `world/BackhaulNetwork` (a per-dimension `SavedData` of cores, dishes, pairings and eligible cells, so unloaded relays count; marches each hop with the live `WorldProbe` in one fixed order with a cap it cannot run out of, weather from `Biome.getPrecipitationAt` at the midpoint and the level's rain and thunder; solves `BackhaulGraph`; recomputes on the site registry version, a pairing, a region epoch on a hop's bins or the weather, at most once per `backhaulRecomputeTicks`). With `requireBackhaul` on, NONE → not transmitting (unregistered, `OnAir` false, through `refreshRegistration`), LIMITED → devices capped at FAIR in `DeviceContext` and their verdicts with the `SignalSample` untouched, meter "BH: LIMITED (capped FAIR)" (`SignalSamplePayload` v4); off (default) changes nothing. `BackhaulLinksPayload` v1 (cap 64) to lens wearers, hops drawn with the lobes layer; `/rancraft backhaul status [radius]`; `PROTOCOL_VERSION` 9. Headless green (559 tests, 0 skipped; `runGameTestServer` 36/36: the chain and weather tests, both new blocks in the harvest tests); a hop 0.14 µs per block live, quiet tick about 1 µs; ten decisions in NOTES.md; in-game checks below | ea9c98d; docs (the commit "Phase 3 slice 12: backhaul in game") |
 | 13 | Storage Terminal | 3C | [ ] | |
 | 14 | Proximity Scanner | 3C | [ ] | |
 | 15 | Power + generator | 3C | [ ] | |
@@ -761,25 +761,121 @@ Headless (verified by `./gradlew build`, 539 tests, 0 skipped, and `./gradlew ru
 Needs a human in game: nothing yet. No block uses the link or the graph until slice 12, so a world
 plays exactly as before (`requireBackhaul` is read by nothing).
 
+## Slice 12 (backhaul in game) checks
+
+Headless (verified by `./gradlew build`, 559 tests, 0 skipped, and `./gradlew runGameTestServer`,
+36 of 36; details in NOTES.md, slice 12):
+
+- [x] `core_site` and `backhaul_dish` drop themselves when mined with an iron pickaxe in survival and are
+      pickaxe-mineable (`HarvestGameTests`, 6 tests now, no edit): loot tables in `loot_table/blocks/`,
+      both ids in `tags/block/mineable/pickaxe.json`.
+- [x] **At runtime**, the Link Tool through the real `ItemStack.useOn` (NeoForge's item-use hook): the
+      first dish is selected (dimension and position), the same dish again changes nothing, the second
+      pairs and clears the selection, sneak + use unpairs both ends, re-pairing works; both entities
+      store and save the partner's position (§3C.2).
+- [x] **At runtime**, the server measures each hop on the live level: the network's budget equals a fresh
+      `MicrowaveLink.evaluate` with `LevelWorldProbe`; a 1000-block hop reads FSPL 117.55 dB and
+      −33.55 dBm clear, and −69.55 dBm (DEGRADED) with one stone on it (§3C.2's sanity check, live).
+- [x] **At runtime**, the recompute triggers: a stone placed with its event on a hop is picked up at the
+      next allowed recompute (at least `backhaulRecomputeTicks` after the last) and only that hop is
+      marched again; breaking a dish (topology); the weather (re-budgeted, no march); the flag itself.
+- [x] 3C done-when, server half, **at runtime** with `requireBackhaul` on: three sites chained by
+      microwave from a core are FULL, registered and on the air; breaking the middle dish unpairs its
+      partner and takes the far sites off the air (unregistered, `onAir()` false, `OnAir` false in the
+      update tag, which the lens greys); site 1 is untouched; turning the flag off puts them back on the
+      air, uncapped.
+- [x] 3C test: LIMITED caps `DeviceContext` service at FAIR while the underlying `SignalSample` is
+      untouched (`SignalTickerTest.backhaulCapIsAppliedInTheNetworkLayerOnly`; **at runtime** on a live
+      evaluation of a LIMITED cell: a GOOD requirement refused, a POOR one kept, the sample's own level
+      GOOD or better).
+- [x] The meter's "BH: LIMITED (capped FAIR)": `SignalSamplePayload` v4 carries the server's cap
+      (`SignalSamplePayloadTest.backhaulCap`; built from the live cap in the chain test). The captured v3
+      bytes still hold with the version byte 04 and the cap byte appended.
+- [x] 3C done-when, server half, **at runtime**: a marginal 1000-block hop (one stone, DEGRADED) drops to
+      DOWN in a thunderstorm (6.0 dB) and in rain (2.5 dB) and recovers when the sky clears, each picked up
+      by the server's own recompute without a march.
+- [x] `requireBackhaul` off (the default) changes nothing: a NONE cell stays on the air, uncapped, and
+      three recomputes never move the site registry (weather test;
+      `BackhaulGraphTest.requireBackhaulOffChangesNothing`).
+- [x] `BackhaulLinksPayload` v1: round trip, cap 64 on build and on read, an unknown state rejected
+      (`BackhaulLinksPayloadTest`); `linksNear` gives a site's hops at runtime. Not a `LensSettings` field.
+- [x] `/rancraft backhaul status 2000` **at runtime** through the server's dispatcher: two cells off the
+      air, none LIMITED, two links with RSL, margin, Fresnel state and rain loss.
+- [x] `PROTOCOL_VERSION` 8 → 9 (one bump), `SignalSamplePayload.VERSION` 3 → 4, `BackhaulLinksPayload`
+      v1; `AntennaBlockEntity.DATA_VERSION` 3 unchanged; `rf` stays pure (`PackagePurityTest`).
+- [x] Costs measured (NOTES.md, slice 12): a hop 0.14 µs per block over loaded ground, a recompute
+      marching three hops 192 µs and marching none 36 µs, the quiet per-tick check 0.08-1.25 µs; the
+      existing cost lines hold (200 radio links median 37.3 µs/tick, 200 fixed receivers 25.5 µs/tick).
+
+Needs a human in game (creative unless noted). Steps 2-5 need `requireBackhaul = true` in
+`run/client/config/rancraft-common.toml` (game closed); put it back to `false` afterwards. The hop
+checks need a **long** hop: a short one has about 45 dB of margin, so leaves (3 dB each) cannot degrade
+it; at 1000 blocks the margin is 16.45 dB, as §3C.2's numbers assume.
+
+- [~] **1. Blocks and tool (flag off).** Place a Core Site and right-click it: the action bar gives the
+      fiber radius (24). Place two Backhaul Dishes 40 blocks apart on pillars 10 blocks high; right-click
+      one with an empty hand: "not paired". Use a Link Tool on one dish (it glints, the tooltip names the
+      dish), then on the other: "paired ... (40 m)". Within 5 s, right-click a dish: "UP, RSL ... dBm,
+      margin +... dB, Fresnel clear, rain 0.0 dB". Sneak + use the tool on a dish: "unpaired". *Needs
+      the client (screens, chat).*
+- [~] **2. Three sites chained.** Core Site; dish D0 within 24 blocks of it; site 1 (a Signal Mast) about
+      50 blocks out with two dishes within 8 blocks of its base; site 2 the same about 50 blocks further,
+      site 3 one more mast and dish 50 blocks further; dishes on pillars so the hops clear the ground.
+      Pair D0 with site 1's first dish, site 1's second with site 2's first, site 2's second with site
+      3's dish. With the RF Lens on (lobes layer), the three hops are green lines labelled
+      "UP · ... dBm (+... dB)", and all three lobes are lit. Break site 2's first dish: within 5 s the
+      lobes of sites 2 and 3 turn grey, the middle line disappears, and the meter beside site 3 loses
+      it. `/rancraft backhaul status` lists sites 2 and 3 under "Off the air". Put the dish back and pair
+      it again: lit again within 5 s. *Needs the client (lens, meter).*
+- [~] **3. A tree in the path.** Make one hop about 1000 blocks long (`/tp` along it; the far end's
+      chunk may unload, it still counts). Plant an oak sapling under the hop's midpoint so its canopy
+      will reach the line, and bone-meal it. Within 5 s of the tree growing: the line is orange
+      ("DEGRADED"), the dish reads DEGRADED with the leaves' loss, and the Field Test Meter served by a
+      site behind the hop shows "BH: LIMITED (capped FAIR)" (its bars stay the radio's own). Cut the
+      leaves out of the line: green again. *Needs the client; the Storage Terminal half is slice 13.*
+- [~] **4. A storm.** On the 1000-block hop, put one stone block on the line (the label reads about
+      −69.5 dBm, orange). `/weather thunder`: within 5 s the line turns red (DOWN), the dish reads "rain
+      6.0 dB". `/weather clear`: orange again. (The midpoint must be in a biome where it rains: not a
+      desert, not a snowy biome.) *Needs the client.*
+- [~] **5. Flag off.** Quit, set `requireBackhaul = false`, reopen: every site is lit whatever its
+      backhaul, the meter shows no "BH:" line, and `/rancraft backhaul status` says "still on the air
+      because requireBackhaul is off". *Needs the client.*
+- [~] **6. Survival.** `/gamemode survival`, iron pickaxe: a Core Site and a Backhaul Dish each break
+      with the crack animation and drop as an item (headless: `HarvestGameTests`). *Needs the client.*
+
 ## 3C done-when
 
 - [~] A tier-2 sector cannot use band_3500 until it gets a Wideband Radio Unit. *Server half verified
       at runtime (slice 10: refused through the real `applyOn`, accepted after a unit is fitted through
       the real item use path). The greyed band and the disabled Apply on the screen need the client
       (slice 10 checks above).*
-- [ ] With requireBackhaul on: three microwave-chained sites are on air; breaking the middle dish takes
+- [~] With requireBackhaul on: three microwave-chained sites are on air; breaking the middle dish takes
       the far site off air and the lens greys it. *(Slice 11: the graph half is pinned headless,
-      `BackhaulGraphTest.breakingTheMiddleDish` and `fullViaUpChain`; the blocks, the off-air effect and
-      the lens are slice 12.)*
+      `BackhaulGraphTest.breakingTheMiddleDish` and `fullViaUpChain`. Slice 12: server half verified at
+      runtime, `BackhaulGameTests` chain: real blocks paired with the real Link Tool, all three FULL and
+      on the air; the middle dish broken, the far sites unregistered with `OnAir` false in the update tag,
+      which is what the lens greys. The grey lobe on screen needs the client: slice 12 checks, step 2.)*
 - [ ] A tree grown into a link path → DEGRADED, cells behind read BH: LIMITED, Storage Terminal stops,
       Radio Link keeps working. *(Slice 11: six leaves on a hop is DEGRADED and a DEGRADED hop makes the
-      cells behind it LIMITED, both headless; the rest is slices 12 and 13.)*
-- [ ] A marginal link drops in a thunderstorm and recovers after. *(Slice 11: pinned headless,
-      `MicrowaveLinkTest.marginalHopInAThunderstorm`; the server's weather input is slice 12.)*
+      cells behind it LIMITED, both headless. Slice 12, at runtime with a stone placed with its event
+      standing in for the tree (tree growth bumps its bins: slice 7, `RegionEpochGameTests`): the hop
+      DEGRADED at the next recompute, the cells behind it LIMITED and capped at FAIR, a GOOD requirement
+      (the Storage Terminal's) refused and a POOR one (the Radio Link's) kept on a live sample, the
+      meter's line "BH: LIMITED (capped FAIR)". A real tree and the meter on screen need the client
+      (slice 12 checks, step 3); the Storage Terminal itself is slice 13.)*
+- [~] A marginal link drops in a thunderstorm and recovers after. *(Slice 11: pinned headless,
+      `MicrowaveLinkTest.marginalHopInAThunderstorm`. Slice 12: server half verified at runtime,
+      `BackhaulGameTests` weather: a one-stone 1000-block hop, DEGRADED, goes DOWN in a thunderstorm and
+      in rain and is DEGRADED again when the sky clears, each picked up by the server's own recompute.
+      The line's colour on the lens in a real storm needs the client: slice 12 checks, step 4.)*
 - [ ] Proximity Scanner works on band_3500 at GOOD, refuses on band_1800 with "needs tier 3".
 - [ ] With requirePower on, a 30 dBm sector burns fuel ~7× faster than a 20 dBm one.
-- [ ] Every block and item is craftable in survival and every block drops itself.
-- [ ] With both logistics flags off (default), a Phase 2 world plays exactly as before.
+- [ ] Every block and item is craftable in survival and every block drops itself. *(Slice 12: Core
+      Site and Backhaul Dish drop themselves, `HarvestGameTests`; no recipes until slice 16.)*
+- [ ] With both logistics flags off (default), a Phase 2 world plays exactly as before. *(Slice 12:
+      the backhaul half holds: with `requireBackhaul` off no cell is held off the air or capped
+      (`BackhaulGraphTest.requireBackhaulOffChangesNothing`; at runtime a cell with no backhaul stays on
+      the air, uncapped, and recomputes never move the site registry). `requirePower` is slice 15.)*
 
 ---
 
@@ -1100,7 +1196,10 @@ centroid, so 7 × 16 + 1 = 113). (g)
   `refreshRegistration`, from `isTransmitting()`. Backhaul (§3C.2 "Unregister and set OnAir false")
   and power (§3C.5) should feed `isTransmitting()` (or the mast's column rule) and call
   `refreshRegistration()`, not write the flag directly, so the registry and the lens cannot disagree.
-  For a column, only the base's entity matters.
+  For a column, only the base's entity matters. *(Slice 12: done for backhaul. `isTransmitting()` is
+  `eligibleToTransmit() && backhaulAllows()`, the old rule moved to `eligibleToTransmit()` (overridden
+  by the mast column); the network calls `refreshRegistration()` on the cells whose state changed, which
+  stays the one writer of `OnAir`. Power (slice 15) can add its verdict the same way.)*
 
 - **[x] Decided in slice 7 (NOTES.md, slice 7, decision 1).** The dependency set is the union of
   `BinTraversal.binsAlong` over the marched rays' endpoints, as §3B.2 words it, not the bins of the
@@ -1128,7 +1227,11 @@ centroid, so 7 × 16 + 1 = 113). (g)
   forced chunk for over 300 ticks, block entities stop ticking, so a piston's moved blocks settle
   only when a player returns, after the deferred bump; a fixed receiver there could replay a sample
   taken mid-move until the next event in its bins.
-- **[ ] Open, note for slice 12 (from slice 7).** §3C.2's "a region epoch moves on any bin a link
+- **[x] Done in slice 12 (from slice 7).** *`BackhaulNetwork` keeps a `RegionEpochs.Snapshot` of
+  `MicrowaveLink.dependencyBins` per hop (the line's bins and the eight Fresnel segments', a superset of
+  the line's alone) and re-marches a hop when it no longer holds; `RegionEpochs.bumps()` (new) lets a
+  quiet tick skip the per-hop checks. Pinned at runtime: a stone placed with its event re-marches that
+  hop only.* §3C.2's "a region epoch moves on any bin a link
   crosses" is `BinTraversal.binsAlong(dishA.x, dishA.z, dishB.x, dishB.z, RegionEpochs.BIN_SIZE)` plus
   a `RegionEpochs.snapshot` / `unchanged`, exactly as the player cache does. Tree growth already
   bumps (above).
@@ -1194,7 +1297,10 @@ centroid, so 7 × 16 + 1 = 113). (g)
   site registry version (§3B.2), so every antenna change, and every cell backhaul or power takes on
   or off the air, re-evaluates every fixed receiver in the dimension once (one interval at 200-390
   µs/tick for 200 receivers, within the budget). If a backhaul state flaps (rain fade), keep the
-  flips hysteretic so this stays occasional.
+  flips hysteretic so this stays occasional. *(Slice 12: no hysteresis needed for backhaul (NOTES.md,
+  slice 12, decision 10): a state changes only on an event (weather, a block on a path, a pairing, a
+  cell coming or going), at most once per `backhaulRecomputeTicks`, and nothing oscillates; with
+  `requireBackhaul` off the registry never moves (pinned at runtime). Still a note for power, slice 15.)*
 - **[ ] Open, minor (from row 9b).** `RadioLinkGameTests.two_hundred_radio_links_in_steady_state`
   asserts the median of three windows under 100 µs. Row 9b's two runs measured medians of 58.9 and
   48.9 µs/tick (single windows up to 66.4), above the 26-48 of every earlier run, on code that
@@ -1251,27 +1357,81 @@ centroid, so 7 × 16 + 1 = 113). (g)
 - **[ ] Open, decision for the owner (from slice 11).** A site with no cell relays nothing: two dishes
   side by side with no antenna between them are not joined, so a pure repeater (a hilltop relay) carries
   no traffic. §3C.2 defines no such edge. Option: also join dishes within `siteRadiusBlocks` of each
-  other (one more edge kind in `BackhaulGraph.solve`, pass 0).
+  other (one more edge kind in `BackhaulGraph.solve`, pass 0). *(Slice 12: still open. The network
+  passes every dish to `solve`, so the option stays a change in `BackhaulGraph` alone.)*
 - **[x] Accepted in slice 11, labelled (NOTES.md, slice 11, decision 4).** The Fresnel check samples
   the zone along four offset paths, so one block on the line of sight in mid-path costs its
   penetration loss but not the 6 dB penalty. §3C.2's own sanity check needs this (one stone is
   DEGRADED at −69.55 dBm; with the penalty it would be DOWN). Side effect: mid-path, a leaf beside the
   beam costs 6 dB and a leaf on it 3 dB.
-- **[ ] Note for slice 12 (from slice 11): cost.** A hop reads about five voxels per block of its
+- **[x] Done in slice 12 (from slice 11): cost.** *Measured on the live level (NOTES.md, slice 12):
+  0.14 µs per block of hop over loaded ground (five to six times the synthetic probe), a recompute
+  marching three hops 192 µs, marching none 36 µs, the quiet per-tick check about 1 µs. Only new hops
+  and hops whose bins moved are marched, a weather change uses `withWeather`, and the graph is solved
+  only when an input changed. One new follow-up below (all re-marches of a recompute land in one
+  tick).* A hop reads about five voxels per block of its
   length (the line and the four offset paths); 26 µs per 1000-block hop with a synthetic probe, more
   with the server's block lookups, so measure it in a game test. Re-march only hops whose
   `MicrowaveLink.dependencyBins` moved (region epochs), re-budget a weather change with `withWeather`
   (no march), and run `BackhaulGraph.solve` only when an input changed (0.35 ms at 200 cells, 400 dishes
   and 200 links; about 2 ms at 1000 cells, allocation-bound; move to primitive arrays if it ever shows).
   If the backhaul state flaps in rain, keep the flips hysteretic (the slice 8 note above).
-- **[ ] Note for slice 12 (from slice 11): evaluation details.** Evaluate each pair of dishes in one
+- **[x] Done in slice 12 (from slice 11): evaluation details.** *Each hop is marched from the lower
+  packed position; the march gets `MicrowaveLink.stepsToReach` (new: a cap it cannot run out of,
+  pinned on 400 random hops and on the 1414-voxel diagonal), and the length is bounded by
+  `maxEvaluationRangeBlocks` instead (the Link Tool refuses a longer pairing; a hop a lowered range
+  leaves too long is DOWN, out of range, unmarched); `Biome.getPrecipitationAt` at the midpoint maps
+  NONE / RAIN / SNOW to CLEAR / RAIN / SNOW, with `Level.isRaining()` / `isThundering()` (NOTES.md,
+  slice 12, decisions 4 and 5).* Evaluate each pair of dishes in one
   fixed order (say the lower packed position as A): the voxel march breaks ties at voxel edges by
   direction, so the two ends could otherwise disagree. Choose the hop's march cap deliberately:
   `maxRaySteps` (default 1200 voxels, about `|dx| + |dy| + |dz|`) would put a 1000-block diagonal hop
   (about 1414 voxels) out of range. Map `Biome.getPrecipitationAt(midpoint)` NONE / RAIN / SNOW to
   `Weather.CLEAR` / `RAIN` / `SNOW` and pass `Level.isRaining()` / `isThundering()` to `Weather.at`.
-- **[ ] Note for slice 12 (from slice 11).** `requireBackhaul` and `backhaulRecomputeTicks` are in the
-  config (COMMON) but nothing reads them yet; slice 12 wires them.
+- **[x] Done in slice 12 (from slice 11).** *Both wired: `requireBackhaul` gates the off-air effect
+  and the FAIR cap, `backhaulRecomputeTicks` the recompute interval.* `requireBackhaul` and
+  `backhaulRecomputeTicks` are in the config (COMMON) but nothing reads them yet; slice 12 wires them.
+- **[x] Decided in slice 12, spec silent (NOTES.md, slice 12, decision 1).** With `requireBackhaul` off,
+  backhaul has no effect at all: no cell is held off the air and a LIMITED cell caps nothing (§3C.2
+  states the cap without the flag; the task and §2 say a default world must play as before, and a
+  world with no Core Site would otherwise cap every device at FAIR). The states are still worked out,
+  once a core or dish exists, for the lens, the dish and the status command, which say so.
+- **[x] Decided in slice 12 (NOTES.md, slice 12, decisions 2 and 3).** The backhaul topology (cores,
+  dishes, pairings, eligible cells) is saved per dimension, so a hop's far end, a relay or the core may
+  be unloaded and still count; the graph's cells are those passing their own rules, not the
+  registered ones (a cell off the air for want of backhaul must be found again). A cell the graph has
+  not judged yet is on the air until the next recompute.
+- **[x] Decided in slice 12, spec vs tree (NOTES.md, slice 12).** §3A.2's `DeviceContext` gains a
+  seventh component, `serviceCap` (appended; the six-argument constructor kept as no cap), and
+  `DeviceRequirement.check` a three-argument form; a cap adds no verdict (a capped device is
+  `LOW_QUALITY`, `DeviceContext.backhaulLimited()` says why). `SignalSamplePayload` v4 carries the cap,
+  not the text.
+- **[ ] Open, minor (from slice 12).** A recompute runs all its re-marches in one tick. One block
+  moving in a bin that many long hops cross invalidates them together: 50 hops of 1000 blocks over
+  loaded ground would make that one tick about 7 ms (0.14 µs per block, measured), against an average
+  of under 0.1 ms/tick. Not reachable at the done-when's scale. Option: a per-tick march budget (as
+  `fixedReceiverTickBudgetMs` does for fixed receivers), carrying the rest to the next ticks and
+  solving once they are all measured.
+- **[ ] Open, minor (from slice 12).** `BackhaulNetwork.validate` scans every core, dish and known cell
+  on each chunk load, to drop entries whose block was removed while unloaded. Cheap at hundreds;
+  index the entries by chunk if a server has thousands of antennas.
+- **[ ] Open, decision for the owner (from slice 12).** With `requireBackhaul` on, a newly placed cell
+  with no backhaul transmits until the next recompute (at most `backhaulRecomputeTicks`, 5 s) before
+  it goes off the air: a short-lived lit lobe. Option: when a cell is first noted, solve the graph for
+  it at once without marching (marches stay bound by the interval). Not needed for the done-when.
+- **[ ] Note for slice 13 (from slice 12).** The Storage Terminal's GOOD requirement is already refused
+  under a LIMITED cell through the capped verdict (both tickers pass the cap); its HUD can say
+  "backhaul limited" rather than "weak signal" with `DeviceContext.backhaulLimited()`. "Within
+  `fiberRadiusBlocks` of a core site" can use `BackhaulNetwork.of(level).cores()` (every core of the
+  dimension, loaded or not) with `RanCraftConfig.fiberRadiusBlocks()` (horizontal, as the graph's
+  fiber rule).
+- **[ ] Note for slice 15 (from slice 12).** Power can feed `eligibleToTransmit()` as the column rules
+  do. Then an unpowered cell leaves the backhaul graph too (`noteCell(false)`), so its site stops
+  relaying, which is what a dark site does; decide whether that is wanted before wiring it there
+  rather than in `isTransmitting()` beside the backhaul verdict.
+- **[ ] Note for slice 16 (from slice 12).** Core Site, Backhaul Dish and Link Tool are creative-only
+  until their recipes exist (§3C.6: iron block, redstone block, chest; iron, copper, lightning rod;
+  stick, copper).
 
 ### Phase 3B review round 1: the four findings
 
