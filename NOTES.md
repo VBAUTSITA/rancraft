@@ -5070,7 +5070,7 @@ antennas next to it. Antennas expose NeoForge's block energy capability, so any 
 too. With `requirePower` off (the default) nothing a cell does changes, and a generator next to an
 antenna burns nothing. A per-cell counter of receivers served in the last few minutes is kept as the
 seam for Phase 4's cell sleep; nothing sleeps. The code and the game tests went in `797d641` (part 1 of
-2); these notes and the tracker in "Phase 3 slice 15: power".
+2); these notes and the tracker in `bce3a8a` "Phase 3 slice 15: power".
 
 The headline: on real blocks, a 30 dBm sector burned 2,120 generator ticks of fuel in a minute where a
 20 dBm sector burned 320, exactly the model's figures (6.625×, "about 7×"), and 21 sticks against 3.
