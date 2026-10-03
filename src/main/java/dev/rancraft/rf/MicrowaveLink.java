@@ -46,7 +46,11 @@ package dev.rancraft.rf;
  *       rain near 25 mm/h, about 6 dB/km a thunderstorm downpour near 60 mm/h), applied over the whole
  *       hop when it rains at the hop's midpoint. A real rain cell covers part of a path (ITU-R P.530's
  *       path reduction factor), the rate varies, and the loss depends on polarisation; none of that is
- *       modelled. Snow adds nothing: dry snow attenuates far less than rain at this frequency.</li>
+ *       modelled. Snow adds nothing: dry snow attenuates far less than rain at this frequency.
+ *       The figures are 18 GHz ones and do not follow {@link #frequencyMhz}: rain fade rising with
+ *       frequency (§6) shows as the contrast with the cellular bands (0.7 to 3.5 GHz), which have no
+ *       weather term, as real ones barely feel rain. A datapack that changes the link's frequency must
+ *       change the rain figures with it (Phase 3 final docs).</li>
  * </ul>
  *
  * <p>Pure: no Minecraft imports ({@code PackagePurityTest}). The world reaches it through a

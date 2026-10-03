@@ -131,7 +131,7 @@ import org.jetbrains.annotations.Nullable;
  *       not marched. It bounds the cost of a march, as the same setting bounds a cellular one.</li>
  *   <li><b>A recompute's states land together, a little late</b> (Phase 3C review): while its marches
  *       run the last published states stand, and a cell nobody has judged yet stays on the air. Measured
- *       for 64 hops of 1000 blocks: 16 to 22 ticks when all are new (a server start), 29 to 34 when all
+ *       for 64 hops of 1000 blocks: 11 to 22 ticks when all are new (a server start), 27 to 34 when all
  *       are marched again; a few hops take a tick or two. The delay is a cost budget, not a model of
  *       anything (a real network management system polls its links on a period of its own).</li>
  * </ul>

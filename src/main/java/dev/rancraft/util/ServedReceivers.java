@@ -17,6 +17,10 @@ import java.util.Map;
  * receiver served by two cells within the window (it walked across a boundary) counts for both:
  * both were in use. Repeats within the window count once.
  *
+ * <p><b>Game abstraction, labelled (NOTES.md, slice 15):</b> the count is of what the server evaluates,
+ * not of every phone in range. A real cell knows its attached users from signalling; here a player
+ * carrying no device and wearing no lens is never evaluated, so never counted.
+ *
  * <p>Pure (no game types; the receiver key is whatever identifies one: a player's UUID, a fixed
  * device's packed position). Not thread-safe: the server thread only.
  *

@@ -23,6 +23,10 @@ import org.jetbrains.annotations.Nullable;
  * Two, not one, so a single missed dispatch (the terminal held on the cursor at that tick) does not
  * cut the session.
  *
+ * <p><b>Game abstraction, labelled (NOTES.md, slice 13):</b> the session lives on the last verdict, up
+ * to two intervals old. It stands in for a session that notices a dropped link within about a second;
+ * a real one runs on its own transport and application timers, and a short fade need not end it.
+ *
  * @param verdict         {@code requirement.check(sample, bands, serviceCap)}, as the ticker computed it.
  * @param tick            the game time of the dispatch ({@link DeviceContext#tick()}), not the sample's
  *                        timestamp: a replay of an old evaluation is still a current verdict.

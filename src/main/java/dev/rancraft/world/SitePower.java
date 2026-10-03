@@ -56,6 +56,17 @@ import org.jetbrains.annotations.Nullable;
  * {@link #servedCount}; nothing in Phase 3 does except {@code /rancraft power status}. Recorded whatever
  * {@code requirePower} says: it changes nothing.
  *
+ * <p><b>Game abstractions, labelled (NOTES.md, slice 15; Phase 3 final docs):</b>
+ * <ul>
+ *   <li><b>No standby load.</b> A cell off the air draws nothing. A real site's baseband, cooling and
+ *       transport keep drawing power while its radio is off; here "on the air" is the whole load.</li>
+ *   <li><b>Power stands still where block entities do not tick.</b> A game rule, not physics: a real
+ *       battery drains whether anyone is near it. It keeps a cell at the edge of the loaded area from
+ *       draining dark while the generators that feed it are frozen.</li>
+ *   <li><b>The seam counts what the server evaluates</b>, not every phone in range: a player carrying no
+ *       device and wearing no lens is not evaluated, so not counted.</li>
+ * </ul>
+ *
  * <p>Not saved: the energy lives in the antennas' own save ({@code Energy}, {@code PowerOn}), and the
  * served counter starts again with the server. Server thread only.
  */

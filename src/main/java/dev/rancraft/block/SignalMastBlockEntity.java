@@ -134,7 +134,8 @@ public class SignalMastBlockEntity extends AntennaBlockEntity {
      * Phase 3 slice 15 (§3C.5): "the mast column's base holds the buffer". Energy offered to any mast of
      * the column goes to the base, so a generator at the foot of a tower or beside any mast of it feeds
      * the cell. A mounting pole's masts feed the Sector Antenna on top instead: the pole carries the
-     * power up to the radio it holds, as a real pole's cabling does. {@code null} when this is no longer
+     * power up to the radio it holds. <b>Game rule, labelled (NOTES.md, slice 15):</b> it stands in for
+     * the power cabling a real pole carries; nothing is laid. {@code null} when this is no longer
      * a mast, or the owner's entity is missing. Works out the column on every call (a few block reads),
      * so the answer is never stale after the column changes.
      */
