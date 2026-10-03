@@ -1,0 +1,27 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "equipment",
+  "key": {
+    "A": {
+      "tag": "c:gems/amethyst"
+    },
+    "G": {
+      "tag": "c:ingots/gold"
+    },
+    "K": {
+      "item": "minecraft:sculk_sensor"
+    },
+    "S": {
+      "item": "minecraft:spyglass"
+    }
+  },
+  "pattern": [
+    " S ",
+    "AKA",
+    "GGG"
+  ],
+  "result": {
+    "count": 1,
+    "id": "rancraft:proximity_scanner"
+  }
+}

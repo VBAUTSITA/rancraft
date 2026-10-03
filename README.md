@@ -15,7 +15,8 @@ From **this** folder, run:
 ```
 
 That downloads/decompiles Minecraft 1.21.1 + NeoForge on first run (slow, one-time), then launches
-a dev client with RANCraft loaded. Look for the **RANCraft** tab in the creative inventory.
+a dev client with RANCraft loaded. Look for the **RANCraft** tab in the creative inventory; in
+survival, everything is craftable (see the recipe book).
 
 To run a headless dedicated server instead: `.\gradlew.bat runServer`
 
@@ -46,7 +47,7 @@ To run a headless dedicated server instead: `.\gradlew.bat runServer`
   it shows the position the network works out from timing ranges to the cells you hear (FIX with a
   ± and HDOP, or RANGE ONLY / AMBIGUOUS / POOR GEOMETRY / NO SIGNAL), draws the range rings in the
   world, saves waypoints of the *estimate* (sneak + use; use cycles them) and keeps a "last fix
-  before death". Creative tab only for now (recipes come in Phase 3C).
+  before death".
 - **Phase 3B** — towers and fixed devices:
   - *Mast columns:* Signal Masts stacked in one column are one cell, owned by the lowest mast (so
     adding masts on top keeps its PCI) and radiating from above the top one (at most
@@ -61,13 +62,11 @@ To run a headless dedicated server instead: `.\gradlew.bat runServer`
     a transmitter on its address is powered. Both ends need POOR service or better, updates arrive
     about once a second by design, and at low SINR some are lost (a lost update leaves the old
     state; at FAIR or better the link is solid). The lamp on top lights while the block has service.
-    Creative tab only for now (recipes come in Phase 3C).
 - **Phase 3C** (in progress) — infrastructure and progression:
   - *Radio tiers:* a Sector Antenna's radio takes band_700, band_900 and band_1800; band_3500 needs a
     **Wideband Radio Unit** (right-click the sector with it; breaking the sector drops it again). The
     configuration screen shows band_3500 greyed with "needs Wideband Radio Unit" until then. A sector
-    already on band_3500 in an older world keeps it. The RF Lens is never tier-gated. Creative tab
-    only for now.
+    already on band_3500 in an older world keeps it. The RF Lens is never tier-gated.
   - *Backhaul:* a **Core Site** (the core network; cells and dishes within `fiberRadiusBlocks`, 24,
     are on fiber), **Backhaul Dishes** (a dish within `siteRadiusBlocks`, 8, of a cell's base serves
     it) and the **Link Tool** (use it on one dish, then on the far one, to pair them; sneak + use
@@ -79,7 +78,7 @@ To run a headless dedicated server instead: `.\gradlew.bat runServer`
     with no path to a Core Site goes off the air, and one reached only over a DEGRADED hop caps the
     devices it serves at FAIR (the meter shows `BH: LIMITED (capped FAIR)`). `/rancraft backhaul status
     [radius]` lists off-air and limited cells and every link's figures. Also `backhaulRecomputeTicks`
-    and `enableRainFade`. Creative tab only for now.
+    and `enableRainFade`.
   - *Storage Terminal:* opens a chest or barrel in the data centre over the mobile network.
     - **Binding:** sneak + use it on a chest or barrel within `fiberRadiusBlocks` (24) of a Core Site.
     - **Opening:** use it in the air. The chest's ordinary screen opens if you have GOOD service on
@@ -88,10 +87,10 @@ To run a headless dedicated server instead: `.\gradlew.bat runServer`
       "needs band tier 2", "signal too weak", "backhaul limited").
     - **Losing the session:** the screen closes with "connection lost" when you lose that service, as
       a download stops.
-    - It never loads a chunk and never lifts the chest's lid. Creative tab only for now.
+    - It never loads a chunk and never lifts the chest's lid.
   - *Proximity Scanner:* held with GOOD service on band_3500, it lists the hostile mobs within 24
     blocks on the HUD (not radar: a stand-in for a sensor feed only a high-capacity link can carry);
-    otherwise it says why ("needs tier 3, you're on band_1800 (tier 2)"). Creative tab only for now.
+    otherwise it says why ("needs tier 3, you're on band_1800 (tier 2)").
   - *Power:* with `requirePower` on (COMMON config, **off by default**, so existing worlds are
     unaffected), a cell on the air draws energy every tick: `baseFe + 20 x P_rf_W / 0.3` FE/t (a sector
     at 20 dBm about 10.7, at 30 dBm about 70.7: 10 dB more power is 10x the amplifier's energy). Its
@@ -99,8 +98,15 @@ To run a headless dedicated server instead: `.\gradlew.bat runServer`
     greys it), back on above 10 %. A **Site Generator** burns furnace fuel into 40 FE/t, only while
     the antennas next to it take it, and feeds any mast of a tower; use it with fuel to fill its slot
     (hoppers work too), sneak + use with an empty hand to take it out, use to see its state.
-    `/rancraft power status [radius]` lists each cell's draw, buffer and state. Creative tab only for
-    now.
+    `/rancraft power status [radius]` lists each cell's draw, buffer and state.
+  - *Recipes:* every block and item is craftable in survival (shaped recipes in
+    `data/rancraft/recipe/`, data only, so a datapack can retune them). Early: Field Test Meter,
+    RF Lens (deliberately cheap: copper, glass, an amethyst shard), Signal Mast (4 per craft), Network
+    Locator, Radio Link Transmitter and Receiver. Mid: Sector Antenna (from a Signal Mast), Core Site,
+    Backhaul Dish, Link Tool, Site Generator. Late-mid: Wideband Radio Unit, Storage Terminal. Late:
+    Proximity Scanner (a sculk sensor). The recipe book shows each one once you hold a key ingredient or
+    what it builds on (copper shows the meter, the lens and the mast; a Signal Mast shows the network
+    blocks). Every block drops itself to a pickaxe.
 
 See `VISION.md` for the full design of the vision feature, `VISION_STEP3.md` for Step 3 (the
 drive-test log, and the planned automatic problem diagnosis), and `NOTES.md` for the full build log,

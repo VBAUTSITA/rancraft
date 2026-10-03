@@ -1,0 +1,43 @@
+{
+  "parent": "minecraft:recipes/root",
+  "criteria": {
+    "has_sculk_sensor": {
+      "conditions": {
+        "items": [
+          {
+            "items": "minecraft:sculk_sensor"
+          }
+        ]
+      },
+      "trigger": "minecraft:inventory_changed"
+    },
+    "has_wideband_radio_unit": {
+      "conditions": {
+        "items": [
+          {
+            "items": "rancraft:wideband_radio_unit"
+          }
+        ]
+      },
+      "trigger": "minecraft:inventory_changed"
+    },
+    "has_the_recipe": {
+      "conditions": {
+        "recipe": "rancraft:proximity_scanner"
+      },
+      "trigger": "minecraft:recipe_unlocked"
+    }
+  },
+  "requirements": [
+    [
+      "has_the_recipe",
+      "has_sculk_sensor",
+      "has_wideband_radio_unit"
+    ]
+  ],
+  "rewards": {
+    "recipes": [
+      "rancraft:proximity_scanner"
+    ]
+  }
+}

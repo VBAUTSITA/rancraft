@@ -1,0 +1,21 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "misc",
+  "key": {
+    "B": {
+      "item": "minecraft:iron_bars"
+    },
+    "C": {
+      "tag": "c:ingots/copper"
+    }
+  },
+  "pattern": [
+    "B B",
+    "BCB",
+    "B B"
+  ],
+  "result": {
+    "count": 4,
+    "id": "rancraft:signal_mast"
+  }
+}

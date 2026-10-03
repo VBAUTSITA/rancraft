@@ -31,7 +31,7 @@ import net.minecraft.world.level.Level;
  * method directly. On the client it only predicts the swing from the antenna's synced tier; the
  * server fits the unit and takes the item (not in creative, where vanilla keeps the stack).
  *
- * <p>No recipe yet (§3C.6, slice 16): creative-only, like every block and item so far.
+ * <p>Crafted from gold, amethyst and a redstone block (late-mid, §3C.6, {@code data/rancraft/recipe/}).
  */
 public class WidebandRadioUnitItem extends Item {
 

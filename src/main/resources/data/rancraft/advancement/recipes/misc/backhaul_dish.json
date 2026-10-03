@@ -1,0 +1,43 @@
+{
+  "parent": "minecraft:recipes/root",
+  "criteria": {
+    "has_signal_mast": {
+      "conditions": {
+        "items": [
+          {
+            "items": "rancraft:signal_mast"
+          }
+        ]
+      },
+      "trigger": "minecraft:inventory_changed"
+    },
+    "has_sector_antenna": {
+      "conditions": {
+        "items": [
+          {
+            "items": "rancraft:sector_antenna"
+          }
+        ]
+      },
+      "trigger": "minecraft:inventory_changed"
+    },
+    "has_the_recipe": {
+      "conditions": {
+        "recipe": "rancraft:backhaul_dish"
+      },
+      "trigger": "minecraft:recipe_unlocked"
+    }
+  },
+  "requirements": [
+    [
+      "has_the_recipe",
+      "has_signal_mast",
+      "has_sector_antenna"
+    ]
+  ],
+  "rewards": {
+    "recipes": [
+      "rancraft:backhaul_dish"
+    ]
+  }
+}

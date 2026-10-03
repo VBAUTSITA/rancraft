@@ -1,0 +1,28 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "redstone",
+  "key": {
+    "C": {
+      "tag": "c:ingots/copper"
+    },
+    "K": [
+      {
+        "item": "minecraft:comparator"
+      },
+      {
+        "item": "minecraft:repeater"
+      }
+    ],
+    "T": {
+      "item": "minecraft:redstone_torch"
+    }
+  },
+  "pattern": [
+    " T ",
+    "CKC"
+  ],
+  "result": {
+    "count": 1,
+    "id": "rancraft:radio_link_receiver"
+  }
+}

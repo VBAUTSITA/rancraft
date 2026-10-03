@@ -19,6 +19,18 @@ public final class ModItems {
     private ModItems() {
     }
 
+    /**
+     * Every entry here, block items included, has a crafting recipe in {@code data/rancraft/recipe/}
+     * (named after the item), an advancement that unlocks it in the recipe book under
+     * {@code data/rancraft/advancement/recipes/}, and a place in {@code ModCreativeTabs}. Phase 3 slice
+     * 16 (§3C.6); {@code RecipeGameTests} checks all three for every entry, so a new item fails the game
+     * tests until it has them.
+     *
+     * <p>Game abstraction, stated plainly: the recipes are progression, not a bill of materials. Their
+     * ingredients are thematic (copper for RF, a compass in the Locator, a sculk sensor in the
+     * Scanner) and their tiers pace the game (the RF Lens is deliberately cheap and early, §3C.1); no
+     * real radio is built from these parts.
+     */
     public static final DeferredRegister.Items ITEMS = DeferredRegister.createItems(RanCraft.MOD_ID);
 
     public static final DeferredItem<FieldTestMeterItem> FIELD_TEST_METER = ITEMS.registerItem(
@@ -31,10 +43,7 @@ public final class ModItems {
             RfLensItem::new,
             new Item.Properties().stacksTo(1));
 
-    /**
-     * Phase 3 slice 5, §3A.6. Cellular positioning, not GPS: see {@link NetworkLocatorItem}. No
-     * recipe yet; recipes are §3C.6, so it is creative-only like everything else for now.
-     */
+    /** Phase 3 slice 5, §3A.6. Cellular positioning, not GPS: see {@link NetworkLocatorItem}. */
     public static final DeferredItem<NetworkLocatorItem> NETWORK_LOCATOR = ITEMS.registerItem(
             "network_locator",
             NetworkLocatorItem::new,
@@ -42,7 +51,7 @@ public final class ModItems {
 
     /**
      * Phase 3 slice 10, §3C.1: raises a Sector Antenna's radio to tier 3 (band_3500). Consumed when
-     * fitted; breaking the antenna drops it. Stacks like any part. No recipe yet (§3C.6, slice 16).
+     * fitted; breaking the antenna drops it. Stacks like any part.
      */
     public static final DeferredItem<WidebandRadioUnitItem> WIDEBAND_RADIO_UNIT = ITEMS.registerItem(
             "wideband_radio_unit",
@@ -54,22 +63,22 @@ public final class ModItems {
     public static final DeferredItem<BlockItem> SECTOR_ANTENNA =
             ITEMS.registerSimpleBlockItem(ModBlocks.SECTOR_ANTENNA);
 
-    /** Phase 3 slice 9, §3B.4. No recipe yet (§3C.6, slice 16): creative-only for now. */
+    /** Phase 3 slice 9, §3B.4. */
     public static final DeferredItem<BlockItem> RADIO_LINK_TRANSMITTER =
             ITEMS.registerSimpleBlockItem(ModBlocks.RADIO_LINK_TRANSMITTER);
 
     public static final DeferredItem<BlockItem> RADIO_LINK_RECEIVER =
             ITEMS.registerSimpleBlockItem(ModBlocks.RADIO_LINK_RECEIVER);
 
-    /** Phase 3 slice 12, §3C.2. No recipe yet (§3C.6, slice 16): creative-only for now. */
+    /** Phase 3 slice 12, §3C.2. */
     public static final DeferredItem<BlockItem> CORE_SITE = ITEMS.registerSimpleBlockItem(ModBlocks.CORE_SITE);
 
     public static final DeferredItem<BlockItem> BACKHAUL_DISH = ITEMS.registerSimpleBlockItem(ModBlocks.BACKHAUL_DISH);
 
-    /** Phase 3 slice 15, §3C.5. No recipe yet (§3C.6, slice 16): creative-only for now. */
+    /** Phase 3 slice 15, §3C.5. */
     public static final DeferredItem<BlockItem> SITE_GENERATOR = ITEMS.registerSimpleBlockItem(ModBlocks.SITE_GENERATOR);
 
-    /** Phase 3 slice 12, §3C.2: pairs two Backhaul Dishes. No recipe yet (§3C.6, slice 16). */
+    /** Phase 3 slice 12, §3C.2: pairs two Backhaul Dishes. */
     public static final DeferredItem<LinkToolItem> LINK_TOOL = ITEMS.registerItem(
             "link_tool",
             LinkToolItem::new,
@@ -77,7 +86,7 @@ public final class ModItems {
 
     /**
      * Phase 3 slice 13, §3C.3: opens a chest or barrel near a Core Site over the mobile network. A
-     * {@code SignalDevice} (GOOD, tier 2). No recipe yet (§3C.6, slice 16): creative-only for now.
+     * {@code SignalDevice} (GOOD, tier 2).
      */
     public static final DeferredItem<StorageTerminalItem> STORAGE_TERMINAL = ITEMS.registerItem(
             "storage_terminal",
@@ -86,8 +95,7 @@ public final class ModItems {
 
     /**
      * Phase 3 slice 14, §3C.4: lists hostile mobs on the HUD while held, with GOOD service on a tier-3
-     * band (band_3500). A {@code SignalDevice}; the list is not RF sensing (see the item). No recipe yet
-     * (§3C.6, slice 16): creative-only for now.
+     * band (band_3500). A {@code SignalDevice}; the list is not RF sensing (see the item).
      */
     public static final DeferredItem<ProximityScannerItem> PROXIMITY_SCANNER = ITEMS.registerItem(
             "proximity_scanner",

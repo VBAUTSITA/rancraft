@@ -1,0 +1,24 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "misc",
+  "key": {
+    "A": {
+      "tag": "c:gems/amethyst"
+    },
+    "G": {
+      "tag": "c:ingots/gold"
+    },
+    "R": {
+      "tag": "c:storage_blocks/redstone"
+    }
+  },
+  "pattern": [
+    "GAG",
+    "ARA",
+    "GAG"
+  ],
+  "result": {
+    "count": 1,
+    "id": "rancraft:wideband_radio_unit"
+  }
+}
