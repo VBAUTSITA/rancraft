@@ -236,7 +236,9 @@ public final class RanCraftConfig {
     public static final ModConfigSpec.BooleanValue REQUIRE_BACKHAUL = BUILDER
             .comment("When true, a cell with no path to a Core Site goes off the air: no fiber (a core within",
                     "fiberRadiusBlocks) and no chain of working microwave links from Backhaul Dishes.",
-                    "Off by default, like requireRedstone, so an existing world keeps working.")
+                    "Off by default, like requireRedstone, so an existing world keeps working. Either way, a",
+                    "cell whose best path to a core crosses a DEGRADED link is backhaul-limited: the devices",
+                    "it serves get at most FAIR service.")
             .define("requireBackhaul", false);
 
     public static final ModConfigSpec.DoubleValue FIBER_RADIUS_BLOCKS = BUILDER
@@ -255,6 +257,16 @@ public final class RanCraftConfig {
             .comment("Least ticks between two recomputations of the microwave links and each cell's",
                     "backhaul, whatever changed in between. 100 = 5 s.")
             .defineInRange("backhaulRecomputeTicks", 100, 1, 12_000);
+
+    // Not in §5's list: added by the Phase 3C review (finding 2) so that a recompute that must measure
+    // many long links again spreads its marches over ticks. Server cost: stays out of RfConfig.
+    public static final ModConfigSpec.DoubleValue BACKHAUL_MARCH_BUDGET_MS = BUILDER
+            .comment("Server-thread time per tick spent measuring microwave links again (new links, links whose",
+                    "terrain or chunks changed, every link after a server start), shared by every dimension.",
+                    "Over budget, the rest wait for the next tick; the links' states and each cell's backhaul",
+                    "change once all are measured. At least one link is measured per tick, so a tick can run",
+                    "over by one link (about 0.1 to 0.6 ms for a 1000-block link). 0.25 ms is 0.5% of a 50 ms tick.")
+            .defineInRange("backhaulMarchBudgetMs", 0.25, 0.01, 20.0);
 
     public static final ModConfigSpec.BooleanValue ENABLE_RAIN_FADE = BUILDER
             .comment("Rain at a microwave link's midpoint adds loss: rain_db_per_km x the link's length in km,",
@@ -445,6 +457,14 @@ public final class RanCraftConfig {
      */
     public static int backhaulRecomputeTicks() {
         return SPEC.isLoaded() ? BACKHAUL_RECOMPUTE_TICKS.get() : BACKHAUL_RECOMPUTE_TICKS.getDefault();
+    }
+
+    /**
+     * The backhaul recompute's per-tick march budget (Phase 3C review), in milliseconds. Server cost,
+     * deliberately not in {@link RfConfig}. Falls back to the default if read before the config has loaded.
+     */
+    public static double backhaulMarchBudgetMs() {
+        return SPEC.isLoaded() ? BACKHAUL_MARCH_BUDGET_MS.get() : BACKHAUL_MARCH_BUDGET_MS.getDefault();
     }
 
     /**

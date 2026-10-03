@@ -362,11 +362,34 @@ class BackhaulGraphTest {
     }
 
     @Test
-    @DisplayName("slice 12: with requireBackhaul off (the default) backhaul caps nothing and keeps nothing off the air")
+    @DisplayName("Phase 3C review: with requireBackhaul off (the default) nothing is off the air and only LIMITED is capped (at FAIR)")
     void requireBackhaulOffChangesNothing() {
         for (BackhaulState state : new BackhaulState[] {BackhaulState.FULL, BackhaulState.LIMITED, BackhaulState.NONE, null}) {
-            assertSame(ServiceLevel.EXCELLENT, BackhaulGraph.serviceCap(state, false), String.valueOf(state));
             assertEquals(true, BackhaulGraph.allowsOnAir(state, false), String.valueOf(state));
+        }
+        assertSame(ServiceLevel.EXCELLENT, BackhaulGraph.serviceCap(BackhaulState.FULL, false));
+        assertSame(ServiceLevel.FAIR, BackhaulGraph.serviceCap(BackhaulState.LIMITED, false),
+                "§3C.2 states the LIMITED cap without the flag");
+        assertSame(ServiceLevel.EXCELLENT, BackhaulGraph.serviceCap(BackhaulState.NONE, false),
+                "a cell nobody connected is not capped while the flag is off");
+        assertSame(ServiceLevel.EXCELLENT, BackhaulGraph.serviceCap(null, false), "not judged yet: no cap");
+    }
+
+    @Test
+    @DisplayName("Phase 3C review: with no Core Site no cell is LIMITED, so with the flag off no device is capped")
+    void noCoreNoCapWithRequireBackhaulOff() {
+        // Everything a player could build but the core: dishes at every site, UP and DEGRADED hops.
+        for (LinkState middle : LinkState.values()) {
+            Result result = BackhaulGraph.solve(TOPOLOGY, List.of(), List.of(C1, C2, C3),
+                    List.of(D0, D1A, D1B, D2A, D2B, D3A),
+                    List.of(new Link(D0.id(), D1A.id(), LinkState.DEGRADED),
+                            new Link(D1B.id(), D2A.id(), middle),
+                            new Link(D2B.id(), D3A.id(), LinkState.UP)));
+            for (Node cell : List.of(C1, C2, C3)) {
+                assertSame(BackhaulState.NONE, result.cell(cell.id()), middle + " " + cell);
+                assertSame(ServiceLevel.EXCELLENT, BackhaulGraph.serviceCap(result.cell(cell.id()), false),
+                        middle + " " + cell);
+            }
         }
     }
 

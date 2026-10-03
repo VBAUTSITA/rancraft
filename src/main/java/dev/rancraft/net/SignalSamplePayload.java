@@ -46,8 +46,10 @@ import net.minecraft.resources.ResourceLocation;
  * @param serviceCap            <b>Phase 3 slice 12 (VERSION 4).</b> The ceiling the serving cell's
  *                              backhaul puts on its devices' service level, as the server applied it
  *                              when it dispatched this sample ({@code BackhaulGraph.serviceCap}): FAIR
- *                              for a backhaul-limited cell while {@code requireBackhaul} is on,
- *                              {@link ServiceLevel#EXCELLENT} (no cap) otherwise. The meter shows it
+ *                              for a backhaul-limited cell (whatever {@code requireBackhaul} says,
+ *                              since the Phase 3C review), NONE for one with no backhaul while
+ *                              {@code requireBackhaul} is on, {@link ServiceLevel#EXCELLENT} (no cap)
+ *                              otherwise. The meter shows it
  *                              as a note ({@link #backhaulNote()}); every other field is the radio
  *                              link alone, untouched by it. The client computes no backhaul.
  */

@@ -152,6 +152,13 @@ public final class RanCraftCommands {
         ServerLevel level = source.getLevel();
         Vec3 origin = source.getPosition();
         BackhaulNetwork network = BackhaulNetwork.peek(level);
+        if (network != null && !network.solved() && network.measuring()) {
+            // The first recompute's marches are spread over ticks (Phase 3C review): nothing to show yet.
+            int left = network.pendingMarches();
+            source.sendSuccess(() -> Component.translatable("commands.rancraft.backhaul.measuring", left)
+                    .withStyle(ChatFormatting.GRAY), false);
+            return 0;
+        }
         if (network == null || !network.solved()) {
             source.sendSuccess(() -> Component.translatable("commands.rancraft.backhaul.not_solved")
                     .withStyle(ChatFormatting.GRAY), false);
@@ -199,8 +206,8 @@ public final class RanCraftCommands {
                 none.size()).withStyle(ChatFormatting.WHITE), false);
         cellLines(source, level, none, ChatFormatting.RED);
 
-        source.sendSuccess(() -> Component.translatable(
-                required ? "commands.rancraft.backhaul.limited" : "commands.rancraft.backhaul.limited_off",
+        // A LIMITED cell's devices are capped at FAIR whatever requireBackhaul says (Phase 3C review).
+        source.sendSuccess(() -> Component.translatable("commands.rancraft.backhaul.limited",
                 limited.size()).withStyle(ChatFormatting.WHITE), false);
         cellLines(source, level, limited, ChatFormatting.GOLD);
 

@@ -17,6 +17,7 @@ import dev.rancraft.rf.MicrowaveLink;
 import dev.rancraft.rf.ReceiverState;
 import dev.rancraft.rf.RfConfig;
 import dev.rancraft.rf.ServiceLevel;
+import dev.rancraft.util.BudgetedQueue;
 import it.unimi.dsi.fastutil.longs.Long2LongOpenHashMap;
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.longs.LongArrayList;
@@ -90,14 +91,27 @@ import org.jetbrains.annotations.Nullable;
  * re-budgets every hop without reading a block ({@link MicrowaveLink#withWeather}); the graph is solved
  * again whenever anything changed.
  *
- * <p><b>Effects</b> (§3C.2), only with {@code requireBackhaul} on ({@link BackhaulGraph#allowsOnAir},
- * {@link BackhaulGraph#serviceCap}): a NONE cell is not transmitting, so its antenna unregisters it and
- * its {@code OnAir} goes false ({@link AntennaBlockEntity#isTransmitting()}, refreshed from here, so the
- * registry and the lens cannot disagree); a LIMITED cell transmits, but devices it serves are capped at
- * FAIR in their {@code DeviceContext} ({@link #serviceCapAt}). With it off (the default) nothing a cell
- * or a device does changes and no antenna is refreshed; the states are still worked out for the lens,
- * the dish and the status command once a core or dish exists. A dimension with no core, no dish and
- * {@code requireBackhaul} off costs one map lookup per tick.
+ * <p><b>The marches are spread over ticks</b> (Phase 3C review, finding 2): a recompute queues the hops
+ * it must march and marches them oldest first under {@code backhaulMarchBudgetMs} per tick, a budget
+ * shared by every dimension ({@link BudgetedQueue}: at least one hop per tick, so a tick overruns the
+ * budget by at most one hop's march). One block in a region bin that many long hops cross, chunks
+ * loading along a chain, or the first recompute after a server start (every hop new) therefore cost a
+ * few tenths of a millisecond per tick for some ticks, not milliseconds in one. When the queue is
+ * empty the recompute, in a tick of its own (the next one, if this one marched), weighs the weather,
+ * solves the graph and applies the effects: every state it publishes (each hop's budget, each cell's
+ * and dish's backhaul) changes at once, and until then the last published ones stand. A hop paired
+ * while the marches run is marched before the solve. The interval counts from the end of a recompute.
+ *
+ * <p><b>Effects</b> (§3C.2; {@link BackhaulGraph#allowsOnAir}, {@link BackhaulGraph#serviceCap}): with
+ * {@code requireBackhaul} on, a NONE cell is not transmitting, so its antenna unregisters it and its
+ * {@code OnAir} goes false ({@link AntennaBlockEntity#isTransmitting()}, refreshed from here, so the
+ * registry and the lens cannot disagree). A LIMITED cell transmits, but devices it serves are capped at
+ * FAIR in their {@code DeviceContext} ({@link #serviceCapAt}), whatever the flag says (Phase 3C review,
+ * finding 1: §3C.2 states this effect without the flag, and with no core no cell is LIMITED). With the
+ * flag off (the default) no cell goes off the air, a NONE cell is not capped, and no antenna is
+ * refreshed; so a world with no Core Site plays exactly as before. The states are worked out for the
+ * lens, the dish and the status command once a core or dish exists. A dimension with no core, no dish
+ * and {@code requireBackhaul} off costs one map lookup per tick.
  *
  * <p><b>Game abstractions, labelled (NOTES.md, slice 12):</b>
  * <ul>
@@ -115,6 +129,11 @@ import org.jetbrains.annotations.Nullable;
  *   <li><b>A hop longer than {@code maxEvaluationRangeBlocks}</b> (1400 by default) is DOWN, out of
  *       range: the Link Tool refuses to pair one, and a hop that a lowered range leaves too long is
  *       not marched. It bounds the cost of a march, as the same setting bounds a cellular one.</li>
+ *   <li><b>A recompute's states land together, a little late</b> (Phase 3C review): while its marches
+ *       run the last published states stand, and a cell nobody has judged yet stays on the air. Measured
+ *       for 64 hops of 1000 blocks: 16 to 22 ticks when all are new (a server start), 29 to 34 when all
+ *       are marched again; a few hops take a tick or two. The delay is a cost budget, not a model of
+ *       anything (a real network management system polls its links on a period of its own).</li>
  * </ul>
  *
  * <p>Server thread only, like everything that reads the level.
@@ -170,11 +189,31 @@ public final class BackhaulNetwork extends SavedData {
     /** {@code requireBackhaul} as the last recompute applied it; null before the first. */
     private Boolean appliedRequire;
 
+    // ---- the recompute in progress (Phase 3C review, finding 2) ------------------------------------
+
+    /** Hops the recompute in progress has still to march, oldest first. */
+    private final BudgetedQueue<HopKey> pendingMarches = new BudgetedQueue<>();
+    /** Whether a recompute is in progress: marches queued or done, its solve still to come. */
+    private boolean measuring;
+    /** The config the recompute in progress marches and solves with (its snapshot when it began). */
+    private RfConfig measuringConfig;
+    private int marchedSoFar;
+    private int ticksSoFar;
+    private long nanosSoFar;
+    private long maxTickNanosSoFar;
+    private long maxMarchNanosSoFar;
+
     // ---- statistics (game tests and the status command) -------------------------------------------
 
     private long recomputes;
     private int lastMarched;
+    /** The last recompute's own work, summed over the ticks it took. */
     private long lastRecomputeNanos;
+    private int lastRecomputeTicks;
+    private long lastRecomputeMaxTickNanos;
+    private long lastRecomputeMaxMarchNanos;
+    /** The last recompute's weather, solve and effects, in its final tick. */
+    private long lastSolveNanos;
 
     /** A hop's two dishes, {@code a < b}: one fixed order, so both ends always agree (slice 11 note). */
     record HopKey(long a, long b) {
@@ -615,8 +654,44 @@ public final class BackhaulNetwork extends SavedData {
         return lastMarched;
     }
 
+    /** The last recompute's own work, summed over the ticks it took (one tick for {@link #recomputeNow}). */
     public long lastRecomputeNanos() {
         return lastRecomputeNanos;
+    }
+
+    /** How many ticks the last recompute's marches and solve were spread over (Phase 3C review). */
+    public int lastRecomputeTicks() {
+        return lastRecomputeTicks;
+    }
+
+    /** The last recompute's most expensive tick (its marches, or its marches and the solve). */
+    public long lastRecomputeMaxTickNanos() {
+        return lastRecomputeMaxTickNanos;
+    }
+
+    /** The last recompute's longest single hop march. */
+    public long lastRecomputeMaxMarchNanos() {
+        return lastRecomputeMaxMarchNanos;
+    }
+
+    /** The last recompute's weather, graph solve and effects, in its final tick. */
+    public long lastSolveNanos() {
+        return lastSolveNanos;
+    }
+
+    /** Whether a recompute is in progress: its marches spread over ticks, its states not yet published. */
+    public boolean measuring() {
+        return measuring;
+    }
+
+    /** Hops the recompute in progress has still to march (0 when none is in progress). */
+    public int pendingMarches() {
+        return pendingMarches.size();
+    }
+
+    /** {@code backhaulMarchBudgetMs} in nanoseconds. */
+    public static long marchBudgetNanos() {
+        return (long) (RanCraftConfig.backhaulMarchBudgetMs() * 1_000_000.0);
     }
 
     // ---- the recompute ----------------------------------------------------------------------------
@@ -624,10 +699,13 @@ public final class BackhaulNetwork extends SavedData {
     @SubscribeEvent
     public static void onServerTick(ServerTickEvent.Post event) {
         MinecraftServer server = event.getServer();
+        // One march budget for the tick, shared by every dimension (as fixedReceiverTickBudgetMs is).
+        long tickStart = System.nanoTime();
+        long budget = marchBudgetNanos();
         for (ServerLevel level : server.getAllLevels()) {
             BackhaulNetwork network = peek(level);
             if (network != null) {
-                network.tick(level, level.getGameTime());
+                network.tick(level, level.getGameTime(), tickStart, budget);
             }
         }
         if (server.getTickCount() % LENS_SEND_INTERVAL_TICKS == 0) {
@@ -636,15 +714,26 @@ public final class BackhaulNetwork extends SavedData {
     }
 
     /**
-     * Once per server tick: recomputes if a trigger fired and the last recompute is at least
-     * {@code backhaulRecomputeTicks} old (class javadoc). Public for the game tests, which drive it
-     * directly to time it.
+     * Once per server tick, with this tick's own march budget: {@link #tick(ServerLevel, long, long, long)}.
+     * Public for the game tests, which drive it directly to time it.
      */
     public void tick(ServerLevel level, long gameTime) {
+        tick(level, gameTime, System.nanoTime(), marchBudgetNanos());
+    }
+
+    /**
+     * Once per server tick: carries on with the recompute in progress, if any (its marches under the
+     * budget, then its solve); otherwise starts one if a trigger fired and the last recompute ended at
+     * least {@code backhaulRecomputeTicks} ago (class javadoc).
+     *
+     * @param tickStartNanos   {@link System#nanoTime()} when the tick's march budget started.
+     * @param marchBudgetNanos the budget, shared with the other dimensions' networks this tick.
+     */
+    public void tick(ServerLevel level, long gameTime, long tickStartNanos, long marchBudgetNanos) {
         boolean required = RanCraftConfig.requireBackhaul();
         if (!required && cores.isEmpty() && dishes.isEmpty()) {
-            // Nothing to judge and nothing for backhaul to do: drop any old result. If requireBackhaul
-            // was just turned off, every cell it held off the air comes back.
+            // Nothing to judge and nothing for backhaul to do: drop any old result, and any recompute
+            // in progress. If requireBackhaul was just turned off, every cell it held off the air comes back.
             boolean wasRequired = Boolean.TRUE.equals(appliedRequire);
             if (solved || !hops.isEmpty()) {
                 hops.clear();
@@ -652,10 +741,17 @@ public final class BackhaulNetwork extends SavedData {
                 dishStates = Map.of();
                 solved = false;
             }
+            pendingMarches.clear();
+            measuring = false;
             appliedRequire = Boolean.FALSE;
             if (wasRequired) {
                 refreshCells(level, new ArrayList<>(cells.keySet()));
             }
+            return;
+        }
+
+        if (measuring) {
+            advance(level, gameTime, tickStartNanos, marchBudgetNanos);
             return;
         }
 
@@ -698,38 +794,68 @@ public final class BackhaulNetwork extends SavedData {
         if (solved && !figuresChanged && !weatherChanged && !topologyChanged && !epochMoved) {
             return;
         }
-        recompute(level, gameTime, config, link, materials, required, figuresChanged, nowRaining, nowThundering,
-                epochs);
+        begin(config, link, materials, figuresChanged, epochs);
+        advance(level, gameTime, tickStartNanos, marchBudgetNanos);
     }
 
     /**
-     * Recomputes at once, whatever the triggers and the interval say; {@code remeasure} marches every
-     * hop again too. For the game tests, which time the recompute (NOTES.md, slice 12, measured), and
-     * which need a result now rather than at the next server tick.
+     * Recomputes at once, whatever the triggers, the interval and the march budget say (a recompute in
+     * progress is finished with it); {@code remeasure} marches every hop again too. For the game tests,
+     * which time the recompute (NOTES.md, slice 12, measured), and which need a result now rather than
+     * at the next server tick.
      *
      * @return the recompute's wall time, in nanoseconds.
      */
     public long recomputeNow(ServerLevel level, boolean remeasure) {
-        recompute(level, level.getGameTime(), RanCraftConfig.snapshot(), RfDataLoader.microwave(),
-                RfDataLoader.materials(), RanCraftConfig.requireBackhaul(), remeasure, level.isRaining(),
-                level.isThundering(), RegionEpochs.of(level));
+        begin(RanCraftConfig.snapshot(), RfDataLoader.microwave(), RfDataLoader.materials(), remeasure,
+                RegionEpochs.of(level));
+        advance(level, level.getGameTime(), System.nanoTime(), Long.MAX_VALUE);
         return lastRecomputeNanos;
     }
 
-    private void recompute(ServerLevel level, long gameTime, RfConfig config, MicrowaveLink link,
-                           MaterialTable materials, boolean required, boolean reMarchAll,
-                           boolean nowRaining, boolean nowThundering, RegionEpochs epochs) {
-        long start = System.nanoTime();
-        raining = nowRaining;
-        thundering = nowThundering;
-        rainFade = config.enableRainFade();
+    /**
+     * Starts a recompute (or widens the one in progress): takes the figures and the config it will
+     * march and solve with, and queues every hop that is new, whose bins moved, or (with
+     * {@code reMarchAll}) every hop.
+     */
+    private void begin(RfConfig config, MicrowaveLink link, MaterialTable materials, boolean reMarchAll,
+                       RegionEpochs epochs) {
+        if (measuring) {
+            // Only recomputeNow widens a recompute in progress. Hops it already marched with other
+            // figures are marched again, so that one recompute never mixes two sets of figures.
+            reMarchAll |= link != measuredWith || materials != measuredMaterials
+                    || config.metersPerBlock() != measuredMetersPerBlock
+                    || config.maxEvaluationRangeBlocks() != measuredRangeBlocks;
+        } else {
+            measuring = true;
+            marchedSoFar = 0;
+            ticksSoFar = 0;
+            nanosSoFar = 0L;
+            maxTickNanosSoFar = 0L;
+            maxMarchNanosSoFar = 0L;
+        }
+        measuringConfig = config;
         measuredWith = link;
         measuredMaterials = materials;
         measuredMetersPerBlock = config.metersPerBlock();
         measuredRangeBlocks = config.maxEvaluationRangeBlocks();
+        // A bump from here on is seen by the next trigger check: each hop's snapshot is taken when it
+        // is marched, so a bin that moves after its hop's march leaves that hop dirty.
         checkedBumps = epochs.bumps();
 
-        // 1. Hops: one per mutual pair of dishes. New ones and those whose bins moved are marched.
+        syncHops();
+        for (Map.Entry<HopKey, Hop> entry : hops.entrySet()) {
+            if (reMarchAll || !epochs.unchanged(entry.getValue().dependencies)) {
+                pendingMarches.add(entry.getKey());
+            }
+        }
+    }
+
+    /**
+     * The hop set from the pairings: one hop per mutual pair of dishes, each kept hop keeping its last
+     * measurement. A hop never measured is queued: it is marched before the next solve.
+     */
+    private void syncHops() {
         Map<HopKey, Hop> wanted = new LinkedHashMap<>();
         for (long dish : dishes) {
             if (!partners.containsKey(dish)) {
@@ -745,17 +871,88 @@ public final class BackhaulNetwork extends SavedData {
         }
         hops.clear();
         hops.putAll(wanted);
-
-        int marched = 0;
-        LevelWorldProbe probe = null;
-        for (Hop hop : hops.values()) {
-            if (hop.clear == null || reMarchAll || !epochs.unchanged(hop.dependencies)) {
-                if (probe == null) {
-                    probe = new LevelWorldProbe(level, materials);
-                }
-                measure(level, hop, link, config, probe, epochs);
-                marched++;
+        for (Map.Entry<HopKey, Hop> entry : hops.entrySet()) {
+            if (entry.getValue().clear == null) {
+                pendingMarches.add(entry.getKey());
             }
+        }
+    }
+
+    /**
+     * The recompute in progress, for one tick: marches queued hops, oldest first, under the budget (at
+     * least one, so it always moves on). Once none is left, and a hop paired meanwhile has been marched
+     * too, it finishes ({@link #finish}) in a tick of its own: this one if it marched nothing, else the
+     * next, so no tick pays for both the marches and the solve. An unbounded call ({@link #recomputeNow})
+     * finishes at once.
+     */
+    private void advance(ServerLevel level, long gameTime, long startNanos, long budgetNanos) {
+        long entered = System.nanoTime();
+        RegionEpochs epochs = RegionEpochs.of(level);
+        LevelWorldProbe[] probe = new LevelWorldProbe[1];
+        boolean unbounded = budgetNanos == Long.MAX_VALUE;
+        int taken = 0;
+        boolean finished = false;
+        while (true) {
+            taken += pendingMarches.drain(System::nanoTime, startNanos, budgetNanos, taken == 0,
+                    key -> march(level, key, epochs, probe));
+            if (!pendingMarches.isEmpty()) {
+                break;
+            }
+            syncHops();
+            if (pendingMarches.isEmpty()) {
+                if (taken == 0 || unbounded) {
+                    finish(level, gameTime);
+                    finished = true;
+                }
+                break;
+            }
+            if (System.nanoTime() - startNanos >= budgetNanos) {
+                break;
+            }
+        }
+        long spent = System.nanoTime() - entered;
+        ticksSoFar++;
+        nanosSoFar += spent;
+        maxTickNanosSoFar = Math.max(maxTickNanosSoFar, spent);
+        if (finished) {
+            lastMarched = marchedSoFar;
+            lastRecomputeTicks = ticksSoFar;
+            lastRecomputeNanos = nanosSoFar;
+            lastRecomputeMaxTickNanos = maxTickNanosSoFar;
+            lastRecomputeMaxMarchNanos = maxMarchNanosSoFar;
+        }
+    }
+
+    /** Marches one queued hop with the recompute's figures; nothing if it was unpaired since. */
+    private void march(ServerLevel level, HopKey key, RegionEpochs epochs, LevelWorldProbe[] probe) {
+        Hop hop = hops.get(key);
+        if (hop == null) {
+            return;
+        }
+        if (probe[0] == null) {
+            probe[0] = new LevelWorldProbe(level, measuredMaterials);
+        }
+        long started = System.nanoTime();
+        measure(level, hop, measuredWith, measuringConfig, probe[0], epochs);
+        maxMarchNanosSoFar = Math.max(maxMarchNanosSoFar, System.nanoTime() - started);
+        marchedSoFar++;
+    }
+
+    /**
+     * Ends the recompute: every hop budgeted with the weather of now, the graph solved, the effects
+     * applied. Every state the recompute publishes changes here, at once.
+     */
+    private void finish(ServerLevel level, long gameTime) {
+        long start = System.nanoTime();
+        RfConfig config = measuringConfig;
+        MicrowaveLink link = measuredWith;
+        boolean nowRaining = level.isRaining();
+        boolean nowThundering = level.isThundering();
+        boolean required = RanCraftConfig.requireBackhaul();
+        raining = nowRaining;
+        thundering = nowThundering;
+        rainFade = config.enableRainFade();
+        for (Hop hop : hops.values()) {
             hop.weather = MicrowaveLink.Weather.at(nowRaining, nowThundering, hop.precipitation);
             hop.budget = link.withWeather(hop.clear, config, hop.weather);
         }
@@ -777,18 +974,19 @@ public final class BackhaulNetwork extends SavedData {
         BackhaulGraph.Result result = BackhaulGraph.solve(topology, coreNodes, cells.values(), dishNodes, links);
 
         // 3. Effects. Only with requireBackhaul on (or just switched) can a state change move a cell on
-        // or off the air, so only then are antennas refreshed: with it off, nothing a cell does changes.
+        // or off the air, so only then are antennas refreshed: with it off, no cell goes on or off the
+        // air. (The LIMITED cap needs no refresh either way: each dispatch reads it, serviceCapAt.)
         Map<Long, BackhaulState> previous = cellStates;
         boolean requireFlipped = !Boolean.valueOf(required).equals(appliedRequire);
         cellStates = result.cells();
         dishStates = result.dishes();
         appliedRequire = required;
         solved = true;
+        measuring = false;
         solvedTopology = topology;
         solvedTopologyVersion = topologyVersion;
         lastRecomputeTick = gameTime;
         recomputes++;
-        lastMarched = marched;
 
         if (required || requireFlipped) {
             List<Long> refresh = new ArrayList<>();
@@ -802,7 +1000,7 @@ public final class BackhaulNetwork extends SavedData {
         // After the refresh: the registry changes it made are this recompute's own, not a new trigger.
         // (A refresh may also note a cell anew, which moves topologyVersion: that is a real change.)
         solvedSiteVersion = SiteRegistry.of(level).version();
-        lastRecomputeNanos = System.nanoTime() - start;
+        lastSolveNanos = System.nanoTime() - start;
     }
 
     /**

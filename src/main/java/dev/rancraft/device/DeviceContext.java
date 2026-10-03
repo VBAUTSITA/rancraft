@@ -38,7 +38,8 @@ import net.minecraft.server.level.ServerLevel;
  * @param serviceCap <b>Slice 12 (appended).</b> The ceiling the serving cell's backhaul puts on the
  *                   service level, read when the sample is dispatched (a replay gets the cap of now,
  *                   not of the evaluation): {@code BackhaulGraph.serviceCap}, FAIR for a LIMITED cell
- *                   while {@code requireBackhaul} is on. {@link ServiceLevel#EXCELLENT} caps nothing.
+ *                   (whatever {@code requireBackhaul} says; Phase 3C review), NONE for a cell with
+ *                   no backhaul while it is on. {@link ServiceLevel#EXCELLENT} caps nothing.
  */
 public record DeviceContext(
         SignalSample sample, DeviceRequirement.Verdict verdict,

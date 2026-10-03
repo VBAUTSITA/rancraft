@@ -72,23 +72,32 @@ public final class BackhaulGraph {
     public static final ServiceLevel LIMITED_SERVICE_CAP = ServiceLevel.FAIR;
 
     /**
-     * The service cap a cell's backhaul puts on its devices (Phase 3 slice 12): {@link #LIMITED_SERVICE_CAP}
-     * for LIMITED, {@link ServiceLevel#NONE} for NONE (a cell with no backhaul carries nothing; with
-     * {@code requireBackhaul} on it is off the air anyway), and no cap ({@link ServiceLevel#EXCELLENT})
-     * for FULL or an unknown state ({@code null}: not solved yet).
+     * The service cap a cell's backhaul puts on its devices (Phase 3 slice 12, §3C.2 "Effects"):
+     * <ul>
+     *   <li>FULL, or an unknown state ({@code null}: not solved yet): no cap ({@link ServiceLevel#EXCELLENT});</li>
+     *   <li>LIMITED: {@link #LIMITED_SERVICE_CAP}, <b>whatever {@code requireBackhaul} says</b>. §3C.2
+     *       states this effect without the flag (it ties only NONE to it), and it cannot change a world
+     *       built without backhaul: a cell is LIMITED only when a Core Site exists and a player-built
+     *       DEGRADED hop is its best path. With no core every cell is NONE (Phase 3C review);</li>
+     *   <li>NONE: {@link ServiceLevel#NONE} with {@code requireBackhaul} on (such a cell carries nothing;
+     *       it is off the air anyway), and no cap with it off (the default), so a world with no Core Site,
+     *       or a cell nobody connected, plays exactly as before.</li>
+     * </ul>
      *
-     * <p><b>Only with {@code requireBackhaul} on.</b> With it off (the default) backhaul has no effect
-     * at all: a cell with no backhaul transmits at full service, so a LIMITED one cannot be capped
-     * either, and a Phase 2 world plays exactly as before (NOTES.md, slice 12, decision 1).
+     * <p><b>Game abstraction, labelled (NOTES.md, Phase 3C review, finding 1):</b> with the flag off a
+     * cell with no backhaul at all is uncapped while one behind a DEGRADED hop is capped at FAIR. The
+     * flag off means "a cell nobody connected has implicit transport", so the cap teaches the one thing
+     * it is for: a DEGRADED hop that a player built is a backhaul-limited cell. A real cell with no
+     * transport carries nothing; that is what {@code requireBackhaul} on models.
      */
     public static ServiceLevel serviceCap(BackhaulState state, boolean requireBackhaul) {
-        if (!requireBackhaul || state == null) {
+        if (state == null) {
             return ServiceLevel.EXCELLENT;
         }
         return switch (state) {
             case FULL -> ServiceLevel.EXCELLENT;
             case LIMITED -> LIMITED_SERVICE_CAP;
-            case NONE -> ServiceLevel.NONE;
+            case NONE -> requireBackhaul ? ServiceLevel.NONE : ServiceLevel.EXCELLENT;
         };
     }
 

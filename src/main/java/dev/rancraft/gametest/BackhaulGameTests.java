@@ -26,6 +26,7 @@ import dev.rancraft.world.LevelWorldProbe;
 import dev.rancraft.world.SiteRegistry;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
@@ -77,14 +78,19 @@ import net.neoforged.neoforge.gametest.GameTestHolder;
  *       −69.55 dBm), and the two sites behind it LIMITED, capped at FAIR. Breaking the middle dish takes
  *       them off the air (unregistered, {@code OnAir} false in the update tag: the lens greys them).
  *       {@code /rancraft backhaul status} lists them. Turning {@code requireBackhaul} off puts them
- *       back on the air with no cap. The cost of a march, a recompute and a quiet tick is logged.</li>
+ *       back on the air with no cap (they are NONE). The cost of a march, a recompute and a quiet tick
+ *       is logged.</li>
  *   <li><b>Weather</b> ({@code requireBackhaul} off, the default): a marginal 1000-block hop (one stone,
  *       DEGRADED) drops to DOWN in a thunderstorm and in rain, and recovers when it clears, re-budgeted
  *       without a march. A cell with no backhaul at all stays on the air, uncapped, and the site
  *       registry never moves.</li>
+ *   <li><b>March budget</b> (Phase 3C review, finding 2): 64 parallel 1000-block hops, all new (the
+ *       first recompute after a server start) and then all dirtied by one block in the region bin they
+ *       all cross, are marched over several ticks under {@code backhaulMarchBudgetMs}, no tick much over
+ *       it, and the states change only when all are measured. The costs are logged.</li>
  * </ul>
  *
- * <p>Both build far from every other test, in the overworld (weather needs a sky), in forced chunks at
+ * <p>Each builds far from every other test, in the overworld (weather needs a sky), in forced chunks at
  * y {@value #Y} (open air in the flat test world), and wait for the server's own recompute (at most
  * {@code backhaulRecomputeTicks} after a trigger) wherever a trigger is under test. Each runs in a batch
  * of its own: {@code requireBackhaul} and the weather are global. Each batch's {@link AfterBatch} method
@@ -95,8 +101,10 @@ public final class BackhaulGameTests {
 
     private static final String BATCH_CHAIN = "rancraft_backhaul_chain";
     private static final String BATCH_WEATHER = "rancraft_backhaul_weather";
+    private static final String BATCH_BUDGET = "rancraft_backhaul_march_budget";
     private static final int CHAIN_TIMEOUT_TICKS = 1200;
     private static final int WEATHER_TIMEOUT_TICKS = 600;
+    private static final int BUDGET_TIMEOUT_TICKS = 900;
     /** Block entities run {@code onLoad} on the next tick. */
     private static final int SETTLE = 3;
 
@@ -108,6 +116,19 @@ public final class BackhaulGameTests {
     /** Twelve chunks south of the chain, another 128-block bin. */
     private static final int WEATHER_X = 8192;
     private static final int WEATHER_Z = 8392;
+    /**
+     * The march-budget hops: their west ends in chunk 1536 (8 blocks in) and one 128-block bin row
+     * (z 24576 to 24702, 2 blocks apart), so every hop crosses the bin of their west ends.
+     */
+    private static final int BUDGET_X = 24_584;
+    private static final int BUDGET_Z = 24_576;
+    private static final int BUDGET_HOPS = 64;
+    private static final int BUDGET_HOP_BLOCKS = 1000;
+    /**
+     * Allowance on top of the bound for a GC pause or a safepoint landing in a tick: the bound itself
+     * (the budget plus one march, or the solve alone) holds by construction ({@code BudgetedQueueTest}).
+     */
+    private static final long BUDGET_SLACK_NANOS = 2_000_000L;
 
     /** The game test server's weather (GameTestServer.initServer), put back after the weather test. */
     private static final int TEST_SERVER_WEATHER_TIME = 20_000_000;
@@ -126,7 +147,14 @@ public final class BackhaulGameTests {
                 HarvestGameTests.EMPTY_TEMPLATE, CHAIN_TIMEOUT_TICKS, 0L, true, BackhaulGameTests::chain));
         tests.add(new TestFunction(BATCH_WEATHER, prefix + "a_marginal_hop_drops_in_a_thunderstorm_and_recovers",
                 HarvestGameTests.EMPTY_TEMPLATE, WEATHER_TIMEOUT_TICKS, 0L, true, BackhaulGameTests::weather));
+        tests.add(new TestFunction(BATCH_BUDGET, prefix + "many_dirty_long_hops_are_marched_over_ticks_under_the_budget",
+                HarvestGameTests.EMPTY_TEMPLATE, BUDGET_TIMEOUT_TICKS, 0L, true, BackhaulGameTests::marchBudget));
         return tests;
+    }
+
+    @AfterBatch(batch = BATCH_BUDGET)
+    public static void afterBudget(ServerLevel level) {
+        runCleanups();
     }
 
     @AfterBatch(batch = BATCH_CHAIN)
@@ -324,8 +352,9 @@ public final class BackhaulGameTests {
                 .thenWaitUntil(() -> helper.assertTrue(antenna(helper, level, chain.s3()).onAir(),
                         "requireBackhaul off: the far site is back on the air"))
                 .thenExecute(() -> {
-                    // With the flag off, backhaul does nothing: the states are still worked out (for the
-                    // lens, the dish and the command), but no cell is held off the air or capped.
+                    // With the flag off, no cell is held off the air and a NONE cell is not capped; the
+                    // states are still worked out (for the lens, the dish and the command). A LIMITED
+                    // cell would still be capped at FAIR (Phase 3C review; StorageTerminalGameTests).
                     assertCell(helper, level, network, chain.s2(), BackhaulState.NONE, true, ServiceLevel.EXCELLENT);
                     assertCell(helper, level, network, chain.s3(), BackhaulState.NONE, true, ServiceLevel.EXCELLENT);
                     assertCell(helper, level, network, chain.s1(), BackhaulState.FULL, true, ServiceLevel.EXCELLENT);
@@ -622,6 +651,145 @@ public final class BackhaulGameTests {
                             "requireBackhaul off: three recomputes never touched the site registry");
                 })
                 .thenSucceed();
+    }
+
+    // ---- the march budget (Phase 3C review, finding 2) ---------------------------------------------
+
+    /**
+     * 64 parallel hops of 1000 blocks along +x, their west ends 2 blocks apart in one bin row, so every
+     * hop crosses the region bin of the west ends. Two recomputes run on the server's own tick:
+     * <ol>
+     *   <li>all 64 new, as after a server start: marched over several ticks, nothing published until
+     *       the last is measured, then exactly what an unbounded recompute that marches them all again
+     *       gives;</li>
+     *   <li>one stone placed with its event on hop 0's line, 6 blocks from its west end, so in the bin
+     *       every hop crosses: all 64 are dirty at once, the next allowed recompute marches them all again
+     *       over several ticks, hop 0 still reads UP while it runs (the last published state stands) and
+     *       DOWN at −75.55 dBm once it ends (the stone is on the line and, this near the dish, in the
+     *       Fresnel zone too), every other hop still UP.</li>
+     * </ol>
+     * Each time no tick takes longer than the budget plus one march, or the solve in its own tick (plus
+     * an allowance for a pause the JVM might take). Wall-clock in a shared JVM: logged, an order of
+     * magnitude.
+     */
+    private static void marchBudget(GameTestHelper helper) {
+        ServerLevel level = helper.getLevel();
+        List<BlockPos> west = new ArrayList<>();
+        List<BlockPos> east = new ArrayList<>();
+        for (int i = 0; i < BUDGET_HOPS; i++) {
+            west.add(new BlockPos(BUDGET_X, Y, BUDGET_Z + 2 * i));
+            east.add(new BlockPos(BUDGET_X + BUDGET_HOP_BLOCKS, Y, BUDGET_Z + 2 * i));
+        }
+        BlockPos stone = new BlockPos(BUDGET_X + 6, Y, BUDGET_Z);
+        List<BlockPos> placed = new ArrayList<>(west);
+        placed.addAll(east);
+        placed.add(stone);
+        List<Long> forced = new ArrayList<>();
+        CLEANUPS.add(() -> {
+            removeAll(level, placed);
+            BackhaulNetwork.of(level).recomputeNow(level, false);
+            release(level, forced);
+        });
+
+        Set<Long> chunks = new TreeSet<>();
+        for (BlockPos pos : placed) {
+            chunks.add(chunkKey(pos));
+        }
+        force(level, chunks, forced);
+        for (int i = 0; i < BUDGET_HOPS; i++) {
+            level.setBlock(west.get(i), ModBlocks.BACKHAUL_DISH.get().defaultBlockState(), 3);
+            level.setBlock(east.get(i), ModBlocks.BACKHAUL_DISH.get().defaultBlockState(), 3);
+        }
+        BackhaulNetwork network = BackhaulNetwork.of(level);
+        Player player = helper.makeMockPlayer(GameType.CREATIVE);
+        long budget = BackhaulNetwork.marchBudgetNanos();
+        long[] mark = new long[1];
+
+        helper.startSequence()
+                .thenIdle(SETTLE)
+                .thenExecute(() -> {
+                    helper.assertTrue(network.hops().isEmpty() && !network.measuring(),
+                            "fixture: no other hop in the overworld, nothing in progress: " + network.hops().size());
+                    for (int i = 0; i < BUDGET_HOPS; i++) {
+                        network.pair(level, west.get(i), east.get(i));
+                    }
+                    mark[0] = network.recomputes();
+                })
+                .thenWaitUntil(() -> {
+                    helper.assertTrue(network.measuring() && network.recomputes() == mark[0],
+                            "the server's own recompute starts on the new hops");
+                    // Checked in the same tick: the recompute may end in the next.
+                    helper.assertTrue(network.hops().isEmpty() && network.pendingMarches() > 0,
+                            "mid-way, nothing is published yet (" + network.pendingMarches() + " hops still to march)");
+                })
+                .thenWaitUntil(() -> helper.assertTrue(network.recomputes() > mark[0] && !network.measuring(),
+                        "the recompute ends once every hop is measured"))
+                .thenExecute(() -> {
+                    assertSpread(helper, network, budget, "first measurement, every hop new");
+                    List<BackhaulNetwork.HopStatus> spread = network.hops();
+                    helper.assertTrue(spread.size() == BUDGET_HOPS, BUDGET_HOPS + " hops, got " + spread.size());
+                    for (BackhaulNetwork.HopStatus hop : spread) {
+                        helper.assertTrue(hop.budget().state() == MicrowaveLink.LinkState.UP, "every hop is clear: " + hop);
+                    }
+                    long unbounded = network.recomputeNow(level, true);
+                    helper.assertTrue(network.lastMarched() == BUDGET_HOPS && network.lastRecomputeTicks() == 1,
+                            "recomputeNow marches every hop again in one call");
+                    helper.assertTrue(new HashSet<>(network.hops()).equals(new HashSet<>(spread)),
+                            "the spread recompute gave exactly what one unbounded recompute gives");
+                    RanCraft.LOGGER.info(String.format(Locale.ROOT,
+                            "RANCraft backhaul march budget: the same %d hops marched at once (recomputeNow) %.1f us in one call",
+                            BUDGET_HOPS, unbounded / 1_000.0));
+                    mark[0] = network.recomputes();
+                    placeWithItem(helper, player, stone, new ItemStack(Items.STONE));
+                })
+                .thenWaitUntil(() -> {
+                    helper.assertTrue(network.measuring() && network.recomputes() == mark[0],
+                            "the stone's bin dirties every hop: the next allowed recompute starts");
+                    helper.assertTrue(network.pendingMarches() > 0, "mid-way: hops still to march");
+                    helper.assertTrue(hopAt(helper, network, west.get(0)).budget().state() == MicrowaveLink.LinkState.UP,
+                            "mid-way, hop 0 still reads its last published state, UP");
+                })
+                .thenWaitUntil(() -> helper.assertTrue(network.recomputes() > mark[0] && !network.measuring(),
+                        "the recompute ends once every hop is measured again"))
+                .thenExecute(() -> {
+                    assertSpread(helper, network, budget, "one block in the bin every hop crosses");
+                    // Six blocks from the dish the Fresnel offset paths still run through the stone's
+                    // voxel: 36 dB on the line and the 6 dB Fresnel penalty, so DOWN at -75.55 dBm.
+                    MicrowaveLink.Budget blocked = hopAt(helper, network, west.get(0)).budget();
+                    helper.assertTrue(blocked.state() == MicrowaveLink.LinkState.DOWN && !blocked.fresnelClear()
+                                    && Math.abs(blocked.rslDbm() - (-75.55)) < 0.01,
+                            "hop 0 is DOWN by its stone, on the line and in the Fresnel zone: " + blocked);
+                    assertSameAsFreshMarch(helper, level, west.get(0), east.get(0), blocked);
+                    for (int i = 1; i < BUDGET_HOPS; i++) {
+                        helper.assertTrue(hopAt(helper, network, west.get(i)).budget().state() == MicrowaveLink.LinkState.UP,
+                                "hop " + i + " is still UP");
+                    }
+                })
+                .thenSucceed();
+    }
+
+    /**
+     * The last recompute marched every hop, over more than one tick, and no tick took longer than the
+     * budget plus one march, or the solve (which gets a tick of its own after marches), plus
+     * {@link #BUDGET_SLACK_NANOS}. Logs its figures.
+     */
+    private static void assertSpread(GameTestHelper helper, BackhaulNetwork network, long budgetNanos, String what) {
+        int ticks = network.lastRecomputeTicks();
+        long maxTick = network.lastRecomputeMaxTickNanos();
+        long maxMarch = network.lastRecomputeMaxMarchNanos();
+        long solve = network.lastSolveNanos();
+        long total = network.lastRecomputeNanos();
+        String figures = String.format(Locale.ROOT,
+                "%s: %d hops of %d blocks marched over %d ticks; budget %.1f us, longest tick %.1f us, longest march"
+                        + " %.1f us, solve %.1f us, total %.1f us (%.3f us per block)",
+                what, network.lastMarched(), BUDGET_HOP_BLOCKS, ticks, budgetNanos / 1_000.0, maxTick / 1_000.0,
+                maxMarch / 1_000.0, solve / 1_000.0, total / 1_000.0,
+                total / 1_000.0 / Math.max(1, network.lastMarched()) / BUDGET_HOP_BLOCKS);
+        RanCraft.LOGGER.info("RANCraft backhaul march budget: " + figures);
+        helper.assertTrue(network.lastMarched() == BUDGET_HOPS, "every hop marched: " + figures);
+        helper.assertTrue(ticks >= 2, "spread over ticks: " + figures);
+        helper.assertTrue(maxTick <= Math.max(budgetNanos + maxMarch, solve) + BUDGET_SLACK_NANOS,
+                "no tick much over the budget: " + figures);
     }
 
     /**

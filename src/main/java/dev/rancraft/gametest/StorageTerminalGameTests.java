@@ -87,10 +87,12 @@ import org.jetbrains.annotations.Nullable;
  *   <li><b>Unloaded</b>: the storage's chunk released while a session is open closes it ("storage
  *       unreachable"); a use then is refused and loads nothing, before and after the chunk really
  *       unloads.</li>
- *   <li><b>Backhaul</b> ({@code requireBackhaul} on): the 3C done-when "a tree grown into a link path
- *       turns it DEGRADED, the cells behind it read BH: LIMITED, and the Storage Terminal stops working
- *       while the Radio Link keeps working". Six leaves placed on a 1000-block hop (about 18 dB, §3C.2)
- *       stand in for the canopy (slice 7 showed tree growth moves the same region epochs).</li>
+ *   <li><b>Backhaul</b> ({@code requireBackhaul} off, the default: the done-when does not ask for it,
+ *       and since the Phase 3C review the LIMITED cap does not need it): the 3C done-when "a tree grown
+ *       into a link path turns it DEGRADED, the cells behind it read BH: LIMITED, and the Storage
+ *       Terminal stops working while the Radio Link keeps working". Six leaves placed on a 1000-block hop
+ *       (about 18 dB, §3C.2) stand in for the canopy (slice 7 showed tree growth moves the same region
+ *       epochs). {@code BackhaulGameTests}' chain shows the cap with the flag on.</li>
  * </ul>
  *
  * <p><b>The player.</b> A {@link SilentServerPlayer}: a real {@code ServerPlayer}, not on the player list
@@ -568,11 +570,12 @@ public final class StorageTerminalGameTests {
     }
 
     /**
-     * 3C done-when, with {@code requireBackhaul} on: "a tree grown into a link path turns it DEGRADED,
-     * the cells behind it read BH: LIMITED, and the Storage Terminal stops working while the Radio Link
-     * keeps working". The session closes with "backhaul limited", the radio's own level still GOOD or
-     * better, while the Radio Link served by the same cell still follows its transmitter. The leaves gone,
-     * the hop is UP again and the terminal opens again.
+     * 3C done-when, with {@code requireBackhaul} off (the default; Phase 3C review, finding 1): "a tree
+     * grown into a link path turns it DEGRADED, the cells behind it read BH: LIMITED, and the Storage
+     * Terminal stops working while the Radio Link keeps working". The session closes with "backhaul
+     * limited", the radio's own level still GOOD or better, while the Radio Link served by the same cell
+     * still follows its transmitter. The leaves gone, the hop is UP again and the terminal opens again.
+     * Before the review the cap needed the flag on, so under the default config the terminal kept working.
      */
     private static void backhaulLimited(GameTestHelper helper) {
         ServerLevel level = helper.getLevel();
@@ -590,7 +593,8 @@ public final class StorageTerminalGameTests {
             clearAndRemove(level, site.all());
             BackhaulNetwork.of(level).recomputeNow(level, false);
         });
-        RanCraftConfig.REQUIRE_BACKHAUL.set(true);
+        // The default, set explicitly in case a run's config differs.
+        RanCraftConfig.REQUIRE_BACKHAUL.set(false);
 
         level.setBlock(site.core(), ModBlocks.CORE_SITE.get().defaultBlockState(), Block.UPDATE_ALL);
         level.setBlock(site.d0(), ModBlocks.BACKHAUL_DISH.get().defaultBlockState(), Block.UPDATE_ALL);
@@ -615,7 +619,7 @@ public final class StorageTerminalGameTests {
         helper.startSequence()
                 .thenIdle(SETTLE)
                 .thenExecute(() -> {
-                    // Pair first: a recompute may already have judged the unpaired sector NONE (off the air).
+                    helper.assertFalse(RanCraftConfig.requireBackhaul(), "fixture: requireBackhaul is off (the default)");
                     network.pair(level, site.d0(), site.d1());
                     network.recomputeNow(level, false);
                     configure(helper, level, site.sector(), "band_1800");
