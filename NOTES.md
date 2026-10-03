@@ -4865,8 +4865,8 @@ A Proximity Scanner item. Held, with GOOD service on a band of capacity tier 3 (
 thing that band is for), it lists the hostile mobs within 24 blocks on the HUD: type, distance and
 compass bearing, nearest first, at most 16. There is no world render. Off that requirement it says
 why, in words that name the fix ("needs tier 3, you're on band_1800 (tier 2)", "signal too weak",
-"backhaul limited", "no service"). The code went in `465d40e` (part 1 of 2). These notes and the
-tracker went in "Phase 3 slice 14: Proximity Scanner".
+"backhaul limited", "no service"). The code and the game test went in `465d40e` (part 1 of 2). These
+notes and the tracker went in `9e3fab5` "Phase 3 slice 14: Proximity Scanner".
 
 An earlier attempt at this slice was interrupted. It had written the item, the device, the payload, the
 pure list, the HUD, the config entry and the unit tests, uncommitted but green (594 tests). This step
