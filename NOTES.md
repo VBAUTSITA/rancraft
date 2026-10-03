@@ -5353,3 +5353,193 @@ The headline: on real blocks, a 30 dBm sector burned 2,120 generator ticks of fu
 | `./gradlew runGameTestServer` | 30 batches run, "All 48 required tests passed" (40 + 7 + `site_generator`'s harvest test). Of the slice's first eight runs, three failed only the Radio Link cost gate while the machine was slow; the four runs since (two on fresh worlds, two on the accumulated one, the last with the final tree) passed, with gate medians of 13.7-25.5 µs against slice 14's 18.1-21.1 (see Measured) |
 | Versions | `AntennaBlockEntity.DATA_VERSION` 3 → 4 (`Energy`, `PowerOn`); the Site Generator's save `DataVersion` 1; `PROTOCOL_VERSION` 10 and `SignalSamplePayload.VERSION` 4 unchanged (no payload, and the update tag is as before) |
 | In game | needs the user (`PHASE_3.md`, slice 15 checks): the generator's look, light and messages, the lens greying a cell out of energy, a fuel bill felt over minutes |
+
+## Slice 16 — Recipes, loot tables, creative tab (§3C.6)
+
+Every block and item RANCraft registers is now craftable in survival. There are fourteen shaped
+crafting recipes in `data/rancraft/recipe/`, one per registered item, from §3C.6's ingredient table and
+in its tiers. The RF Lens is deliberately cheap and early. Each recipe has a recipe-book unlock
+advancement, so a survival player sees it. The seven blocks already had loot tables and the pickaxe tag
+(slices 1, 9, 12 and 15), and every item was already in the creative tab. New in this slice: a game test
+per item that loads its recipe on the live server, crafts its grid from real stacks, and checks that no
+other recipe takes that grid, plus a creative-tab test. The code, data and tests went in `36cd29e`
+(part 1 of 2); these notes and the tracker are in "Phase 3 slice 16: recipes and loot tables".
+
+### What was built
+
+- **Recipes** (`data/rancraft/recipe/<item>.json`, 1.21.1 format: `minecraft:crafting_shaped`, keys
+  `{"item"}` / `{"tag"}`, result `{"id", "count"}`). Grids are read top row first; C is a copper
+  ingot, I an iron ingot, G a gold ingot, R redstone dust, A an amethyst shard.
+
+  | Item | Grid | Key | Tier |
+  |---|---|---|---|
+  | Field Test Meter | ` P ` `CRC` ` C ` | P glass pane | early |
+  | RF Lens | `CAC` `G G` | G glass | early, deliberately |
+  | Signal Mast ×4 | `B B` `BCB` `B B` | B iron bars | early |
+  | Network Locator | ` C ` `CKC` ` R ` | K compass | early |
+  | Radio Link Transmitter | ` T ` `CCC` | T redstone torch | early |
+  | Radio Link Receiver | ` T ` `CKC` | T redstone torch, K comparator **or** repeater | early |
+  | Sector Antenna | `ICI` `IRI` ` M ` | M Signal Mast | mid |
+  | Core Site | `IRI` `ICI` `IBI` | R redstone block, C chest, B iron block | mid |
+  | Backhaul Dish | `CLC` `CIC` ` I ` | L lightning rod | mid |
+  | Link Tool | `  C` ` S ` `S  ` | S stick | mid |
+  | Site Generator | `CCC` `CFC` `CRC` | F furnace | mid |
+  | Wideband Radio Unit | `GAG` `ARA` `GAG` | R redstone block | late-mid |
+  | Storage Terminal | `CEC` `GCG` `CCC` | E ender pearl | late-mid |
+  | Proximity Scanner | ` S ` `AKA` `GGG` | S spyglass, K sculk sensor | late |
+
+  Raw materials go through NeoForge's common tags (`c:ingots/copper`, `c:ingots/iron`, `c:ingots/gold`,
+  `c:dusts/redstone`, `c:gems/amethyst`, `c:glass_blocks/colorless`, `c:glass_panes/colorless`,
+  `c:storage_blocks/iron`, `c:storage_blocks/redstone`, `c:chests/wooden`, `c:ender_pearls`,
+  `c:rods/wooden`); each holds the vanilla item, checked in the NeoForge 21.1.251 jar. Components that
+  have no common tag are named directly (iron bars, compass, redstone torch, comparator, repeater,
+  lightning rod, furnace, spyglass, sculk sensor, and the Signal Mast).
+- **Recipe-book unlocks** (`data/rancraft/advancement/recipes/{tools,redstone,misc}/<item>.json`, the
+  vanilla shape: `inventory_changed` or `recipe_unlocked`, rewarding the recipe). Each recipe appears
+  once the player holds one of its key ingredients or the RANCraft block it builds on:
+  - copper (`#c:ingots/copper`) shows the meter, the lens and the mast; an amethyst shard also shows
+    the lens, and iron bars the mast;
+  - a compass shows the Locator, and a redstone torch both Radio Links;
+  - a Signal Mast shows the Sector Antenna, and a Signal Mast or a Sector Antenna shows the Core Site,
+    the Backhaul Dish and the Site Generator;
+  - a Backhaul Dish shows the Link Tool, and a Sector Antenna the Wideband Radio Unit;
+  - an ender pearl shows the Storage Terminal, and a sculk sensor or a Wideband Radio Unit the
+    Proximity Scanner.
+- **`gametest/RecipeGameTests`**: one generated test per `ModItems` entry (`recipegametests.<item>`), so
+  an item added later fails until it has a recipe and an unlock. Each test works on the recipes the
+  server actually loaded, and checks five things:
+  1. at least one crafting recipe makes the item;
+  2. it is shaped or shapeless, and every ingredient resolves to a real item;
+  3. the recipe's grid, built from real stacks, is matched by that recipe and no other
+     (`RecipeManager.getRecipesFor`), each alternative of each ingredient tried in turn, and assembling
+     it yields the item;
+  4. a RANCraft ingredient (the Signal Mast) has a recipe made only of non-RANCraft items;
+  5. an advancement rewards the recipe.
+
+  A sixth test, `every_block_and_item_is_in_the_creative_tab`, builds the RANCraft tab's contents and
+  finds every registered item there, once each. It also checks that every registered block has an item.
+- Stale "no recipe yet, creative-only" comments removed from `ModItems` and `WidebandRadioUnitItem`;
+  `ModItems.ITEMS` now says what every entry must have and labels the recipes as progression. README:
+  "creative tab only" removed throughout, a *Recipes* paragraph added.
+- Loot tables and the pickaxe tag: nothing to add. All seven blocks have both, and `HarvestGameTests`
+  (one generated test per block) checks them; it passed again here, 7 of 7.
+
+### Decisions and deviations
+
+1. **The Radio Link Receiver takes a comparator or a repeater** (one ingredient, a JSON array: an "any
+   of" ingredient). §3C.6 lists the comparator and calls the pair early. These conflict: a comparator
+   needs Nether quartz, which needs a Nether portal, and that is not early game. A comparator-only
+   receiver would make the pair post-Nether, since a transmitter alone does nothing. The repeater
+   (stone, redstone, torches) keeps the pair early, and the comparator still works. The tier is the
+   table's organising column, so it won. Also in `PHASE_3.md` follow-ups. Retuning is a one-line data
+   change.
+2. **Recipe-book unlock advancements were added, though §3C.6 does not ask for them.** Without one a
+   recipe still crafts, but the recipe book never shows it. RANCraft has no guide book, so a survival
+   player would otherwise have to know every pattern. With the `doLimitedCrafting` game rule on, a recipe
+   no advancement unlocks cannot be crafted at all.
+3. **Common `c:` tags for raw materials**, not vanilla item ids, so another mod's copper or iron works.
+   Vanilla's own recipes name items; NeoForge mods conventionally use these tags. Each tag holds the
+   vanilla item in NeoForge's own data, and the game test fails on an empty tag.
+4. **The Signal Mast yields 4 per craft** (§3C.6 gives no count). Masts stack into columns of up to
+   `maxMastHeight` (64), so one per craft would make the Phase 3B "stack masts for height" lesson cost 2¼
+   iron per block. Four per craft is about 0.56 iron and 0.25 copper per mast, so a ten-high tower costs
+   about 6 iron.
+5. **Recipe shapes** are mine (§3C.6 gives ingredients only). A shape only has to avoid every vanilla
+   grid, and I checked that two ways:
+   - a scratch script compared each grid, mirrored and not, with all 887 vanilla crafting recipes, with
+     tags expanded (0 collisions);
+   - the game test proves it on the live server, including every ingredient alternative.
+
+   Where it cost nothing, the shape hints at the thing: the lens is goggles, the dish a reflector with a
+   lightning-rod feed on an iron mount, the transmitter and receiver a torch "antenna" on copper.
+6. **Categories:** handheld items are `equipment` (unlock folder `tools`), the Radio Links `redstone`,
+   and the rest `misc`, as vanilla files its own recipes.
+
+### Honest-abstraction notes (also at the code sites)
+
+- **Recipes are progression, not a bill of materials** (`ModItems.ITEMS`). The ingredients are thematic:
+  copper for RF, a compass in the Locator, a sculk sensor in the Scanner. The tiers pace the game. No real
+  radio is built from these parts.
+- **Test harness** (`RecipeGameTests`): the grid is matched with `RecipeManager`, as the crafting
+  table's result slot does (`CraftingMenu.slotChangedCraftingGrid`), but no menu or player is involved.
+  That a survival player can obtain the vanilla ingredients is taken as given.
+
+### Measured
+
+- Recipes loaded by the game test server: 1,291 before this slice, 1,305 after (+14). Advancements:
+  1,400 before, 1,414 after (+14). No `ERROR` line in the log, and no "Parsing error loading recipe",
+  "Parsing error loading custom advancement" or advancement validation warning.
+- Survival cost, in raw materials:
+
+  | Item | Raw materials |
+  |---|---|
+  | First site (4 masts + meter + lens) | 2¼ iron, 6 copper, 1 redstone, 1 amethyst, 2 glass, ⅜ glass for the pane |
+  | Sector Antenna | about 4.6 iron, 1.25 copper, 1 redstone (with its mast) |
+  | Core Site | 15 iron, 9 redstone, a chest |
+  | Backhaul Dish | 7 copper, 2 iron (a hop needs two) |
+  | Site Generator | 7 copper, 8 cobblestone, 1 redstone |
+  | Wideband Radio Unit | 4 gold, 4 amethyst, 9 redstone |
+  | Storage Terminal | 6 copper, 2 gold, 1 ender pearl |
+  | Proximity Scanner | 2 copper, 3 amethyst, 3 gold, a sculk sensor |
+  | Radio Link pair (repeater) | 5 copper, 5 redstone, 3 stone, 4 sticks |
+
+### Tests
+
+- `RecipeGameTests`: 15 new game tests (14 generated, one per item, and the creative tab test), all
+  passing on the final tree.
+- **Each check failed on purpose** in two runs on a deliberately broken copy of the data, then restored.
+  The failures named their causes:
+
+  | Breakage | Failing test |
+  |---|---|
+  | `recipe/link_tool.json` removed | `link_tool`: no crafting recipe makes it |
+  | The lens's unlock advancement removed | `rf_lens`: no advancement unlocks it |
+  | A copy of the meter's grid making stone | `field_test_meter`: the grid is matched by `[rancraft:zz_collide, rancraft:field_test_meter]` |
+  | A copy of the receiver's grid with only a repeater | `radio_link_receiver`: the repeater grid is matched by two recipes (the comparator grid still passed, so alternatives are tried one by one) |
+  | `c:does_not_exist` in the Storage Terminal | `storage_terminal`: ingredient 1 matches no item |
+  | The Signal Mast made from a Sector Antenna (a cycle) | `signal_mast` and `sector_antenna`: the ingredient has no recipe from non-RANCraft items |
+  | The scanner left out of the tab | `every_block_and_item_is_in_the_creative_tab`: 13 stacks for 14 items |
+
+  The empty-tag case passed at first. NeoForge lists an empty tag as a single barrier named "Empty Tag:
+  …", and the ingredient then accepts a barrier, so the grid matched. The test now rejects a barrier
+  among an ingredient's items. With that fix, the case fails as it should.
+
+### APIs verified against sources (new to this codebase)
+
+- **Recipe JSON in 1.21.1** (the vanilla data in `client-extra.jar`): ingredients are objects,
+  `{"item": id}` or `{"tag": id}`. The bare-string form is 1.21.2 and later. Results are
+  `{"id", "count"}`. The `category` values are `building`, `redstone`, `equipment` and `misc`. A JSON
+  array is an "any of" ingredient (NeoForge `CraftingHelper.makeIngredientCodec`, which turns the list
+  into a `CompoundIngredient`).
+- **Recipe unlocks:** the vanilla advancement shape under `advancement/recipes/<folder>/`. The
+  `inventory_changed` predicate's `items` field takes an id or `#tag`. `AdvancementRewards.recipes()`.
+  `ServerAdvancementManager.getAllAdvancements()` returns `AdvancementHolder(id, value)`.
+- **`RecipeManager`:**
+  - `apply` logs "Parsing error loading recipe" and skips the file. `hadErrorsLoading()` is never set
+    true in 1.21.1, so the test checks that each recipe is present instead.
+  - `getAllRecipesFor(type)`.
+  - `getRecipesFor(type, input, level)` returns every match, sorted by result.
+  - `getRecipeFor(type, input, level[, hint])` returns the hint if it matches, else the first match in
+    load order. This is what the crafting table uses, and why a collision would be decided by load
+    order.
+- **Recipes and inputs:** `RecipeHolder(id, value)`. `ShapedRecipe.getWidth`/`getHeight`/`getIngredients`
+  give the trimmed pattern, with `Ingredient.EMPTY` for blanks. `ShapelessRecipe`.
+  `Recipe.getResultItem(HolderLookup.Provider)`, `assemble(input, provider)`. `CraftingInput.of(w, h,
+  stacks)` trims empty rows and columns.
+- **`Ingredient`:** `getItems()`, `isEmpty()`, and `hasNoItems()`. NeoForge's `TagValue.getItems()`
+  returns a named barrier for an empty tag, which `test()` then accepts.
+- **The creative tab:** `CreativeModeTab.buildContents(ItemDisplayParameters(FeatureFlagSet, boolean,
+  HolderLookup.Provider))` fires NeoForge's `BuildCreativeModeTabContentsEvent` and refills
+  `getDisplayItems()`. `ItemDisplayBuilder.accept` throws on a stack added twice. `LevelReader.enabledFeatures()`.
+- **The crafting table:** `CraftingMenu.slotChangedCraftingGrid` uses
+  `RecipeManager.getRecipeFor(CRAFTING, input, level, hint)`.
+
+### Verification
+
+| Check | Result |
+|---|---|
+| `./gradlew build` | **619 passed, 0 failed, 0 skipped** (no unit test added: the slice is data plus a game test) |
+| `rf` / `util` purity | `PackagePurityTest` passes (nothing added there) |
+| `./gradlew runGameTestServer` | "All 63 required tests passed" (48 + 15; batch `rancraft_recipes` ran 15 tests, `rancraft_harvest` 7) on the final tree, and on the same data before the empty-tag fix. The two runs on broken data failed exactly as listed under Tests |
+| Versions | no wire or save change: `PROTOCOL_VERSION` 10, `AntennaBlockEntity.DATA_VERSION` 4 unchanged |
+| In game | needs the user (`PHASE_3.md`, slice 16 checks): the survival playthrough, crafting each recipe in a real crafting table and seeing it appear in the recipe book |

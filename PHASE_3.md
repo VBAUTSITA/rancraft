@@ -63,7 +63,7 @@ Legend: `[x]` done and verified · `[~]` partly done / needs a manual in-game ch
 | 13 | Storage Terminal | 3C | [~] item `storage_terminal` (a `SignalDevice`, GOOD tier 2): sneak + use binds a chest or barrel within `fiberRadiusBlocks` of a Core Site (the graph's fiber rule, any core of the dimension), saved as a `GlobalPos` data component; use opens a `RemoteContainerMenu` (a vanilla `ChestMenu` on the 9x3 / 9x6 menu types: nothing new on the wire) on an OK verdict, a FULL chunk and 27 or 54 slots; its `stillValid` reads the player's last verdict (`TerminalLink`, at most two intervals old), never a fresh evaluation, and a failed rule closes it with "connection lost (reason)"; same dimension only; never loads a chunk ("storage unreachable"); the LIMITED cap ends a session ("backhaul limited", told apart from a weak signal); the lid is never lifted (opener counter safe). Headless green (567 tests, 0 skipped; `runGameTestServer` 39/39, 3 new, including the 3C done-when: a LIMITED cell closes the session while a Radio Link on it keeps working); session check 0.44 µs/tick; no version bump; in-game checks below | 6a0ab89; docs b1735d2; tracker "PHASE_3.md, NOTES.md: record slice 13 commit hash" |
 | 14 | Proximity Scanner | 3C | [~] item `proximity_scanner` (a `SignalDevice`, GOOD tier 3: band_3500's first use); `device/ProximityScanner`: held with an OK verdict, one `ScannerPayload` v1 per dispatch (the main hand's scanner, else the offhand's; none from the hotbar, none to a dead player) listing at most 16 hostile mobs (vanilla's `Enemy`) within `scannerRangeBlocks` 24 (new COMMON config, not in §5's list: follow-ups), straight line from the feet, nearest first, with entity type, distance and compass bearing; on any other verdict the payload carries the reason (no service, weak signal, backhaul limited, low tier) by the Storage Terminal's rule (`TerminalLink.reasonOf`, shared) and no list; `util/ProximityScan` (pure list); HUD list top-right under the meter's compact readout (`HudStack`), no world render, "needs tier 3, you're on band_1800 (tier 2)"; the scan labelled not RF physics at the code sites; `PROTOCOL_VERSION` 10. Headless green (594 tests, 0 skipped; `runGameTestServer` 40/40, 1 new: band_3500 lists the right mobs, 16 of 19, band_1800 refuses with "needs tier 3"); 23.7 µs per scan with 20 mobs; in-game checks below | 465d40e; docs 9e3fab5; tracker "PHASE_3.md, NOTES.md: record slice 14 commit hash" |
 | 15 | Power + generator | 3C | [~] `rf/PowerModel` (pure: §3C.5's formula and figures, the table and 10× per 10 dB pinned); `util/EnergyBuffer` (pure: whole FE with the fraction carried, out of energy → latch off, back strictly above `powerRestartFraction` 10 %); antennas expose `Capabilities.EnergyStorage.BLOCK` (`ModCapabilities`, receive-only, nothing with `requirePower` off), any mast of a column feeds its base (a pole's masts feed the sector on top; a demoted base hands its energy down), 10,000 FE; `isTransmitting()` = eligible ∧ backhaul ∧ power, `refreshRegistration` still the one `OnAir` writer; `world/SitePower` draws each cell on the air once a tick where block entities tick, refreshes on a latch change or a flag flip; block `site_generator` (furnace fuel by NeoForge's burn-time lookup, 40 FE/t only while taken, pushes to its six sides, one slot for hoppers: fuel in, a bucket out below; use with fuel / sneak + use / status; loot table, pickaxe tag); seam `util/ServedReceivers` per cell over `servedWindowMinutes` (fixed receivers throttled to a report per 20 s); `/rancraft power status [radius]`; config `requirePower` (false) and nine figures; `AntennaBlockEntity.DATA_VERSION` 4. Headless green (619 tests, 0 skipped; `runGameTestServer` 48/48, 7 new + 1 generated harvest test: 30 dBm 2,120 vs 20 dBm 320 burn ticks, model exact, 6.625×; the draw 0.06-0.2 µs per cell). No wire change. In-game checks below; the Radio Link cost gate's sensitivity to machine load (measured against slice 14's code: this slice adds nothing to it) and two owner decisions in follow-ups | 797d641; docs bce3a8a; tracker "PHASE_3.md, NOTES.md: record slice 15 commit hash" |
-| 16 | Recipes + loot tables + survival playthrough | 3C | [ ] | |
+| 16 | Recipes + loot tables + survival playthrough | 3C | [~] fourteen shaped recipes in `data/rancraft/recipe/` (1.21.1 format, `c:` tags for raw materials), one per item, from §3C.6's table and tiers: RF Lens early and cheap (2 copper, 1 amethyst, 2 glass), Signal Mast 4 per craft, the Radio Link Receiver taking a comparator **or a repeater** (a comparator needs Nether quartz, which is not early: spec conflict in follow-ups); a recipe-book unlock advancement per recipe (`data/rancraft/advancement/recipes/`, not in the spec: follow-ups); loot tables and the pickaxe tag already complete for all 7 blocks, every item already in the creative tab; `RecipeGameTests` (one per item, generated: a recipe loads, its grid from real stacks is matched by it alone with every ingredient alternative tried, and crafts the item, a RANCraft ingredient is craftable from non-RANCraft items, an advancement unlocks it; plus the creative tab), each check seen failing on broken data. Headless green (619 tests, 0 skipped; `runGameTestServer` 63/63, 15 new; recipes 1,291 → 1,305, advancements 1,400 → 1,414, no error in the log); 0 collisions with the 887 vanilla crafting recipes; no version bump. **3C ships here** (§7); the survival playthrough is the in-game check below | 36cd29e; docs DOCS_HASH |
 | 17 | (optional) fix_x/fix_z/fix_err in drive-test CSV | — | [ ] | |
 
 ---
@@ -1096,6 +1096,67 @@ while the game runs. `/rancraft power status` (operator) shows each cell's draw,
 
   *Needs the client (hoppers in play).*
 
+## Slice 16 (recipes, loot tables, creative tab) checks
+
+Headless (verified by `./gradlew build`, 619 tests, 0 skipped, and `./gradlew runGameTestServer`, 63 of
+63; details in NOTES.md, slice 16):
+
+- [x] **Every item has a recipe that loads and crafts, at runtime** (`RecipeGameTests`, one generated
+      test per `ModItems` entry, 14 of 14): the server loaded it, every ingredient resolves to a real item,
+      its grid built from real stacks is matched by it and no other recipe (each alternative of each
+      ingredient tried in turn: the receiver's repeater and comparator, every item of every tag), and
+      assembling the grid gives the item.
+- [x] **No collision with vanilla:** at runtime (above), and a scratch check of every grid, mirrored and
+      not, against all 887 vanilla crafting recipes with tags expanded: 0.
+- [x] **The chain ends in vanilla:** the one RANCraft ingredient (the Signal Mast in the Sector Antenna)
+      has a recipe of non-RANCraft items.
+- [x] **Recipe-book unlocks, at runtime:** an advancement rewards each of the 14 recipes.
+- [x] **Every block drops itself to an iron pickaxe and is pickaxe-mineable** (`HarvestGameTests`, 7 of 7;
+      the loot tables and tag predate this slice).
+- [x] **The creative tab, at runtime:** built on the server, it holds all 14 items once each; every block
+      has an item.
+- [x] **The checks catch what they claim:** seven deliberate breakages (a recipe removed, an unlock
+      removed, a vanilla-style collision, a collision on the repeater alternative only, an unknown tag, a
+      recipe cycle, an item left out of the tab) each failed its test with a message naming the cause;
+      the data was restored and regenerated identical.
+- [x] **The log is clean:** 1,305 recipes loaded (+14), 1,414 advancements (+14), no `ERROR` line, no
+      recipe or advancement parsing error, no loot-table error.
+- [x] Versions: none changed (`PROTOCOL_VERSION` 10, `AntennaBlockEntity.DATA_VERSION` 4).
+
+Needs a human in game: a **new survival world** (the full survival playthrough §7 asks for). The grids
+are in NOTES.md, slice 16, and in the recipe book once unlocked.
+
+- [~] **1. Early game.**
+  - Mine and smelt some copper and iron. With a copper ingot in the inventory, a crafting table's recipe
+    book shows the Field Test Meter, the RF Lens and the Signal Mast.
+  - Craft 4 masts from 6 iron bars and a copper ingot, then a meter. With one amethyst shard (a geode),
+    craft the lens.
+  - Place a mast: the meter reads it, and the lens shows its lobe.
+  - A compass shows the Network Locator. A redstone torch shows both Radio Links. The receiver crafts
+    with a repeater (no Nether needed) and with a comparator.
+
+  *Needs the client (crafting by hand, the recipe book).*
+- [~] **2. Mid game.**
+  - Holding a Signal Mast shows the Sector Antenna, Core Site, Backhaul Dish and Site Generator. Craft a
+    sector (it uses up a mast) and put it on the mast column.
+  - Craft two dishes: the Link Tool appears in the book. Craft it and pair the dishes.
+
+  *Needs the client.*
+- [~] **3. Late game.**
+  - With a Sector Antenna in the inventory the Wideband Radio Unit appears. Craft it (4 gold, 4 amethyst,
+    a redstone block) and fit it: band_3500 unlocks in the sector's screen.
+  - An ender pearl shows the Storage Terminal.
+  - A sculk sensor (Deep Dark), or holding the Wideband Radio Unit, shows the Proximity Scanner.
+
+  *Needs the client (a Deep Dark trip for the sculk sensor).*
+- [~] **4. Breaking.**
+  - With an iron pickaxe in survival, each of the seven blocks drops itself: Signal Mast, Sector Antenna,
+    both Radio Links, Core Site, Backhaul Dish, Site Generator.
+  - With a bare hand, each one is slow to break and drops nothing.
+
+  *Needs the client (headless half: `HarvestGameTests`).*
+- [~] **5. Creative tab.** The RANCraft tab lists all 14 blocks and items. *Needs the client.*
+
 ## 3C done-when
 
 - [~] A tier-2 sector cannot use band_3500 until it gets a Wideband Radio Unit. *Server half verified
@@ -1140,9 +1201,13 @@ while the game runs. `/rancraft power status` (operator) shows each cell's draw,
       ticks, exactly the model's 10.667 and 70.667 FE/t over 40 FE/t, ratio 6.625; 3 sticks against 21;
       both on the air throughout. Identical in every run. Feeling the bill over minutes in a real
       game is in the slice 15 checks, step 3.)*
-- [ ] Every block and item is craftable in survival and every block drops itself. *(Slice 12: Core
-      Site and Backhaul Dish drop themselves, `HarvestGameTests`; slice 15: the Site Generator too; no
-      recipes until slice 16.)*
+- [x] Every block and item is craftable in survival and every block drops itself. *(Slice 12: Core
+      Site and Backhaul Dish drop themselves, `HarvestGameTests`; slice 15: the Site Generator too.
+      Slice 16, verified at runtime: `RecipeGameTests` finds a loaded recipe for each of the 14 items,
+      whose grid built from real stacks is matched by it alone and crafts the item, from ingredients that
+      end in vanilla, with an advancement that shows it in the recipe book; `HarvestGameTests`: all 7
+      blocks drop themselves to an iron pickaxe. Crafting by hand in a real world is the survival
+      playthrough, slice 16 checks.)*
 - [~] With both logistics flags off (default), a Phase 2 world plays exactly as before. *(Slice 12:
       the backhaul half holds: with `requireBackhaul` off no cell is held off the air or capped
       (`BackhaulGraphTest.requireBackhaulOffChangesNothing`; at runtime a cell with no backhaul stays on
@@ -1566,7 +1631,8 @@ centroid, so 7 × 16 + 1 = 113). (g)
   address on or off inside its own dispatch, each a `setBlock` with neighbour updates. The budget is
   checked only between batches, so a toggle with dozens of receivers on one address is one burst. Not
   measured; measure it if a large build shows it.
-- **[ ] Note for slice 16 (from slice 9).** Both Radio Link blocks are creative-only until their
+- **[x] Done in slice 16 (from slice 9).** *Both have recipes (redstone torch and copper; the receiver
+  adds a comparator or a repeater).* Both Radio Link blocks are creative-only until their
   recipes exist.
 - **[ ] Open, minor (from slice 8).** The round robin scans every registered receiver's due tick every
   tick: 8-12 µs/tick at 200 (40-60 ns each, loop and lock included), so the scan alone nears 0.1
@@ -1644,7 +1710,8 @@ centroid, so 7 × 16 + 1 = 113). (g)
   whatever it holds; sneak + use places a block against it), not only with an empty hand as its old
   comment said. Comment fixed, behaviour kept (a Phase 2 world plays as before). The Wideband Radio Unit
   is the one item that skips the screen.
-- **[ ] Note for slice 16 (from slice 10).** The Wideband Radio Unit is creative-only until its recipe
+- **[x] Done in slice 16 (from slice 10).** *Recipe `rancraft:wideband_radio_unit`.* The Wideband
+  Radio Unit is creative-only until its recipe
   exists (§3C.6: gold, amethyst, redstone block).
 - **[x] Decided in slice 11, spec silent (NOTES.md, slice 11, decision 1).** §3C.2 says "horizontally"
   for the fiber radius and nothing for the site radius. Both are horizontal, so a dish on top of a tall
@@ -1736,10 +1803,12 @@ centroid, so 7 × 16 + 1 = 113). (g)
   so its site keeps relaying between its dishes, and a power flap changes no backhaul topology. §3C.5
   puts only antennas on the power budget, so the dishes (the site's transport) are not dark when the
   radio is.)*
-- **[ ] Note for slice 16 (from slice 12).** Core Site, Backhaul Dish and Link Tool are creative-only
+- **[x] Done in slice 16 (from slice 12).** *All three have recipes from those ingredients.* Core
+  Site, Backhaul Dish and Link Tool are creative-only
   until their recipes exist (§3C.6: iron block, redstone block, chest; iron, copper, lightning rod;
   stick, copper).
-- **[ ] Note for slice 16 (from slice 13).** The Storage Terminal is creative-only until its recipe
+- **[x] Done in slice 16 (from slice 13).** *Recipe `rancraft:storage_terminal`; `RecipeGameTests`
+  covers items.* The Storage Terminal is creative-only until its recipe
   exists (§3C.6: ender pearl, copper, gold; late-mid). It is an item, so `HarvestGameTests` does not
   cover it. It needs only the recipe.
 - **[x] Done in slice 14 (from slice 13).** *The scanner reuses the rule, extracted as
@@ -1763,7 +1832,8 @@ centroid, so 7 × 16 + 1 = 113). (g)
   payload on any other verdict, carrying only the reason and the values to word it (no list), because
   the HUD must tell "needs tier 3" from "signal too weak" from "backhaul limited" and the client may not
   work out a verdict. A scanner in the hotbar is sent nothing.
-- **[ ] Note for slice 16 (from slice 14).** The Proximity Scanner is creative-only until its recipe
+- **[x] Done in slice 16 (from slice 14), art still open.** *Recipe `rancraft:proximity_scanner`; the
+  art is still the placeholder.* The Proximity Scanner is creative-only until its recipe
   exists (§3C.6: spyglass, amethyst, gold, sculk sensor; late). It is an item, so `HarvestGameTests`
   does not cover it. Its art is a placeholder (the echo shard texture).
 - **[ ] Open, minor (from slice 14).** The scan sorts every hostile mob in the query's box each
@@ -1782,7 +1852,8 @@ centroid, so 7 × 16 + 1 = 113). (g)
 - **[ ] Note (from slice 13).** The terminal keeps one record per player, not per terminal. Every
   terminal has the same requirement, so two carried terminals share it with no difference. If a later
   slice adds a terminal with another requirement (an upgraded one), key the record by requirement.
-- **[ ] Note for slice 16 (from slice 15).** The Site Generator is creative-only until its recipe
+- **[x] Done in slice 16 (from slice 15), art still open.** *Recipe `rancraft:site_generator`; the art
+  is still the placeholder.* The Site Generator is creative-only until its recipe
   exists (§3C.6: furnace, copper, redstone; mid). It already drops itself and is pickaxe-mineable
   (`HarvestGameTests`). Its art is a placeholder (the blast furnace's textures).
 - **[ ] Owner decision (from slice 15).** Turning `requirePower` on in a running or existing world takes
@@ -1801,6 +1872,22 @@ centroid, so 7 × 16 + 1 = 113). (g)
   - a fixed receiver reports when its serving cell changes or every 20 s
     (`SitePower.SERVED_NOTE_INTERVAL_TICKS`), so it can drop out up to 20 s early. The window's minimum
     of 1 minute keeps that harmless.
+- **[x] Decided in slice 16, spec conflict (NOTES.md, slice 16, decision 1).** §3C.6 lists a comparator
+  for the Radio Link Receiver and calls the pair early. A comparator needs Nether quartz, so a
+  comparator-only receiver makes the pair post-Nether (a transmitter alone does nothing). The receiver's
+  ingredient is "a comparator or a repeater" (a JSON array), which keeps the spec's comparator and the
+  early tier. Option for the owner: comparator only (one line in `recipe/radio_link_receiver.json`).
+- **[x] Decided in slice 16, beyond the spec (NOTES.md, slice 16, decision 2).** Every recipe has a
+  recipe-book unlock advancement (`data/rancraft/advancement/recipes/`). §3C.6 does not ask for them, but
+  without one the recipe book never shows a recipe, RANCraft has no guide, and with the
+  `doLimitedCrafting` game rule on the recipe could not be crafted at all.
+- **[x] Decided in slice 16 (NOTES.md, slice 16, decisions 3 to 5).** Raw materials use NeoForge's `c:`
+  tags, so another mod's copper or iron works. The Signal Mast yields 4 per craft, because masts stack
+  for height (about 6 iron for a ten-high tower). The shapes are mine; §3C.6 gives ingredients only.
+- **[ ] Note (from slice 16).** Recipes are data, so retuning a cost needs no code: edit the file, and
+  `RecipeGameTests` re-checks collisions and reachability. Of the costs, the Core Site (15 iron, 9
+  redstone) is the steepest mid-tier item. It is one per network, and nothing needs it while
+  `requireBackhaul` is off. Watch it in the playthrough.
 
 ### Phase 3B review round 1: the four findings
 
