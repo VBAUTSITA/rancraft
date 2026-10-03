@@ -61,7 +61,7 @@ Legend: `[x]` done and verified · `[~]` partly done / needs a manual in-game ch
 | 11 | MicrowaveLink + BackhaulGraph + tests | 3C | [x] `rf/MicrowaveLink` (pure: the §3C.2 budget, FSPL with n = 2, RSL, UP / DEGRADED / DOWN at −50 / −70, the 60 % Fresnel check over four offset paths with a flat 6 dB (simplified knife-edge), approximate rain fade (thunder the higher figure, snow nothing); plus `withWeather`, `fresnelOffsetMidpoints` and `dependencyBins` for slice 12), its figures from `rf/backhaul/microwave.json` through `RfDataLoader` and never a cellular band; `rf/BackhaulGraph` (pure: implicit fiber by horizontal radius, dish-to-cell site edges through which a site relays, hops with their state; two BFS passes give FULL / LIMITED / NONE); config `requireBackhaul` false, `fiberRadiusBlocks` 24, `siteRadiusBlocks` 8, `backhaulRecomputeTicks` 100, `enableRainFade` true (the radii and rain fade appended to `RfConfig`). Headless green (539 tests, 0 skipped; `runGameTestServer` 32/32, the microwave figures loaded at runtime beside 4 bands); no version bump; nothing in game reads it until slice 12; two interpretations, an owner decision and notes for slice 12 in follow-ups | 0d45aca; docs 53ce35f; tracker "PHASE_3.md, NOTES.md: record slice 11 commit hash" |
 | 12 | Core site, dish, link tool, backhaul state, lens lines, `/rancraft backhaul status` | 3C | [~] blocks `core_site` and `backhaul_dish` (drop themselves, pickaxe tag, placeholder art) and item `link_tool` (select, pair, sneak + use unpairs; both dish entities store the partner; alignment automatic, labelled); `world/BackhaulNetwork` (a per-dimension `SavedData` of cores, dishes, pairings and eligible cells, so unloaded relays count; marches each hop with the live `WorldProbe` in one fixed order with a cap it cannot run out of, weather from `Biome.getPrecipitationAt` at the midpoint and the level's rain and thunder; solves `BackhaulGraph`; recomputes on the site registry version, a pairing, a region epoch on a hop's bins or the weather, at most once per `backhaulRecomputeTicks`). With `requireBackhaul` on, NONE → not transmitting (unregistered, `OnAir` false, through `refreshRegistration`), LIMITED → devices capped at FAIR in `DeviceContext` and their verdicts with the `SignalSample` untouched, meter "BH: LIMITED (capped FAIR)" (`SignalSamplePayload` v4); off (default) changes nothing. `BackhaulLinksPayload` v1 (cap 64) to lens wearers, hops drawn with the lobes layer; `/rancraft backhaul status [radius]`; `PROTOCOL_VERSION` 9. Headless green (559 tests, 0 skipped; `runGameTestServer` 36/36: the chain and weather tests, both new blocks in the harvest tests); a hop 0.14 µs per block live, quiet tick about 1 µs; ten decisions in NOTES.md; in-game checks below | ea9c98d; docs 8f2a31a; tracker "PHASE_3.md, NOTES.md: record slice 12 commit hash" |
 | 13 | Storage Terminal | 3C | [~] item `storage_terminal` (a `SignalDevice`, GOOD tier 2): sneak + use binds a chest or barrel within `fiberRadiusBlocks` of a Core Site (the graph's fiber rule, any core of the dimension), saved as a `GlobalPos` data component; use opens a `RemoteContainerMenu` (a vanilla `ChestMenu` on the 9x3 / 9x6 menu types: nothing new on the wire) on an OK verdict, a FULL chunk and 27 or 54 slots; its `stillValid` reads the player's last verdict (`TerminalLink`, at most two intervals old), never a fresh evaluation, and a failed rule closes it with "connection lost (reason)"; same dimension only; never loads a chunk ("storage unreachable"); the LIMITED cap ends a session ("backhaul limited", told apart from a weak signal); the lid is never lifted (opener counter safe). Headless green (567 tests, 0 skipped; `runGameTestServer` 39/39, 3 new, including the 3C done-when: a LIMITED cell closes the session while a Radio Link on it keeps working); session check 0.44 µs/tick; no version bump; in-game checks below | 6a0ab89; docs b1735d2; tracker "PHASE_3.md, NOTES.md: record slice 13 commit hash" |
-| 14 | Proximity Scanner | 3C | [ ] | |
+| 14 | Proximity Scanner | 3C | [~] item `proximity_scanner` (a `SignalDevice`, GOOD tier 3: band_3500's first use); `device/ProximityScanner`: held with an OK verdict, one `ScannerPayload` v1 per dispatch (the main hand's scanner, else the offhand's; none from the hotbar, none to a dead player) listing at most 16 hostile mobs (vanilla's `Enemy`) within `scannerRangeBlocks` 24 (new COMMON config, not in §5's list: follow-ups), straight line from the feet, nearest first, with entity type, distance and compass bearing; on any other verdict the payload carries the reason (no service, weak signal, backhaul limited, low tier) by the Storage Terminal's rule (`TerminalLink.reasonOf`, shared) and no list; `util/ProximityScan` (pure list); HUD list top-right under the meter's compact readout (`HudStack`), no world render, "needs tier 3, you're on band_1800 (tier 2)"; the scan labelled not RF physics at the code sites; `PROTOCOL_VERSION` 10. Headless green (594 tests, 0 skipped; `runGameTestServer` 40/40, 1 new: band_3500 lists the right mobs, 16 of 19, band_1800 refuses with "needs tier 3"); 23.7 µs per scan with 20 mobs; in-game checks below | 465d40e; docs "Phase 3 slice 14: Proximity Scanner" |
 | 15 | Power + generator | 3C | [ ] | |
 | 16 | Recipes + loot tables + survival playthrough | 3C | [ ] | |
 | 17 | (optional) fix_x/fix_z/fix_err in drive-test CSV | — | [ ] | |
@@ -951,6 +951,78 @@ at where you stand; the Field Test Meter shows the level.
 
   *Needs the client.*
 
+## Slice 14 (Proximity Scanner) checks
+
+Headless (verified by `./gradlew build`, 594 tests, 0 skipped, and `./gradlew runGameTestServer`, 40 of
+40 in 27 batches; details in NOTES.md, slice 14). The game test reads the `ScannerPayload` that reaches
+the player's connection, sent through the ticker's own carried-device scan and dispatch
+(`SignalTicker.dispatchToCarried`).
+
+- [x] **The requirement, at runtime:** a sector made tier 3 by a real Wideband Radio Unit (through
+      `ItemStack.useOn`) and set to band_3500, 12 blocks from the player: GOOD or better, status OK,
+      "band_3500 (tier 3)", range 24.
+- [x] **The list, at runtime** (mobs without AI, on stone):
+  - a creeper 5 blocks east, a witch 8.49 south-west, a spider 10 north behind a stone wall, a slime 13
+    south and a creeper exactly 24 south are listed in that order, with distances and bearings (90, 225,
+    0, 180, 180) within 0.01;
+  - a cow 4.24 blocks away and a creeper 30 blocks out are not;
+  - with 14 silverfish added on a ring 20 blocks out, 19 hostiles are in range and 16 are listed, nearest
+    first; the creeper at 24 is the one cut;
+  - a replayed sample lists a moved mob where it is now.
+- [x] **Which scanner sends, at runtime:** one payload per dispatch, also with a scanner in each hand;
+      none from a scanner in the hotbar; none to a dead player.
+- [x] **3C done-when, at runtime:** the same sector on band_1800 at GOOD or better: LOW_TIER, no list,
+      band_1800 tier 2, needs GOOD tier 3. `ScannerHudText` words it "needs tier 3, you're on band_1800
+      (tier 2)".
+- [x] Unit (27 new):
+  - `ProximityScanTest` (5): range inclusive, bad input, the cap, bearings, stable order.
+  - `ScannerPayloadTest` (6): round trips, refusals carry no list, the 16 cap, malformed input, clamped
+    strings, the defensive builder.
+  - `ProximityScannerTest` (4): the requirement, each verdict's status, a refusal's payload, which
+    scanner sends.
+  - `ScannerHudTextTest` (7) and `ClientScannerStateTest` (3): the HUD text, each reason's words, the
+    arrows, staleness.
+  - `HudStackTest` (+2): the top-right claim.
+- [x] `PROTOCOL_VERSION` 9 → 10 (new `ScannerPayload` v1). `util/ProximityScan` passes
+      `PackagePurityTest`. No block, no save format. One scan costs 23.7 µs with 20 mobs around, once per
+      interval per player holding a scanner with an OK verdict.
+
+Needs a human in game (creative). Place a Sector Antenna, use a Wideband Radio Unit on it, and set it to
+band_3500 in its configuration screen, aimed at where you stand. The Field Test Meter shows the level.
+
+- [~] **1. The list.**
+  - Stand 10-30 blocks out on the sector's beam, where the meter reads GOOD or EXCELLENT, and hold a
+    Proximity Scanner (creative tab).
+  - Top-right: "Proximity Scanner" with "0 within 24", "via band_3500 (tier 3)" and "No hostiles within
+    24 blocks".
+  - Spawn a few hostile mobs with spawn eggs, one behind a wall. Within about a second they are listed,
+    nearest first: an arrow, the name, whole blocks and a compass point with degrees ("NE 047°"). The one
+    behind the wall is listed too: the scanner is not radar.
+  - Turn round: the arrows turn with you, and the list does not change.
+  - A cow, a villager or a wolf is never listed.
+
+  *Needs the client (HUD).*
+- [~] **2. Beside the meter.**
+  - Hold the meter in the other hand, in compact mode: the scanner's list starts under the meter's
+    top-right readout and never overlaps it.
+  - Switch the meter to detailed (top-left): the list moves up to the top-right corner.
+
+  *Needs the client (HUD layout).*
+- [~] **3. The refusals (3C done-when).**
+  - Set the sector to band_1800, still GOOD or better: "OFF", "needs tier 3, you're on band_1800 (tier
+    2)" and "change the band: the feed needs a high-capacity one". No list.
+  - Back on band_3500, walk out along the beam until the meter drops below GOOD: "signal too weak: FAIR,
+    needs GOOD".
+  - Optional, `requireBackhaul = true` with slice 13 step 4's DEGRADED hop in front of the band_3500
+    sector: "backhaul limited: the serving cell is capped at FAIR, needs GOOD".
+
+  *Needs the client (HUD).*
+- [~] **4. Put away.**
+  - Move the scanner to the hotbar: its HUD goes at once.
+  - Take it back: "NO DATA" ("No reading from the network yet") for up to a second, then the list.
+
+  *Needs the client (HUD).*
+
 ## 3C done-when
 
 - [~] A tier-2 sector cannot use band_3500 until it gets a Wideband Radio Unit. *Server half verified
@@ -982,7 +1054,12 @@ at where you stand; the Field Test Meter shows the level.
       `BackhaulGameTests` weather: a one-stone 1000-block hop, DEGRADED, goes DOWN in a thunderstorm and
       in rain and is DEGRADED again when the sky clears, each picked up by the server's own recompute.
       The line's colour on the lens in a real storm needs the client: slice 12 checks, step 4.)*
-- [ ] Proximity Scanner works on band_3500 at GOOD, refuses on band_1800 with "needs tier 3".
+- [~] Proximity Scanner works on band_3500 at GOOD, refuses on band_1800 with "needs tier 3". *(Slice
+      14: server half verified at runtime, `ProximityScannerGameTests`. A sector made tier 3 by a real
+      Wideband Radio Unit, on band_3500 at GOOD or better, sends the list of hostile mobs within 24
+      blocks with the right distances and bearings, at most 16. The same sector on band_1800 at GOOD or
+      better sends LOW_TIER and no list, which the HUD words "needs tier 3, you're on band_1800 (tier
+      2)". The list and the text on screen need the client: slice 14 checks, steps 1 and 3.)*
 - [ ] With requirePower on, a 30 dBm sector burns fuel ~7× faster than a 20 dBm one.
 - [ ] Every block and item is craftable in survival and every block drops itself. *(Slice 12: Core
       Site and Backhaul Dish drop themselves, `HarvestGameTests`; no recipes until slice 16.)*
@@ -1557,13 +1634,34 @@ centroid, so 7 × 16 + 1 = 113). (g)
 - **[ ] Note for slice 16 (from slice 13).** The Storage Terminal is creative-only until its recipe
   exists (§3C.6: ender pearl, copper, gold; late-mid). It is an item, so `HarvestGameTests` does not
   cover it. It needs only the recipe.
-- **[ ] Note for slice 14 (from slice 13).** The Proximity Scanner can follow the terminal's pattern:
+- **[x] Done in slice 14 (from slice 13).** *The scanner reuses the rule, extracted as
+  `TerminalLink.reasonOf` (behaviour unchanged), but keeps no per-player record: it judges each
+  dispatch as it comes, and its session is the HUD, so there is no `stillValid` to read a stored verdict
+  (NOTES.md, slice 14, decision 3). Its game test uses `SilentServerPlayer`, which now also keeps the
+  custom payloads sent to it, and `dispatchToCarried`.* The Proximity Scanner can follow the terminal's
+  pattern:
   - keep the verdict per player in a `DeviceMemory`, as `TerminalLink` does;
   - tell "backhaul limited" from "weak signal" with `TerminalLink.problemOf`'s rule (the radio level
     against the requirement), or reuse it.
 
   `SilentServerPlayer` and `SignalTicker.dispatchToCarried` let a game test check it through the
   ticker's own scan and dispatch.
+- **[x] Decided in slice 14, spec vs tree (NOTES.md, slice 14, decision 1).** §3C.4's "within 24
+  blocks" is a new COMMON config value, `scannerRangeBlocks` (default 24, 1 to 64), though §5's list
+  does not name it: the ground rules put everything tunable in `RanCraftConfig`. It stays out of
+  `RfConfig` (gameplay and server cost, not RF).
+- **[x] Decided in slice 14, interpretation (NOTES.md, slice 14, decision 2).** §3C.4 says the server
+  sends `ScannerPayload` while the scanner is held with an OK verdict. A held scanner is also sent a
+  payload on any other verdict, carrying only the reason and the values to word it (no list), because
+  the HUD must tell "needs tier 3" from "signal too weak" from "backhaul limited" and the client may not
+  work out a verdict. A scanner in the hotbar is sent nothing.
+- **[ ] Note for slice 16 (from slice 14).** The Proximity Scanner is creative-only until its recipe
+  exists (§3C.6: spyglass, amethyst, gold, sculk sensor; late). It is an item, so `HarvestGameTests`
+  does not cover it. Its art is a placeholder (the echo shard texture).
+- **[ ] Open, minor (from slice 14).** The scan sorts every hostile mob in the query's box each
+  interval, before the cap of 16. One scan measured 23.7 µs with 20 mobs around. A mob farm with
+  hundreds of hostiles within 24 blocks of a player holding a scanner would cost more; not measured.
+  If it shows, keep the 16 nearest with a bounded heap instead of sorting all of them.
 - **[ ] Open, option for the slice 4 follow-up (from slice 13).** `SilentServerPlayer` drops every
   packet in `send(Packet)`, before NeoForge's channel check runs. So it could stand on the real player
   list, and a game test could run the ticker's per-player loop itself, the part still only checked in

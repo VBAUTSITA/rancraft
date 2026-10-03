@@ -4858,3 +4858,205 @@ machine), one run, after a warm-up of 5,000 calls:
 | `./gradlew runGameTestServer` | 26 batches run, "All 39 required tests passed" (36 + 3); the log shows the cost line and the weak point |
 | Versions | unchanged: `PROTOCOL_VERSION` 9, `SignalSamplePayload.VERSION` 4, `AntennaBlockEntity.DATA_VERSION` 3; no new payload, no new block, no new save format (the binding is an item data component) |
 | In game | needs the user (`PHASE_3.md`, slice 13 checks): the chest screen opening and closing on the client, the action-bar text |
+
+## Slice 14 — Proximity Scanner (§3C.4)
+
+A Proximity Scanner item. Held, with GOOD service on a band of capacity tier 3 (band_3500, the first
+thing that band is for), it lists the hostile mobs within 24 blocks on the HUD: type, distance and
+compass bearing, nearest first, at most 16. There is no world render. Off that requirement it says
+why, in words that name the fix ("needs tier 3, you're on band_1800 (tier 2)", "signal too weak",
+"backhaul limited", "no service"). The code went in `465d40e` (part 1 of 2). These notes and the
+tracker went in "Phase 3 slice 14: Proximity Scanner".
+
+An earlier attempt at this slice was interrupted. It had written the item, the device, the payload, the
+pure list, the HUD, the config entry and the unit tests, uncommitted but green (594 tests). This step
+reviewed that work against §3C.4 and against the 1.21.1 and NeoForge 21.1.251 sources, kept it, wrote
+the runtime test (`ProximityScannerGameTests`), ran it, measured and committed.
+
+### What was built
+
+- **`proximity_scanner`** (`ProximityScannerItem`): stacks to 1. It is in the creative tab and has
+  placeholder art (the echo shard texture). Its tooltip gives what it does, the requirement and the
+  honest line "Not radar: a sensor feed that only a high-capacity link can carry". It is a
+  `SignalDevice` with `ProximityScanner.REQUIREMENT` = GOOD, tier 3. The ticker dispatches the player's
+  one sample to it like any device. It computes no RF.
+- **`device/ProximityScanner`**, the server side:
+  - `onSample`: nothing for a dead player, nothing from a scanner in the hotbar, and one payload per
+    dispatch from one held scanner (the main hand's, else the offhand's: the Network Locator's rule).
+  - `statusOf`: OK, or the reason, by the Storage Terminal's rule (`TerminalLink.reasonOf`, extracted
+    for this slice with its behaviour unchanged). LOW_QUALITY is BACKHAUL_LIMITED when the radio alone
+    reaches GOOD and only the backhaul cap fails it, and WEAK_SIGNAL otherwise.
+  - `payloadFor`: the status, the requirement, the radio's own level, the backhaul cap, the serving band
+    and its tier, the range, and on an OK verdict only, the list.
+  - `scan`: `getEntitiesOfClass(Mob.class, box, mob -> mob instanceof Enemy && mob.isAlive())` over a
+    cube of ±range round the player's feet, handed to `ProximityScan.nearest`.
+- **`util/ProximityScan`** (pure, checked by `PackagePurityTest`): the candidates within the range
+  (straight line, 3D, inclusive), nearest first, cut at the cap. Equal distances keep their input
+  order. Bearings are compass bearings by `Navigation` (0 north, 90 east). Non-finite input is left out.
+- **`net/ScannerPayload`** v1 (new): version, status, needed level, needed tier, radio level, service
+  cap, serving band id (clamped), its tier, range, and at most 16 contacts (type id clamped to 256,
+  distance and bearing as floats).
+  - The reader rejects an unknown version, status or level, a negative tier, a bad range, more than 16
+    contacts (before allocating), a list on a refusal and a non-finite or out-of-range contact.
+  - `of()` is defensive, because a payload the client rejects disconnects it. It drops the list unless
+    the status is OK, drops a bad contact, keeps the first 16 and folds a bearing that rounds to 360.0f
+    back to 0.
+- **`ModPayloads.PROTOCOL_VERSION` 9 → 10**: the new payload.
+- **`RanCraftConfig.scannerRangeBlocks`** (COMMON, default 24, 1 to 64): see decision 1.
+- **Client**, a pure view:
+  - `ClientScannerState` keeps the last payload. It is dropped every tick no scanner is in a hand
+    (`ClientEvents.onClientTick`), and cleared on logout, respawn and dimension change. It goes stale
+    after 2.5 learned send gaps, clamped to 5-30 s, as the Locator's does.
+  - `ScannerHudText` (no Minecraft types, unit-tested): the title, a state ("3 within 24", "OFF", "NO
+    DATA"), the reason and its fix on a refusal, and one row per contact (name, whole blocks, compass
+    point and degrees, an arrow).
+  - `ScannerHudOverlay`: a GUI layer registered above the Locator's. It draws top-right, under the
+    meter's compact readout when that is shown (`HudStack.claimTopRight` / `takeTopRight`, the same
+    one-frame claim rule as the Locator's top-left). It falls back to ASCII arrows and " deg" when the
+    font lacks the glyphs. `SignalHudOverlay.renderCompact` now returns its bottom row; what it draws is
+    unchanged.
+- **Game-test support:** `SilentServerPlayer` keeps every custom payload sent to it (`payloads`), so a
+  test sees what a device sends straight to its player.
+- Language entries for the item and its tooltip.
+
+### Where each part of §3C.4 lives
+
+| §3C.4 | Where | Pinned by |
+|---|---|---|
+| Item; requirement GOOD, tier 3 | `ProximityScannerItem`, `ProximityScanner.REQUIREMENT` | `ProximityScannerTest.requirement`; game test: band_3500 OK, band_1800 LOW_TIER |
+| While held with an OK verdict, the server sends `ScannerPayload` | `ProximityScanner.onSample` / `payloadFor` | `ProximityScannerTest.whichScannerSends`; game test: one payload per dispatch (two scanners held too), none from the hotbar, none to a dead player |
+| At most 16 entries: entity type, distance, bearing | `ProximityScan.nearest`, `ScannerPayload.MAX_CONTACTS` | `ProximityScanTest` (cap, order, bearings), `ScannerPayloadTest` (17 refused and rejected); game test: 19 hostiles in range, 16 listed, nearest first |
+| Hostile mobs within 24 blocks | `ProximityScanner.scan` (`Enemy`), `scannerRangeBlocks` | game test: creeper, witch, spider (behind a wall), slime and a creeper at exactly 24 listed with their distances and bearings; a cow and a creeper 30 blocks out left off |
+| HUD list, no world render | `ScannerHudOverlay`, `ScannerHudText` | `ScannerHudTextTest`; on screen it needs the user |
+| Refuses on band_1800 with "needs tier 3" (3C done-when) | `ScannerHudText.refusal` | `ScannerHudTextTest`; game test: band_1800 at GOOD+ gives LOW_TIER, no list, and the text "needs tier 3, you're on band_1800 (tier 2)" |
+| Label it honestly: not RF physics | `ProximityScanner` and `ProximityScannerItem` class comments, `ProximityScan`, the config comment, the tooltip | this section |
+
+### Decisions and deviations
+
+1. **The 24-block range is a config value, `scannerRangeBlocks`, not in §5's list.** The ground rules
+   put everything tunable in JSON or `RanCraftConfig`. It is COMMON (the server decides), and it is not
+   in `RfConfig`, because it is gameplay and server cost, not RF (as the lens settings are). The
+   default is the spec's 24.
+2. **A refusal is sent too.** §3C.4 says that the server sends the list while the scanner is held with
+   an OK verdict. It does: the list is in the payload on an OK verdict only. On any other verdict the
+   payload carries the reason and the values to word it. The task asks for refusal text that tells the
+   verdicts apart, and the client may not work out a verdict. A scanner in the hotbar sends nothing.
+3. **No per-player state.** Slice 13's note suggested keeping the verdict in a `DeviceMemory`, as the
+   Storage Terminal does. The scanner does not need one. It sends what each dispatch gives, and its
+   session is the HUD, so there is no `stillValid` to read a stored verdict. Nothing is left to forget
+   on logout. The client notices a stop by staleness.
+4. **The reasons are the Storage Terminal's, by one shared rule** (`TerminalLink.reasonOf`): "fix the
+   signal" and "fix the backhaul" are told apart in the same way. The tier refusal reads "needs tier 3,
+   you're on band_1800 (tier 2)", the done-when's own words. The terminal's reads "needs band tier 2,
+   …", unchanged. A weak signal on a band below tier 3 adds the hint that the band will need changing
+   too, because the verdict judges the signal before the band.
+5. **"Hostile" is vanilla's own marker, `Enemy`**: every `Monster`, plus slimes, magma cubes, ghasts,
+   phantoms, shulkers, hoglins and the dragon. Neutral monsters (an enderman, a piglin) count, as vanilla
+   counts them, and neutral animals (a wolf, a bee, a polar bear) do not. Only living mobs in loaded
+   entity sections are found; nothing is loaded.
+6. **Distance is straight-line (3D) from the feet, inclusive.** The query is a cube of ±range, then
+   filtered to the sphere. The bearing is horizontal; a mob straight above or below reads 0 (north).
+7. **A replayed sample gets a fresh list.** The ticker dispatches its cached evaluation while the
+   player stands still, but mobs move. The scanner changes no state on a dispatch, so a replay is
+   harmless (§3A.3's idempotence), and the list it sends is current.
+8. **The arrow is drawn on the client from the server's bearing** and the camera's yaw. That is a
+   compass needle, not detection: it adds and moves nothing on the list.
+9. **The entity query runs only for a held scanner with an OK verdict.** A refusal costs its small
+   payload and no query. A scanner in the hotbar costs the verdict the ticker already works out for it
+   and nothing more.
+
+### Honest-abstraction notes (also at the code sites)
+
+- **The scan is not RF physics** (`ProximityScanner` and `ProximityScannerItem` class comments,
+  `ProximityScan`, the `scannerRangeBlocks` comment, the tooltip). Nothing is sensed by radio: no radar,
+  no reflection, no propagation. Walls do not matter. The server lists positions it already knows. The
+  list stands in for a high-rate sensor feed (a drone's or a body camera's video, say) that only a
+  high-capacity link can carry. It is the gameplay reward that makes band_3500, a hard-to-propagate
+  band, worth deploying. The network decides whether the feed arrives; it plays no part in what is in
+  it. §8 of the spec: "No mob radar as RF".
+- **GOOD on tier 3 stands in for the throughput a video-rate feed needs** (`ProximityScanner.REQUIREMENT`).
+  There is no throughput or load model (Phase 4).
+- **"Hostile" is vanilla's `Enemy` marker** (`ProximityScanner.scan`), not something a sensor would
+  classify.
+
+### Measured
+
+`ProximityScannerGameTests` on the live game-test server (flat world, forced chunks, JDK 21, this
+machine), one run, 2,000 calls after 2,000 to warm up, with 20 mobs in the query's box (19 hostile, 16
+listed):
+
+| What | Cost |
+|---|---|
+| One scan (`payloadFor`: the entity query, the list, the payload) | 23.7 µs |
+| One dispatch to a held scanner (`dispatchToCarried`: the carried scan, the cap lookup, the scan, the send to the silent connection) | 27.7 µs |
+
+- That is once per evaluation interval per player holding a scanner with an OK verdict: about 1.4
+  µs/tick averaged at interval 20, well inside the 1 ms per evaluation budget. The game test asserts
+  only that ceiling.
+- On a sector fitted with a Wideband Radio Unit 12 blocks away, on its boresight in open air, band_3500
+  and band_1800 are both GOOD or better: the tier, not the signal, refuses band_1800.
+
+### Tests
+
+- **Unit** (27 new, 594 in all):
+  - `ProximityScanTest` (5): the range (24 in, 24.001 out); bad input; nearest first cut at 16 of 20;
+    compass bearings; equal distances keep their order.
+  - `ScannerPayloadTest` (6): an OK round trip; every refusal round-trips with no list, even when one is
+    offered; the cap (17 refused when built, rejected when read); malformed input rejected; strings
+    clamped; `of()` drops what it could not send and folds 360 to 0.
+  - `ProximityScannerTest` (4): the requirement; each verdict's status (a weak signal is judged before
+    the band; a capped cell is BACKHAUL_LIMITED only when the radio alone would do); a refusal's
+    payload; which held scanner sends.
+  - `ScannerHudTextTest` (7): no data; an OK list; each refusal's words, including the done-when's
+    "needs tier 3"; compass points; the camera-relative arrow; whole blocks.
+  - `ClientScannerStateTest` (3): the learned cadence, put away, cleared.
+  - `HudStackTest` (+2): the top-right claim lasts one frame, and the two corners are separate claims.
+- **Game** (`ProximityScannerGameTests`, 1 new, 40 in all, 27 batches):
+  `lists_hostiles_on_band_3500_and_needs_tier_3_on_band_1800`. The player is a `SilentServerPlayer` 12
+  blocks east of a sector. The test evaluates its eye against the site registry and dispatches with
+  `dispatchToCarried`, the ticker's own scan and dispatch.
+  - The sector is made tier 3 by a real Wideband Radio Unit through `ItemStack.useOn`, then set to
+    band_3500.
+  - Mobs without AI stand on stone: a creeper 5 blocks east, a witch 8.49 south-west, a spider 10 north
+    behind a 3 × 3 stone wall, a slime 13 south and a creeper exactly 24 south. A cow 4.24 away and a
+    creeper 30 east are not listed.
+  - band_3500 at GOOD+: one payload, OK, band_3500 tier 3, range 24, those five in that order with their
+    distances and bearings (90, 225, 0, 180, 180) within 0.01.
+  - A replayed sample after the first creeper is moved to 7 blocks: it is listed at 7, now first.
+  - Fourteen silverfish on a ring 20 blocks out: 19 hostiles in range, 16 listed, nearest first, the
+    creeper at 24 dropped.
+  - The cost is measured.
+  - A scanner in the hotbar sends nothing; one in each hand sends one payload; a dead player is sent
+    nothing.
+  - band_1800 at GOOD+: LOW_TIER, no list, band_1800 tier 2, needs GOOD tier 3, and the HUD's words
+    "needs tier 3, you're on band_1800 (tier 2)".
+  - `HarvestGameTests` is unchanged: the slice adds no block.
+
+### APIs verified against sources (new to this codebase)
+
+- **Entity lookup:** `EntityGetter.getEntitiesOfClass(Class, AABB, Predicate)`. It reads the loaded
+  entity sections only (`EntitySectionStorage`: accessible sections), so it never loads a chunk.
+  `net.minecraft.world.entity.monster.Enemy` is a marker interface.
+- **Entity types:** `EntityType.getKey(EntityType)`, `getDescription()`, and `create(Level)` (in the
+  game test; 1.21.1 has no spawn-reason argument). `BuiltInRegistries.ENTITY_TYPE.getOptional` returns
+  empty for an unknown id; `get` would return the default, the pig (`DefaultedMappedRegistry`).
+  `ResourceLocation.tryParse`.
+- **Camera:** `Entity.getYRot()`: 0 faces south (+z) and 90 west, so the compass heading is yRot + 180.
+- **Sending:** NeoForge's `PacketDistributor.sendToPlayer` with one payload calls
+  `player.connection.send(new ClientboundCustomPayloadPacket(payload))`, which is what
+  `SilentServerPlayer` keeps.
+- **Found while writing the game test:** NeoForge's `ItemStack.useOn` goes through
+  `CommonHooks.onPlaceItemIntoWorld`, which uses the context's stack, and `UseOnContext(Player, hand,
+  hit)` takes that stack from the player's hand. An item must be in the hand to be used this way.
+- **Mobs in a test:** `Mob.setNoAi`, `setPersistenceRequired`; `Mob.checkDespawn` removes monsters only
+  on peaceful, and `GameTestServer` creates its world on NORMAL. `GameTestAssertException(String)`.
+
+### Verification
+
+| Check | Result |
+|---|---|
+| `./gradlew build` | **594 passed, 0 failed, 0 skipped** (567 + 27) |
+| `rf` / `util` purity | `PackagePurityTest` passes, with `util/ProximityScan` in it |
+| `./gradlew runGameTestServer` | 27 batches run, "All 40 required tests passed" (39 + 1); the log shows the scanner's cost line |
+| Versions | `PROTOCOL_VERSION` 9 → 10 (new `ScannerPayload` v1); `SignalSamplePayload.VERSION` 4 and `AntennaBlockEntity.DATA_VERSION` 3 unchanged; no new block, no save format |
+| In game | needs the user (`PHASE_3.md`, slice 14 checks): the HUD list and its layout beside the meter, the arrows turning with the camera, the refusal text on screen |
