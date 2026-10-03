@@ -5060,3 +5060,296 @@ listed):
 | `./gradlew runGameTestServer` | 27 batches run, "All 40 required tests passed" (39 + 1); the log shows the scanner's cost line |
 | Versions | `PROTOCOL_VERSION` 9 → 10 (new `ScannerPayload` v1); `SignalSamplePayload.VERSION` 4 and `AntennaBlockEntity.DATA_VERSION` 3 unchanged; no new block, no save format |
 | In game | needs the user (`PHASE_3.md`, slice 14 checks): the HUD list and its layout beside the meter, the arrows turning with the camera, the refusal text on screen |
+
+## Slice 15 — Power and the Site Generator (§3C.5)
+
+With `requirePower` on, a cell on the air pays for its radio every tick, from a 10,000 FE buffer: `baseFe +
+paFePerWatt × P_rf_W / paEfficiency`. Out of energy, it goes off the air; it comes back once the buffer
+is above 10 %. A new block, the **Site Generator**, burns furnace fuel into 40 FE/t and feeds the
+antennas next to it. Antennas expose NeoForge's block energy capability, so any mod's FE source works
+too. With `requirePower` off (the default) nothing a cell does changes, and a generator next to an
+antenna burns nothing. A per-cell counter of receivers served in the last few minutes is kept as the
+seam for Phase 4's cell sleep; nothing sleeps. The code and the game tests went in `797d641` (part 1 of
+2); these notes and the tracker in "Phase 3 slice 15: power".
+
+The headline: on real blocks, a 30 dBm sector burned 2,120 generator ticks of fuel in a minute where a
+20 dBm sector burned 320, exactly the model's figures (6.625×, "about 7×"), and 21 sticks against 3.
+
+### What was built
+
+- **`rf/PowerModel`** (pure record, the five figures; `DEFAULT` is §3C.5's): `rfWatts(txDbm) =
+  10^((txDbm − 30)/10)`; `baseFe(sector, radioTier)` = mast 2, sector 4, +4 for a radio of tier 3 or
+  more (`RadioTier.WIDEBAND`); `paFePerTick(txDbm) = paFePerWatt × P_rf_W / paEfficiency`;
+  `fePerTick(...) = baseFe + paFePerTick`. The constructor rejects a negative or non-finite figure and an
+  efficiency outside (0, 1]. A non-finite Tx power gives a draw no buffer can pay.
+- **`util/EnergyBuffer`** (pure): whole FE (as `IEnergyStorage` counts), with the fraction owed carried
+  from tick to tick so 10.67 FE/t is paid exactly over time; `receive` up to a capacity passed in (a
+  server setting that may change), `extract`, `draw(rate)`: a tick it cannot pay empties the buffer and
+  switches the latch off; `restart(capacity, fraction)`: an off latch comes back on when the buffer is
+  strictly above the fraction (10 %) of the capacity. The latch is the hysteresis.
+- **`util/ServedReceivers<R>`** (pure): per cell, the distinct receivers served in a window ending now;
+  `prune`; `due(lastCell, lastTick, cell, tick, interval)`, the throttle the fixed-receiver ticker uses.
+- **Antennas** (`AntennaBlockEntity`, `SignalMastBlockEntity`, `SectorAntennaBlockEntity`):
+  - each holds an `EnergyBuffer`; only a cell's owner uses its own (a sector, a column's base);
+  - `energyStorage()`: `block/SiteEnergyStorage`, NeoForge's `IEnergyStorage` over
+    `bufferOwner()`'s buffer, receive-only, every side; it takes nothing and says `canReceive()` false
+    while `requirePower` is off;
+  - `bufferOwner()`: a sector itself; for a mast, the column's base, or the sector on top of a mounting
+    pole (worked out on every call, so never stale);
+  - a base that becomes structure (a mast placed under it) hands its energy and its latch to the new
+    base (`handEnergyDown`);
+  - `isTransmitting() = eligibleToTransmit() && backhaulAllows() && powerAllows()`, and
+    `refreshRegistration()` the same, still the one writer of `OnAir`; it also reports the cell to the
+    dimension's `SitePower`;
+  - `fePerTick(model)`: the model for its kind of radio, its tier and its Tx power;
+  - saved: `Energy`, `PowerOn` (`DATA_VERSION` 3 → 4); kept out of the update tag.
+- **`world/SitePower`**, one per dimension (not saved): the loaded cells that pass their own rules,
+  each with its chunk once looked up. Once a server tick (`ServerTickEvent.Post`, after the levels and
+  their generators have ticked), with `requirePower` on, each cell in a chunk that ticks block entities:
+  off → restart above 10 % (refresh: on the air); on and on the air → pay a tick (can't → refresh: off
+  the air). A flip of `requirePower` refreshes every tracked cell at the next tick. It also keeps the
+  served-receivers seam (`noteServed`, `servedCount`), pruned once a minute.
+- **`site_generator`** (`SiteGeneratorBlock`, `SiteGeneratorBlockEntity`): one fuel slot, `LIT` (light
+  13, a furnace's), a server ticker. Each tick, with nothing left from the last tick and a neighbour
+  that would take energy (a simulated `receiveEnergy`), it burns one tick (lighting the next item with
+  NeoForge's burn-time lookup when the last one is spent) and makes 40 FE; then it pushes what it holds
+  to its six sides through capability caches, a different side first each tick. Its own FE capability
+  is extract-only (another mod's cable may pull). The slot is a `WorldlyContainer` (vanilla hoppers) and
+  an item handler (`SidedInvWrapper`, as NeoForge does for a furnace): fuel in from any side; what fuel
+  leaves behind (a lava bucket's bucket) out from below only. Use with fuel fills it (kept in creative),
+  sneak + use with an empty hand empties it, use shows its state; breaking it drops it and the fuel.
+  Loot table, pickaxe tag, creative tab, language entries, placeholder art (blast furnace textures).
+- **`registry/ModCapabilities`** (mod bus, `RegisterCapabilitiesEvent`): the antennas' and the
+  generator's FE capability, and the generator's item handler.
+- **The seam feeds:** `SignalTicker.evaluate` (players, fresh and replayed) and
+  `FixedReceiverTicker.serve` (throttled, decision 11).
+- **`/rancraft power status [radius]`**: each loaded cell near the source, nearest first: kind, Tx power,
+  FE/t, buffer, on the air / out of energy / off for another reason, receivers served in the window.
+- **Config** (COMMON; decision 9): `requirePower` (false), `powerBufferFe` (10,000),
+  `powerRestartFraction` (0.10), `powerBaseFeMast` (2), `powerBaseFeSector` (4), `powerBaseFeWideband`
+  (4), `powerPaFePerWatt` (20), `powerPaEfficiency` (0.3), `siteGeneratorFePerTick` (40),
+  `servedWindowMinutes` (5).
+
+### Where each part of §3C.5 lives
+
+| §3C.5 | Where | Pinned by |
+|---|---|---|
+| Antennas expose FE through `Capabilities.EnergyStorage.BLOCK`, registered in `RegisterCapabilitiesEvent` | `ModCapabilities`, `AntennaBlockEntity.energyStorage`, `SiteEnergyStorage` | game tests: the real lookup (`level.getCapability`) on a sector and a column's top mast |
+| The mast column's base holds the buffer; 10,000 FE | `SignalMastBlockEntity.bufferOwner`, `powerBufferFe` | game test `column`: the base fills from a generator by the top mast, structure holds nothing |
+| `rf/PowerModel`, the formula and figures | `PowerModel` | `PowerModelTest`: the table, 10× per 10 dB exactly |
+| Out of energy → off air; back above 10 %, no flapping | `EnergyBuffer.draw` / `restart`, `SitePower.tick`, `AntennaBlockEntity.powerAllows` | `EnergyBufferTest`; game tests `out` (9 % stays off for 40 ticks, 10.01 % comes back) and `weakSupply` (26 / 34-tick phases) |
+| `site_generator`: furnace fuel by NeoForge's burn-time lookup, 40 FE/t, pushes to adjacent receivers, one slot exposed to hoppers | `SiteGeneratorBlockEntity`, `SiteGeneratorBlock` | game tests `fuel`, `slot` (a hopper pours coal and not dirt; a lava bucket's 20,000 ticks, its bucket out to a hopper below) |
+| Seam: receivers served per cell in the last N minutes; no sleep | `ServedReceivers`, `SitePower.noteServed` / `servedCount`, `servedWindowMinutes` | `ServedReceiversTest`; game test `off`: a Radio Link receiver counted for its mast |
+| `requirePower` default false; nothing changes when off | `RanCraftConfig.requirePower`, `powerAllows`, `SiteEnergyStorage.canReceive` | game test `off`: empty cells on the air, no energy taken, the generator burns nothing, the site registry still for 100 ticks |
+| 3C done-when: a 30 dBm sector burns fuel about 7× faster than a 20 dBm one | the whole chain | game test `fuel`: 2,120 vs 320 burn ticks, 21 vs 3 sticks, model exact |
+
+### Decisions and deviations
+
+1. **Power sits beside backhaul in `isTransmitting()`, not in `eligibleToTransmit()`** (the slice 12
+   note). A cell out of energy stays in the backhaul graph (`noteCell(eligible)` unchanged), so its site
+   keeps relaying between its dishes, and a power flap starts no backhaul topology change. The dishes are
+   the site's transport, and §3C.5 puts only antennas on the power budget; a dark radio is not a dark
+   transport.
+2. **Only a cell on the air draws.** A cell off the air for another reason (backhaul NONE) draws
+   nothing, and one that fails its own rules (structure, a mounting pole, redstone off) is not even
+   tracked. There is no standby load. The base load is "the radio running", which it is not.
+3. **With `requirePower` off, antennas take no energy** (`canReceive()` false, `receiveEnergy` 0), so a
+   generator next to one finds no taker and burns nothing; a Phase 2 world with a generator in it still
+   plays exactly as before. The buffer is never read with the flag off.
+4. **Every mast of a column feeds the base**, not only the base itself: "the base holds the buffer"
+   read as where the energy is kept, not where it must be plugged in. A generator at the foot of a
+   tower or beside any mast of it works. Two extensions, labelled:
+   - **A mounting pole's masts feed the sector on top** (the pole's base, which is no cell, gets
+     nothing): a sector on a tall pole can be fed from the ground, as a real pole carries cabling.
+   - **A base that becomes structure hands its energy and latch down** to the new base, so extending a
+     tower downward strands no fuel. A base that is **broken** loses its energy (as a broken machine
+     does); the mast promoted above it is a new cell with an empty buffer (slice 6's known behaviour,
+     now with energy too).
+5. **Out of energy, precisely:** a tick whose whole FE the buffer cannot pay empties it and switches
+   the latch off; the cell refreshes at once. It comes back at the first tick with the buffer strictly
+   above 10 % (1,001 FE of 10,000), nothing drawn meanwhile. A buffer above a lowered capacity takes
+   nothing until it drains under it.
+6. **The fraction of a FE owed is carried** between ticks (whole-FE storage, fractional draw), and not
+   saved: a reload forgives under 1 FE.
+7. **Power stands still where block entities do not tick** (`Level.shouldTickBlocksAt`, the check
+   `Level.tickBlockEntities` makes). A cell at the edge of the loaded area neither draws nor restarts,
+   as the generators that feed it do not run there either; it keeps its `OnAir`. Otherwise border cells
+   would drain dark while their generators were frozen.
+8. **The generator burns only while its output is taken**, and stores one tick's output. Before it
+   burns a tick it asks its sides with a simulated `receiveEnergy`; a full buffer next door stops it,
+   and the item burning pauses rather than burning away. That makes fuel exactly proportional to the
+   energy drawn, which is what turns the PA's 10× into a 10× fuel bill. Other choices:
+   - No screen: the slot is the only setting. Use with fuel, sneak + use, use for the state. A furnace
+     screen would add a menu type and a client screen for one slot.
+   - `LIT` is held 20 ticks after the last burning tick: a generator at part load burns about one tick
+     in four, and a block state flipping most ticks re-renders the chunk section on every client.
+   - A fuel item that leaves something behind (a lava bucket) leaves it in the slot when the slot
+     empties, else drops it on top. Vanilla's furnace replaces the whole stack with the remainder, which
+     would delete a stackable fuel with a remainder (none exists in vanilla).
+   - Hoppers: fuel in from any side; only what fuel left behind comes out, from below only (a
+     furnace's fuel slot's rule).
+9. **Every figure is a COMMON config value**, though §5 lists only `requirePower`: the ground rules put
+   everything tunable in JSON or `RanCraftConfig`, and slice 14 did the same for the scanner's range.
+   None is in `RfConfig`: the engine never reads power; `RanCraftConfig.powerModel()` builds the record.
+10. **Save format:** `AntennaBlockEntity.DATA_VERSION` 3 → 4, appending `Energy` and `PowerOn`. A v3 (or
+    older) save loads with an empty buffer, latch off, as a new antenna; turning `requirePower` on is the
+    server's choice and every cell then needs feeding. Both are taken back out of the update tag: they
+    change every tick and the client has `OnAir`. So the wire is unchanged and `PROTOCOL_VERSION` stays
+    10. The generator saves `DataVersion` 1, its slot, `BurnTicks`, `BurnTotal` and `Energy`.
+    `RadioTierGameTests`' "v3 save" now says 3 literally rather than `DATA_VERSION`, so it still tests a v3
+    save.
+11. **The seam:**
+    - A receiver is what the server evaluates: a player carrying a device or wearing a lens, or a fixed
+      device. A player carrying nothing is not evaluated, so not counted.
+    - A receiver that crossed a boundary in the window counts for both cells.
+    - The window is `servedWindowMinutes` (default 5; §3C.5 leaves N open).
+    - Players report on every evaluation. A fixed receiver reports when its serving cell changes or its
+      last report is 20 s old (`SitePower.SERVED_NOTE_INTERVAL_TICKS`): writing the map on every turn
+      cost 0.7 µs per turn in the fixed-receiver test and up to 3.5 µs in the Radio Link test (measured,
+      below). A window is at least a minute, so a receiver still served is never dropped; one that stops
+      drops out 20 s early at most.
+    - Not saved. Nothing in Phase 3 reads it but the status command.
+12. **A `requirePower` flip at runtime refreshes every loaded cell at the next tick**, so cells go dark
+    (empty buffers) or come back at once rather than on their next unrelated refresh.
+13. **`/rancraft power status [radius]`** is not in §3C.5; it is how a player or a test sees what the
+    server decided (draw, buffer, state, served), as `/rancraft backhaul status` does for backhaul.
+14. **"About 7×"** is the model's 6.625× (70.67 / 10.67), which the game test measures exactly.
+
+### Honest-abstraction notes (also at the code sites)
+
+- **Real, modelled faithfully:** dBm to watts, and the amplifier's input being its RF output divided by
+  its efficiency, so 10 dB more Tx power is exactly 10× the amplifier's energy (`PowerModel`).
+- **The base load is a flat figure per kind of radio** (`PowerModel`), not a function of bandwidth,
+  carriers or traffic.
+- **The PA draws its full figure whenever the cell is on the air**, whatever it carries: no load
+  dependence, no DTX, no sleep (Phase 4; the seam is `ServedReceivers`).
+- **FE has no exchange rate to joules**: `paFePerWatt` sets the scale (`PowerModel`, the config comment).
+- **A generator makes a flat 40 FE/t whatever it burns** (fuel sets only how long), **wastes nothing**
+  and **pauses a burning item** when nothing takes its output (`SiteGeneratorBlockEntity`). A real
+  generator idles at a part load and burns fuel doing so.
+- **A mounting pole carries power up to the sector on top** (`SignalMastBlockEntity.bufferOwner`), a
+  game rule standing in for cabling.
+- **Power stands still where block entities do not tick** (`SitePower`), as furnaces do.
+- **No standby load:** a cell off the air draws nothing (`SitePower`).
+- **The seam counts what the server evaluates** (`ServedReceivers`, `SitePower`), not every phone in
+  range.
+
+### Measured
+
+`PowerGameTests` on the live game-test server (flat world, forced chunks, JDK 21, this machine).
+
+| What | Result |
+|---|---|
+| Fuel, 1,200 ticks in the steady state, buffers full at the start | 20 dBm sector, 10.667 FE/t: **320** burn ticks (model 320.0), 3 sticks; 30 dBm sector, 70.667 FE/t on two generators: **2,120** (model 2,120.0), 21 sticks; ratio **6.625** (model 6.625). Same in every run of this slice |
+| A 30 dBm sector on one generator (40 in, 70.7 out), 600 ticks | 19-20 switches (by where the window falls in the cycle); phases 26 ticks off (charging past 1,000 FE; once 27) and 34 on |
+| The draw, 200 sectors on the air | median of 100 server ticks **79.3 µs/tick** with a chunk lookup per cell per tick (`Level.blockEntityChanged`); with the chunk cached per cell **48.7-62.9 µs/tick** in five runs during a slow spell of the machine (below), **16.1-20.1 µs/tick** in three runs later; a direct loop of 200 ticks: **0.17-0.22 µs per cell** then, **0.064-0.070** later |
+| An idle generator's tick (its neighbour full: six simulated asks) | 0.11-0.69 µs |
+
+- The draw is linear in the cells on the air, 0.06-0.2 µs each depending on how busy the machine is
+  (two field reads, a `Math.pow`, a chunk ticking check and a field write): a thousand powered cells
+  would cost 0.06-0.2 ms a tick.
+- **The Radio Link gate, measured with a control.** `RadioLinkGameTests.two_hundred_radio_links_in_steady_state`
+  asserts a median under 100 µs/tick (the 3B done-when). It failed in three of this slice's first eight
+  runs (126.6 and 120.6 µs with the seam writing its map on every fixed-receiver turn; 113.7 with the
+  committed throttle, beside 96.5, 36.1 and 76.9 for the same code; 98.2 and 37.0 were earlier code
+  and an experiment without the seam). So it was measured again, slice 14's
+  code (`a1e9611`) against this slice's (`797d641`), alternately and minutes apart, each on a fresh
+  game-test world (the accumulated one moved aside, then put back):
+
+  | Code | World | Median of the windows (µs/tick) | Warm-up replays in 100 ticks |
+  |---|---|---|---|
+  | slice 15 | fresh | 13.7, 21.5 | 35,332, 26,912 |
+  | slice 14 | fresh | 18.1, 21.1 | 31,428, 34,432 |
+  | slice 15 | the accumulated one (437 MB) | 25.5, 20.8 | 31,196, 34,836 |
+
+  This slice adds nothing measurable to the gate. The failing runs came while the machine was slow: the
+  test's warm-up at interval 1 replays as many receivers as the 0.5 ms budget allows, and it managed
+  7,836-16,368 replays in 100 ticks during those runs against 26,912-35,332 later; every part of the
+  ticker (setup, the scan of due receivers) was 2-3× slower too, and so was the power draw (0.14-0.20 µs
+  per cell then, 0.064-0.070 later). The world matters little (20.8-25.5 against 13.7-21.5). That warm-up
+  count, which the test logs, is the quickest check of the machine's state when the gate fails. The
+  follow-up from row 9b is annotated with this.
+- **The seam's throttle stays.** A fixed receiver reports to the seam when its serving cell changes or
+  every 20 s (decision 11), not on every turn: in the fixed-receiver test, the per-turn write took the
+  "serving" part from 1.54 to 2.24-3.42 µs per turn and the throttle brought it back to 1.60-1.66. Those
+  runs came in the slow spell above, so the size of the saving is uncertain, but a write per receiver
+  every 20 s instead of every second is cheaper whatever the machine does. Later runs: steady state
+  11.1-15.5 µs/tick for 200 receivers, 0.70-0.94 µs per replay served.
+
+### Tests
+
+- **Unit** (25 new, 619 in all):
+  - `PowerModelTest` (8): dBm to watts; the §3C.5 table (10.7 and 70.7, exactly 4 + 20/3 and 4 + 200/3);
+    the PA term exactly 10× per 10 dB from 0 to 30 dBm (100× per 20); 6.625× "about 7"; the base loads;
+    efficiency divides; a non-finite Tx power; validation.
+  - `EnergyBufferTest` (10): capacity and simulation; a lowered capacity; extract; 10.67 FE/t over 300
+    ticks is 3,200 FE; out of energy; off until strictly above 10 % (1,000 stays off, 1,001 restarts);
+    on below 10 % until a tick cannot be paid; a weak supply cycles slowly; odd rates; load clamps.
+  - `ServedReceiversTest` (7): distinct receivers; the window; both cells; the latest tick kept; the
+    throttle; throttled reports keep counting; prune.
+  - `PackagePurityTest` covers `rf/PowerModel`, `util/EnergyBuffer` and `util/ServedReceivers`.
+- **Game** (`PowerGameTests`, 7 new, plus `HarvestGameTests`' generated test for `site_generator`: 48 in
+  all, 30 batches). `requirePower` is turned on by the batch (`@BeforeBatch`) and restored after.
+  - `a_30_dbm_sector_burns_fuel_about_seven_times_faster` (3C done-when): above.
+  - `out_of_energy_off_the_air_back_above_ten_percent`: a 30 dBm sector with 700 FE goes off the air
+    (unregistered, `OnAir` false in the update tag, empty, latch off, the outage counted); the real
+    capability lookup is receive-only, 10,000 FE, simulation takes nothing; 900 FE (9 %) keeps it off for
+    40 ticks with nothing drawn; 101 more puts it on at the next tick; the save is v4 with `Energy` and
+    `PowerOn` and loads back, the update tag carries neither, a v3 save loads empty; it runs out again.
+  - `a_weak_supply_cycles_slowly_never_every_tick`: above; at least 6 switches, every whole phase at least
+    10 ticks.
+  - `a_generator_by_any_mast_feeds_the_column`: a generator by the top mast of three fills the base (the
+    others hold nothing; the top mast's capability reads the base's buffer) and puts it on the air; a mast
+    placed under the base takes the energy and the latch (on the air at once, the old cell gone); a
+    sector put on top silences the column and is then fed by the same generator through the pole.
+  - `the_fuel_slot_hoppers_buckets_and_hands`: a hopper pours 3 coal in and keeps its dirt; a lava bucket
+    lights (20,000 burn ticks) and its bucket goes out to a hopper below; a survival player's use with 10
+    coal moves them in, with dirt does nothing, and sneak + use with an empty hand gives them back.
+  - `the_draw_over_two_hundred_cells` (its own batch: it drives the draw directly): above; every sector
+    still on the air; the idle generator burns nothing.
+  - `require_power_off_changes_nothing` (its own batch, the flag off): an empty sector and mast on the
+    air and registered; the sector's capability takes nothing; a generator with 8 coal beside the sector
+    does not light, burns nothing and keeps its coal; the site registry's version does not move in 100
+    ticks; the seam counts the Radio Link receiver 4 blocks from the mast for that mast.
+
+### APIs verified against sources (new to this codebase)
+
+- **Capabilities** (NeoForge 21.1.251 sources): `Capabilities.EnergyStorage.BLOCK` and
+  `Capabilities.ItemHandler.BLOCK` are `BlockCapability<T, @Nullable Direction>`.
+  `RegisterCapabilitiesEvent.registerBlockEntity(cap, type, (be, side) -> ...)` is a mod-bus event; the
+  adapted provider checks the entity's type. `IBlockCapabilityProvider`'s contract: NeoForge invalidates
+  caches on chunk and block-entity load, unload, placement and removal; in every other case the provider's
+  owner must call `invalidateCapabilities`. Every provider here returns one object per entity for its
+  lifetime, so none is needed.
+- **`BlockCapabilityCache.create(cap, level, pos, context, isValid, listener)`**, and `getCapability()`,
+  which returns null while the position is not loaded. `ILevelExtension.getCapability(cap, pos, context)`.
+- **`IEnergyStorage`**: `receiveEnergy`, `extractEnergy`, `getEnergyStored`, `getMaxEnergyStored`,
+  `canExtract`, `canReceive`.
+- **Burn time:** NeoForge's `IItemStackExtension.getBurnTime(RecipeType)` (the furnace's own lookup,
+  `AbstractFurnaceBlockEntity.getBurnDuration`, with `RecipeType.SMELTING`; it fires the burn-time event).
+  `hasCraftingRemainingItem` / `getCraftingRemainingItem` are stack-sensitive NeoForge extensions.
+- **Hoppers:** `HopperBlockEntity.ejectItems` / `suckInItems` call `VanillaInventoryCodeHooks.insertHook` /
+  `extractHook`, which use the item handler capability; without one, vanilla's `Container` path runs.
+  NeoForge registers vanilla furnaces as `SidedInvWrapper::new` (`CapabilityHooks`); the generator copies
+  that. `WorldlyContainer`'s `getSlotsForFace`, `canPlaceItemThroughFace`, `canTakeItemThroughFace`.
+- **Blocks:** `BaseEntityBlock.createTickerHelper`, `EntityBlock.getTicker`; `Containers.dropContentsOnDestroy`
+  (only when the block itself changes) and `dropItemStack`; `BlockBehaviour.Properties.lightLevel`;
+  `ItemInteractionResult.PASS_TO_DEFAULT_BLOCK_INTERACTION` falls through to `useWithoutItem` for the main
+  hand; `Player.hasInfiniteMaterials`, `isSecondaryUseActive`; `Inventory.placeItemBackInInventory`.
+- **Ticking and saving:** `Level.shouldTickBlocksAt(BlockPos)` (`ServerLevel`: the chunk is in block
+  ticking range; what `tickBlockEntities` checks); `BlockEntity.setChanged()` runs
+  `updateNeighbourForOutputSignal` after `Level.blockEntityChanged`, which looks the chunk up;
+  `ChunkAccess.setUnsaved`; `ServerChunkCache.getChunkNow`.
+- **Game tests:** `@BeforeBatch`; `GameTestBatchFactory` groups tests by batch name in a `HashMap`;
+  `GameTestSequence.thenExecuteFor` runs its body every tick of the window; `BlockEntity.loadStatic`,
+  `saveWithFullMetadata`.
+
+### Verification
+
+| Check | Result |
+|---|---|
+| `./gradlew build` | **619 passed, 0 failed, 0 skipped** (594 + 25) |
+| `rf` / `util` purity | `PackagePurityTest` passes, with `rf/PowerModel`, `util/EnergyBuffer` and `util/ServedReceivers` in it |
+| `./gradlew runGameTestServer` | 30 batches run, "All 48 required tests passed" (40 + 7 + `site_generator`'s harvest test). Of the slice's first eight runs, three failed only the Radio Link cost gate while the machine was slow; the four runs since (two on fresh worlds, two on the accumulated one, the last with the final tree) passed, with gate medians of 13.7-25.5 µs against slice 14's 18.1-21.1 (see Measured) |
+| Versions | `AntennaBlockEntity.DATA_VERSION` 3 → 4 (`Energy`, `PowerOn`); the Site Generator's save `DataVersion` 1; `PROTOCOL_VERSION` 10 and `SignalSamplePayload.VERSION` 4 unchanged (no payload, and the update tag is as before) |
+| In game | needs the user (`PHASE_3.md`, slice 15 checks): the generator's look, light and messages, the lens greying a cell out of energy, a fuel bill felt over minutes |

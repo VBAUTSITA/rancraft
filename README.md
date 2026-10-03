@@ -89,6 +89,18 @@ To run a headless dedicated server instead: `.\gradlew.bat runServer`
     - **Losing the session:** the screen closes with "connection lost" when you lose that service, as
       a download stops.
     - It never loads a chunk and never lifts the chest's lid. Creative tab only for now.
+  - *Proximity Scanner:* held with GOOD service on band_3500, it lists the hostile mobs within 24
+    blocks on the HUD (not radar: a stand-in for a sensor feed only a high-capacity link can carry);
+    otherwise it says why ("needs tier 3, you're on band_1800 (tier 2)"). Creative tab only for now.
+  - *Power:* with `requirePower` on (COMMON config, **off by default**, so existing worlds are
+    unaffected), a cell on the air draws energy every tick: `baseFe + 20 x P_rf_W / 0.3` FE/t (a sector
+    at 20 dBm about 10.7, at 30 dBm about 70.7: 10 dB more power is 10x the amplifier's energy). Its
+    buffer (10,000 FE; a mast column's base holds it) runs out and the cell goes off the air (the lens
+    greys it), back on above 10 %. A **Site Generator** burns furnace fuel into 40 FE/t, only while
+    the antennas next to it take it, and feeds any mast of a tower; use it with fuel to fill its slot
+    (hoppers work too), sneak + use with an empty hand to take it out, use to see its state.
+    `/rancraft power status [radius]` lists each cell's draw, buffer and state. Creative tab only for
+    now.
 
 See `VISION.md` for the full design of the vision feature, `VISION_STEP3.md` for Step 3 (the
 drive-test log, and the planned automatic problem diagnosis), and `NOTES.md` for the full build log,
@@ -117,7 +129,9 @@ cap behave as specified; block changes invalidate only the cached measurements w
 touch; fixed receivers are evaluated, replayed, unloaded and reloaded correctly; Radio Links follow
 their transmitters, drop about half their updates at POOR (SINR about 1 dB) and none at FAIR,
 and survive a chunk reload; microwave backhaul chains go LIMITED and off the air as specified, and a
-marginal hop drops in a thunderstorm and recovers; the costs are logged too), and exits. The task fails
+marginal hop drops in a thunderstorm and recovers; a 30 dBm sector burns about 7x the fuel of a 20
+dBm one and an empty cell goes off the air until its buffer is above 10 %; the costs are logged too;
+48 tests in Phase 3C slice 15), and exits. The task fails
 if any test fails. It is separate from `build`.
 
 Phases 3A and 3B are complete in code and every headless check passes; what still needs a person

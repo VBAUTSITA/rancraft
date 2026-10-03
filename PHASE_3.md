@@ -62,7 +62,7 @@ Legend: `[x]` done and verified · `[~]` partly done / needs a manual in-game ch
 | 12 | Core site, dish, link tool, backhaul state, lens lines, `/rancraft backhaul status` | 3C | [~] blocks `core_site` and `backhaul_dish` (drop themselves, pickaxe tag, placeholder art) and item `link_tool` (select, pair, sneak + use unpairs; both dish entities store the partner; alignment automatic, labelled); `world/BackhaulNetwork` (a per-dimension `SavedData` of cores, dishes, pairings and eligible cells, so unloaded relays count; marches each hop with the live `WorldProbe` in one fixed order with a cap it cannot run out of, weather from `Biome.getPrecipitationAt` at the midpoint and the level's rain and thunder; solves `BackhaulGraph`; recomputes on the site registry version, a pairing, a region epoch on a hop's bins or the weather, at most once per `backhaulRecomputeTicks`). With `requireBackhaul` on, NONE → not transmitting (unregistered, `OnAir` false, through `refreshRegistration`), LIMITED → devices capped at FAIR in `DeviceContext` and their verdicts with the `SignalSample` untouched, meter "BH: LIMITED (capped FAIR)" (`SignalSamplePayload` v4); off (default) changes nothing. `BackhaulLinksPayload` v1 (cap 64) to lens wearers, hops drawn with the lobes layer; `/rancraft backhaul status [radius]`; `PROTOCOL_VERSION` 9. Headless green (559 tests, 0 skipped; `runGameTestServer` 36/36: the chain and weather tests, both new blocks in the harvest tests); a hop 0.14 µs per block live, quiet tick about 1 µs; ten decisions in NOTES.md; in-game checks below | ea9c98d; docs 8f2a31a; tracker "PHASE_3.md, NOTES.md: record slice 12 commit hash" |
 | 13 | Storage Terminal | 3C | [~] item `storage_terminal` (a `SignalDevice`, GOOD tier 2): sneak + use binds a chest or barrel within `fiberRadiusBlocks` of a Core Site (the graph's fiber rule, any core of the dimension), saved as a `GlobalPos` data component; use opens a `RemoteContainerMenu` (a vanilla `ChestMenu` on the 9x3 / 9x6 menu types: nothing new on the wire) on an OK verdict, a FULL chunk and 27 or 54 slots; its `stillValid` reads the player's last verdict (`TerminalLink`, at most two intervals old), never a fresh evaluation, and a failed rule closes it with "connection lost (reason)"; same dimension only; never loads a chunk ("storage unreachable"); the LIMITED cap ends a session ("backhaul limited", told apart from a weak signal); the lid is never lifted (opener counter safe). Headless green (567 tests, 0 skipped; `runGameTestServer` 39/39, 3 new, including the 3C done-when: a LIMITED cell closes the session while a Radio Link on it keeps working); session check 0.44 µs/tick; no version bump; in-game checks below | 6a0ab89; docs b1735d2; tracker "PHASE_3.md, NOTES.md: record slice 13 commit hash" |
 | 14 | Proximity Scanner | 3C | [~] item `proximity_scanner` (a `SignalDevice`, GOOD tier 3: band_3500's first use); `device/ProximityScanner`: held with an OK verdict, one `ScannerPayload` v1 per dispatch (the main hand's scanner, else the offhand's; none from the hotbar, none to a dead player) listing at most 16 hostile mobs (vanilla's `Enemy`) within `scannerRangeBlocks` 24 (new COMMON config, not in §5's list: follow-ups), straight line from the feet, nearest first, with entity type, distance and compass bearing; on any other verdict the payload carries the reason (no service, weak signal, backhaul limited, low tier) by the Storage Terminal's rule (`TerminalLink.reasonOf`, shared) and no list; `util/ProximityScan` (pure list); HUD list top-right under the meter's compact readout (`HudStack`), no world render, "needs tier 3, you're on band_1800 (tier 2)"; the scan labelled not RF physics at the code sites; `PROTOCOL_VERSION` 10. Headless green (594 tests, 0 skipped; `runGameTestServer` 40/40, 1 new: band_3500 lists the right mobs, 16 of 19, band_1800 refuses with "needs tier 3"); 23.7 µs per scan with 20 mobs; in-game checks below | 465d40e; docs 9e3fab5; tracker "PHASE_3.md, NOTES.md: record slice 14 commit hash" |
-| 15 | Power + generator | 3C | [ ] | |
+| 15 | Power + generator | 3C | [~] `rf/PowerModel` (pure: §3C.5's formula and figures, the table and 10× per 10 dB pinned); `util/EnergyBuffer` (pure: whole FE with the fraction carried, out of energy → latch off, back strictly above `powerRestartFraction` 10 %); antennas expose `Capabilities.EnergyStorage.BLOCK` (`ModCapabilities`, receive-only, nothing with `requirePower` off), any mast of a column feeds its base (a pole's masts feed the sector on top; a demoted base hands its energy down), 10,000 FE; `isTransmitting()` = eligible ∧ backhaul ∧ power, `refreshRegistration` still the one `OnAir` writer; `world/SitePower` draws each cell on the air once a tick where block entities tick, refreshes on a latch change or a flag flip; block `site_generator` (furnace fuel by NeoForge's burn-time lookup, 40 FE/t only while taken, pushes to its six sides, one slot for hoppers: fuel in, a bucket out below; use with fuel / sneak + use / status; loot table, pickaxe tag); seam `util/ServedReceivers` per cell over `servedWindowMinutes` (fixed receivers throttled to a report per 20 s); `/rancraft power status [radius]`; config `requirePower` (false) and nine figures; `AntennaBlockEntity.DATA_VERSION` 4. Headless green (619 tests, 0 skipped; `runGameTestServer` 48/48, 7 new + 1 generated harvest test: 30 dBm 2,120 vs 20 dBm 320 burn ticks, model exact, 6.625×; the draw 0.06-0.2 µs per cell). No wire change. In-game checks below; the Radio Link cost gate's sensitivity to machine load (measured against slice 14's code: this slice adds nothing to it) and two owner decisions in follow-ups | 797d641; docs "Phase 3 slice 15: power"; tracker "PHASE_3.md, NOTES.md: record slice 15 commit hash" |
 | 16 | Recipes + loot tables + survival playthrough | 3C | [ ] | |
 | 17 | (optional) fix_x/fix_z/fix_err in drive-test CSV | — | [ ] | |
 
@@ -1023,6 +1023,79 @@ band_3500 in its configuration screen, aimed at where you stand. The Field Test 
 
   *Needs the client (HUD).*
 
+## Slice 15 (power) checks
+
+Headless (verified by `./gradlew build`, 619 tests, 0 skipped, and `./gradlew runGameTestServer`, 48 of
+48 in 30 batches; of the first eight runs, three failed only the Radio Link cost gate while the machine
+was slow, and every run since, on fresh worlds and the accumulated one, passed with medians of 13.7-25.5
+µs against slice 14's 18.1-21.1: follow-ups. Details in NOTES.md, slice 15).
+
+- [x] **The model** (`PowerModelTest`): the §3C.5 table (a sector 10.7 FE/t at 20 dBm, 70.7 at 30 dBm),
+      the PA term exactly 10× per 10 dB, mast 2 / sector 4 / +4 wideband.
+- [x] **The buffer and the latch** (`EnergyBufferTest`): a fractional draw paid exactly; out of energy →
+      empty, latch off; back only strictly above 10 %; on below 10 % until a tick cannot be paid.
+- [x] **The capability, at runtime** (`level.getCapability(Capabilities.EnergyStorage.BLOCK, ...)`): an
+      antenna's is receive-only with 10,000 FE, takes nothing while `requirePower` is off; a column's top
+      mast reads and fills the base's buffer.
+- [x] **Off the air and back, at runtime:** out of energy the cell is unregistered with `OnAir` false in
+      its update tag (what the lens greys); 9 % keeps it off for 40 ticks; 10.01 % brings it back at the
+      next tick.
+- [x] **No flapping, at runtime:** a 30 dBm sector on one generator cycles 26 ticks off, 34 on.
+- [x] **The fuel bill, at runtime** (3C done-when): 320 against 2,120 burn ticks, 3 against 21 sticks.
+- [x] **The generator, at runtime:** a hopper pours fuel in and keeps dirt out; a lava bucket burns
+      20,000 ticks and its bucket goes to a hopper below; use with fuel, sneak + use; it drops itself to an
+      iron pickaxe (`HarvestGameTests`); beside a full buffer it burns nothing.
+- [x] **Columns, at runtime:** a generator by any mast fills the base; a mast placed under the base takes
+      the energy; a sector on a pole is fed through the pole.
+- [x] **Flag off, at runtime:** nothing changes (3C done-when, power half).
+- [x] **The seam, at runtime:** a Radio Link receiver is counted for the mast that serves it.
+- [x] Versions: `AntennaBlockEntity.DATA_VERSION` 3 → 4 (`Energy`, `PowerOn`, saved and loaded back, out of
+      the update tag); the generator's `DataVersion` 1; `PROTOCOL_VERSION` 10 unchanged.
+- [x] Cost: the draw 0.064-0.070 µs per cell on the air (200 cells: median 16.1-20.1 µs/tick), and
+      0.17-0.22 µs (48.7-62.9 µs/tick) while the machine was slow; an idle generator's tick 0.11-0.69 µs.
+
+Needs a human in game (creative is fine). The config is `config/rancraft-common.toml`; NeoForge reloads it
+while the game runs. `/rancraft power status` (operator) shows each cell's draw, buffer and state.
+
+- [~] **1. Flags off (the default).**
+  - Open a world from before this slice (Phase 2 or earlier in Phase 3): every tower still transmits and
+    reads as before.
+  - Place a Site Generator next to a Sector Antenna and use coal on it. It stays dark; use on it says
+    "idle, requirePower is off on this server". The coal stays in it.
+
+  *Needs the client (an old world, the generator's look).*
+- [~] **2. requirePower on.**
+  - Set `requirePower = true`. Within a second every tower without power goes off the air; the RF Lens
+    (lobes layer) draws it grey, and the meter loses it.
+  - Put coal in the generator beside the sector: it lights (glowing front, light level 13). About a second
+    later the sector comes on the air (its lobe lights up). `/rancraft power status`: about 10.67 FE/t at
+    20 dBm, the buffer filling towards 10,000.
+  - Take the coal out (sneak + use with an empty hand) and let the item already burning finish (it burns
+    only as fast as its power is taken: at 20 dBm a coal lasts about 5 minutes). Then the full buffer
+    keeps the 20 dBm sector on for about 47 s, and it goes grey. Put fuel back: it returns once the buffer passes 1,000 FE (about 25 s), not at the first
+    FE.
+
+  *Needs the client (the lens, the generator's light).*
+- [~] **3. The fuel bill (3C done-when, felt).**
+  - Set the sector to 30 dBm in its screen. The status shows about 70.67 FE/t. On one generator it now
+    cycles: about 1.3 s off, 1.7 s on (the lobe blinks slowly, never every tick).
+  - Add a second generator beside it: it stays on. One coal lasts about 5 minutes at 20 dBm and about 45
+    seconds at 30 dBm (64,000 FE each).
+
+  *Needs the client (watching it over minutes).*
+- [~] **4. Towers and poles.**
+  - Build a column of three Signal Masts and put the generator next to the top one: the tower comes on.
+  - Put a Sector Antenna on top of the column: the column goes quiet, and the same generator now feeds the
+    sector, which comes on.
+
+  *Needs the client (the lens on a tower).*
+- [~] **5. Hoppers and breaking.**
+  - A hopper with coal on top of a generator fills it. A lava bucket in a generator leaves an empty bucket,
+    which a hopper under the generator takes out.
+  - Break the generator in survival with a pickaxe: it drops itself and its fuel.
+
+  *Needs the client (hoppers in play).*
+
 ## 3C done-when
 
 - [~] A tier-2 sector cannot use band_3500 until it gets a Wideband Radio Unit. *Server half verified
@@ -1060,13 +1133,25 @@ band_3500 in its configuration screen, aimed at where you stand. The Field Test 
       blocks with the right distances and bearings, at most 16. The same sector on band_1800 at GOOD or
       better sends LOW_TIER and no list, which the HUD words "needs tier 3, you're on band_1800 (tier
       2)". The list and the text on screen need the client: slice 14 checks, steps 1 and 3.)*
-- [ ] With requirePower on, a 30 dBm sector burns fuel ~7× faster than a 20 dBm one.
+- [x] With requirePower on, a 30 dBm sector burns fuel ~7× faster than a 20 dBm one. *(Slice 15,
+      verified at runtime with real blocks, `PowerGameTests.a_30_dbm_sector_burns_fuel_about_seven_times_faster`:
+      a 20 dBm sector on one real Site Generator and a 30 dBm sector on two, both burning real sticks
+      through NeoForge's burn-time lookup, in the steady state for 1,200 ticks: 320 against 2,120 burn
+      ticks, exactly the model's 10.667 and 70.667 FE/t over 40 FE/t, ratio 6.625; 3 sticks against 21;
+      both on the air throughout. Identical in every run. Feeling the bill over minutes in a real
+      game is in the slice 15 checks, step 3.)*
 - [ ] Every block and item is craftable in survival and every block drops itself. *(Slice 12: Core
-      Site and Backhaul Dish drop themselves, `HarvestGameTests`; no recipes until slice 16.)*
-- [ ] With both logistics flags off (default), a Phase 2 world plays exactly as before. *(Slice 12:
+      Site and Backhaul Dish drop themselves, `HarvestGameTests`; slice 15: the Site Generator too; no
+      recipes until slice 16.)*
+- [~] With both logistics flags off (default), a Phase 2 world plays exactly as before. *(Slice 12:
       the backhaul half holds: with `requireBackhaul` off no cell is held off the air or capped
       (`BackhaulGraphTest.requireBackhaulOffChangesNothing`; at runtime a cell with no backhaul stays on
-      the air, uncapped, and recomputes never move the site registry). `requirePower` is slice 15.)*
+      the air, uncapped, and recomputes never move the site registry). Slice 15: the power half holds at
+      runtime, `PowerGameTests.require_power_off_changes_nothing`: cells with empty buffers are on the air
+      and registered, their capability takes no energy, a generator with coal beside them does not light
+      or burn, and the site registry does not move in 100 ticks; a v3 (or older) save loads with an empty
+      buffer that nothing reads. A real Phase 2 world opened in the client is the remaining check: slice
+      15 checks, step 1.)*
 
 ---
 
@@ -1387,14 +1472,17 @@ centroid, so 7 × 16 + 1 = 113). (g)
   still open. `DATA_VERSION` 3 alone is not a reliable marker: a loaded entity is re-saved only when its
   chunk is saved for another reason, so an unchanged column's masts stay v2 on disk and would be
   counted again. A marker needs a per-world flag (a `SavedData`), which is not slice 10's scope.)*
-- **[ ] Open, note for slices 12 and 15 (from slice 6).** `AntennaBlockEntity.onAir` is set only by
+- **[x] Done in slices 12 and 15 (from slice 6).** `AntennaBlockEntity.onAir` is set only by
   `refreshRegistration`, from `isTransmitting()`. Backhaul (§3C.2 "Unregister and set OnAir false")
   and power (§3C.5) should feed `isTransmitting()` (or the mast's column rule) and call
   `refreshRegistration()`, not write the flag directly, so the registry and the lens cannot disagree.
   For a column, only the base's entity matters. *(Slice 12: done for backhaul. `isTransmitting()` is
   `eligibleToTransmit() && backhaulAllows()`, the old rule moved to `eligibleToTransmit()` (overridden
   by the mast column); the network calls `refreshRegistration()` on the cells whose state changed, which
-  stays the one writer of `OnAir`. Power (slice 15) can add its verdict the same way.)*
+  stays the one writer of `OnAir`. Power (slice 15) can add its verdict the same way.)* *(Slice 15:
+  done for power. `isTransmitting()` is `eligibleToTransmit() && backhaulAllows() && powerAllows()`;
+  `world/SitePower` calls `refreshRegistration()` on a cell whose latch changed or on every tracked cell
+  when `requirePower` flips. The column's buffer is its base's.)*
 
 - **[x] Decided in slice 7 (NOTES.md, slice 7, decision 1).** The dependency set is the union of
   `BinTraversal.binsAlong` over the marched rays' endpoints, as §3B.2 words it, not the bins of the
@@ -1496,12 +1584,28 @@ centroid, so 7 × 16 + 1 = 113). (g)
   slice 12, decision 10): a state changes only on an event (weather, a block on a path, a pairing, a
   cell coming or going), at most once per `backhaulRecomputeTicks`, and nothing oscillates; with
   `requireBackhaul` off the registry never moves (pinned at runtime). Still a note for power, slice 15.)*
+  *(Slice 15: power has its hysteresis, the 10 % restart band, so a cell never flips every tick. But a
+  cell on an undersized supply still cycles: a 30 dBm sector (70.7 FE/t) on one generator (40) goes off
+  for 26 ticks and on for 34, measured, and each switch moves the site registry version. So every fixed
+  receiver in the dimension re-evaluates about twice every 3 s while such a cell runs, held to
+  `fixedReceiverTickBudgetMs` by the ticker. With `requirePower` off nothing moves (pinned). Owner
+  decision, still open: accept it (it is the honest brownout, and the budget caps the cost), or widen
+  the band (`powerRestartFraction` is already a setting; 0.5 makes the same cell cycle about 5× more
+  slowly), or add a minimum off time.)*
 - **[ ] Open, minor (from row 9b).** `RadioLinkGameTests.two_hundred_radio_links_in_steady_state`
   asserts the median of three windows under 100 µs. Row 9b's two runs measured medians of 58.9 and
   48.9 µs/tick (single windows up to 66.4), above the 26-48 of every earlier run, on code that
   differs from row 9a's only in comments. The done-when holds in every run, but a busier machine narrows the margin. If the test ever
   fails with no code change, look at the scan's share first (the timing-wheel follow-up above) before
-  touching the bound.
+  touching the bound. *(Slice 15: it failed in three of the slice's first eight runs (126.6, 120.6 and
+  113.7 µs; the others 98.2, 96.5, 76.9, 37.0 and 36.1). Measured again with a control, alternately and
+  minutes apart, each on a fresh game-test world: slice 14's code (`a1e9611`) 18.1 and 21.1 µs, slice
+  15's (`797d641`) 13.7 and 21.5, and 25.5 and 20.8 on the accumulated world. So slice 15 adds nothing to it. The
+  failures came while the machine was slow: the test's warm-up at interval 1 (as many replays as the
+  0.5 ms budget allows) logged 7,836-16,368 replays in 100 ticks then, against 26,912-35,332 later, and
+  the scan and setup, which slice 15 does not touch, were 2-3× slower too. The gate tracks the machine's
+  load. Not changed here: it is slice 9's test, and its bound is the 3B done-when's. When it fails, read
+  that warm-up count in the log first; if it is far below about 25,000, rerun on a quiet machine.)*
 - **[ ] Open, minor (from the Phase 3B review, fix 1).** Chunks reaching or leaving FULL now bump their
   bin, so as a player walks, cached evaluations whose rays cross the edge of the loaded area are redone
   once (correct: the edge changed what those rays read), and vanilla's two-step ticket raise can bump a
@@ -1624,10 +1728,14 @@ centroid, so 7 × 16 + 1 = 113). (g)
   `fiberRadiusBlocks` of a core site" can use `BackhaulNetwork.of(level).cores()` (every core of the
   dimension, loaded or not) with `RanCraftConfig.fiberRadiusBlocks()` (horizontal, as the graph's
   fiber rule).
-- **[ ] Note for slice 15 (from slice 12).** Power can feed `eligibleToTransmit()` as the column rules
-  do. Then an unpowered cell leaves the backhaul graph too (`noteCell(false)`), so its site stops
-  relaying, which is what a dark site does; decide whether that is wanted before wiring it there
-  rather than in `isTransmitting()` beside the backhaul verdict.
+- **[x] Decided in slice 15 (from slice 12).** Power can feed `eligibleToTransmit()` as the column
+  rules do. Then an unpowered cell leaves the backhaul graph too (`noteCell(false)`), so its site stops
+  relaying, which is what a dark site does; decide whether that is wanted before wiring it there rather
+  than in `isTransmitting()` beside the backhaul verdict. *(Slice 15: beside the backhaul verdict, in
+  `isTransmitting()` (NOTES.md, slice 15, decision 1). A cell out of energy stays in the backhaul graph,
+  so its site keeps relaying between its dishes, and a power flap changes no backhaul topology. §3C.5
+  puts only antennas on the power budget, so the dishes (the site's transport) are not dark when the
+  radio is.)*
 - **[ ] Note for slice 16 (from slice 12).** Core Site, Backhaul Dish and Link Tool are creative-only
   until their recipes exist (§3C.6: iron block, redstone block, chest; iron, copper, lightning rod;
   stick, copper).
@@ -1674,6 +1782,25 @@ centroid, so 7 × 16 + 1 = 113). (g)
 - **[ ] Note (from slice 13).** The terminal keeps one record per player, not per terminal. Every
   terminal has the same requirement, so two carried terminals share it with no difference. If a later
   slice adds a terminal with another requirement (an upgraded one), key the record by requirement.
+- **[ ] Note for slice 16 (from slice 15).** The Site Generator is creative-only until its recipe
+  exists (§3C.6: furnace, copper, redstone; mid). It already drops itself and is pickaxe-mineable
+  (`HarvestGameTests`). Its art is a placeholder (the blast furnace's textures).
+- **[ ] Owner decision (from slice 15).** Turning `requirePower` on in a running or existing world takes
+  every cell off the air at the next tick, because every buffer starts empty with its latch off (a v3
+  save, a new antenna, and a v4 one that never ran with the flag on). Each comes back once it is fed past
+  10 %. That is §3C.5's "out of energy → off air", and turning the flag on is the server's choice, so it
+  was kept (NOTES.md, slice 15, decision 10). Option: grant every loaded cell a full buffer the first
+  time the flag turns on in a world (a per-world marker in a `SavedData`, as the slice 10 note above
+  describes for another case).
+- **[ ] Note for Phase 4 (from slice 15): the cell-sleep seam.** `SitePower.of(level).servedCount(cellId,
+  now)` is the number of distinct receivers the cell served in the last `servedWindowMinutes` (5; 1 to
+  120); `util/ServedReceivers` is the pure part. Three limits for a sleep rule built on it:
+  - it is not saved, so after a restart a zero means nothing until a whole window has passed;
+  - it counts what the server evaluates: a player carrying a device or wearing a lens, and fixed
+    devices. A player carrying nothing is not evaluated, so not counted;
+  - a fixed receiver reports when its serving cell changes or every 20 s
+    (`SitePower.SERVED_NOTE_INTERVAL_TICKS`), so it can drop out up to 20 s early. The window's minimum
+    of 1 minute keeps that harmless.
 
 ### Phase 3B review round 1: the four findings
 
