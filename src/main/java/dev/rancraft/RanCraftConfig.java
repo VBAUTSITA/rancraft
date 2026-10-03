@@ -7,6 +7,7 @@ import dev.rancraft.rf.BackhaulGraph;
 import dev.rancraft.rf.BlerModel;
 import dev.rancraft.rf.DriveTestLog;
 import dev.rancraft.rf.LocatorParams;
+import dev.rancraft.rf.PowerModel;
 import dev.rancraft.rf.RfConfig;
 import dev.rancraft.rf.RayMarcher;
 import net.neoforged.neoforge.common.ModConfigSpec;
@@ -274,6 +275,64 @@ public final class RanCraftConfig {
                     "radio sensing; it stands in for a high-rate sensor feed that needs a high-capacity link.")
             .defineInRange("scannerRangeBlocks", DEFAULT_SCANNER_RANGE_BLOCKS, 1.0, 64.0);
 
+    // ---- Phase 3: power (§3C.5) -----------------------------------------------------------------
+    // requirePower is the spec's (§5). The rest are the spec's figures (§3C.5), made tunable because
+    // everything tunable goes here (NOTES.md, slice 15): the PowerModel's figures, the buffer and its
+    // restart fraction, the Site Generator's output and the served-receivers window. None is read by
+    // the engine, so none crosses into RfConfig: the model is built by powerModel().
+
+    public static final ModConfigSpec.BooleanValue REQUIRE_POWER = BUILDER
+            .comment("When true, a cell on the air draws energy (FE) from its buffer every tick and goes off the",
+                    "air when the buffer runs out; it comes back once the buffer is above powerRestartFraction.",
+                    "A Site Generator next to an antenna (or any mast of its column) fills it. Off by default,",
+                    "like requireRedstone and requireBackhaul, so an existing world keeps working; while it is off",
+                    "antennas take no energy and a generator next to one burns nothing.")
+            .define("requirePower", false);
+
+    public static final ModConfigSpec.IntValue POWER_BUFFER_FE = BUILDER
+            .comment("Energy one cell can hold, in FE: a Sector Antenna's own buffer, or a mast column's (its base",
+                    "holds it). 10000 FE runs a sector at 20 dBm for about 47 s and at 30 dBm for about 7 s.")
+            .defineInRange("powerBufferFe", 10_000, 100, 10_000_000);
+
+    public static final ModConfigSpec.DoubleValue POWER_RESTART_FRACTION = BUILDER
+            .comment("A cell that ran out of energy comes back on the air only once its buffer holds more than this",
+                    "fraction of powerBufferFe (0.1 = 10 %), so a cell on a weak supply does not flap on and off.")
+            .defineInRange("powerRestartFraction", 0.10, 0.0, 1.0);
+
+    public static final ModConfigSpec.DoubleValue POWER_BASE_FE_MAST = BUILDER
+            .comment("Power model: the base load of a Signal Mast's radio, FE per tick on the air.",
+                    "FE/tick = baseFe + powerPaFePerWatt x P_rf_W / powerPaEfficiency, P_rf_W = 10^((txDbm - 30) / 10).")
+            .defineInRange("powerBaseFeMast", PowerModel.DEFAULT_BASE_FE_MAST, 0.0, 100_000.0);
+
+    public static final ModConfigSpec.DoubleValue POWER_BASE_FE_SECTOR = BUILDER
+            .comment("Power model: the base load of a Sector Antenna's radio, FE per tick on the air.")
+            .defineInRange("powerBaseFeSector", PowerModel.DEFAULT_BASE_FE_SECTOR, 0.0, 100_000.0);
+
+    public static final ModConfigSpec.DoubleValue POWER_BASE_FE_WIDEBAND = BUILDER
+            .comment("Power model: added to the base load of a radio with a Wideband Radio Unit (tier 3), FE per tick.")
+            .defineInRange("powerBaseFeWideband", PowerModel.DEFAULT_BASE_FE_WIDEBAND, 0.0, 100_000.0);
+
+    public static final ModConfigSpec.DoubleValue POWER_PA_FE_PER_WATT = BUILDER
+            .comment("Power model: FE per tick per watt the power amplifier draws from the supply. Sets the scale",
+                    "of the game's energy unit; FE has no fixed exchange rate to joules.")
+            .defineInRange("powerPaFePerWatt", PowerModel.DEFAULT_PA_FE_PER_WATT, 0.0, 100_000.0);
+
+    public static final ModConfigSpec.DoubleValue POWER_PA_EFFICIENCY = BUILDER
+            .comment("Power model: the power amplifier's efficiency, RF watts out per watt in. 0.3 is in the range",
+                    "of a real macro-cell amplifier. 10 dB more Tx power always costs 10x the amplifier's energy.")
+            .defineInRange("powerPaEfficiency", PowerModel.DEFAULT_PA_EFFICIENCY, 0.01, 1.0);
+
+    public static final ModConfigSpec.IntValue SITE_GENERATOR_FE_PER_TICK = BUILDER
+            .comment("Site Generator: FE it makes per tick while it burns. It burns furnace fuel only while what it",
+                    "makes is taken, so fuel lasts exactly as long as the energy drawn allows (a coal is 1600",
+                    "burn ticks: 64000 FE at 40 FE/t).")
+            .defineInRange("siteGeneratorFePerTick", 40, 1, 100_000);
+
+    public static final ModConfigSpec.IntValue SERVED_WINDOW_MINUTES = BUILDER
+            .comment("Seam for cell sleep (Phase 4): each cell counts the distinct receivers it served in the last",
+                    "this-many minutes. Shown by /rancraft power status; nothing else reads it yet.")
+            .defineInRange("servedWindowMinutes", 5, 1, 120);
+
     public static final ModConfigSpec SPEC = BUILDER.build();
 
     // ---- RF Vision Step 3a: the drive-test trail (CLIENT) --------------------------------------
@@ -411,6 +470,47 @@ public final class RanCraftConfig {
      */
     public static double scannerRangeBlocks() {
         return SPEC.isLoaded() ? SCANNER_RANGE_BLOCKS.get() : SCANNER_RANGE_BLOCKS.getDefault();
+    }
+
+    /**
+     * Whether a cell needs energy to stay on the air (§3C.5). Gameplay, deliberately not in
+     * {@link RfConfig}. Falls back to the default (off) if read before the config has loaded.
+     */
+    public static boolean requirePower() {
+        return SPEC.isLoaded() ? REQUIRE_POWER.get() : REQUIRE_POWER.getDefault();
+    }
+
+    /** A cell's buffer, in FE (§3C.5: 10,000). Falls back to the default before the config has loaded. */
+    public static int powerBufferFe() {
+        return SPEC.isLoaded() ? POWER_BUFFER_FE.get() : POWER_BUFFER_FE.getDefault();
+    }
+
+    /** The restart fraction (§3C.5: above 10 %). Falls back to the default before the config has loaded. */
+    public static double powerRestartFraction() {
+        return SPEC.isLoaded() ? POWER_RESTART_FRACTION.get() : POWER_RESTART_FRACTION.getDefault();
+    }
+
+    /** The Site Generator's output while it burns (§3C.5: 40 FE/t). Falls back to the default before load. */
+    public static int siteGeneratorFePerTick() {
+        return SPEC.isLoaded() ? SITE_GENERATOR_FE_PER_TICK.get() : SITE_GENERATOR_FE_PER_TICK.getDefault();
+    }
+
+    /** The served-receivers window in ticks (the seam, §3C.5). Falls back to the default before load. */
+    public static long servedWindowTicks() {
+        int minutes = SPEC.isLoaded() ? SERVED_WINDOW_MINUTES.get() : SERVED_WINDOW_MINUTES.getDefault();
+        return minutes * 60L * 20L;
+    }
+
+    /**
+     * The power model's figures (§3C.5), built from this config; {@link PowerModel#DEFAULT} before the
+     * config has loaded. Not part of {@link #snapshot()}: the engine never reads it.
+     */
+    public static PowerModel powerModel() {
+        if (!SPEC.isLoaded()) {
+            return PowerModel.DEFAULT;
+        }
+        return new PowerModel(POWER_BASE_FE_MAST.get(), POWER_BASE_FE_SECTOR.get(), POWER_BASE_FE_WIDEBAND.get(),
+                POWER_PA_FE_PER_WATT.get(), POWER_PA_EFFICIENCY.get());
     }
 
     /** Immutable snapshot handed to the engine, so the engine never touches a config API. */

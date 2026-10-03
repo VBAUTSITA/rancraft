@@ -13,6 +13,7 @@ import dev.rancraft.rf.RfConfig;
 import dev.rancraft.rf.RfEngine;
 import dev.rancraft.rf.ServiceLevel;
 import dev.rancraft.rf.SignalSample;
+import dev.rancraft.util.ServedReceivers;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
@@ -422,6 +423,16 @@ public final class FixedReceiverTicker {
         }
         dispatch(level, BlockPos.of(key), entry.device, sample, bands, config, gameTime,
                 BackhaulNetwork.serviceCapAt(level, sample.servingCellId()));
+        // Slice 15: the served-receivers seam (SitePower), keyed by the packed position. Reported only
+        // when the serving cell changes or the last report is SERVED_NOTE_INTERVAL_TICKS old: a map
+        // write on every turn cost 0.7-3.5 us here (measured, cache misses in this hot loop).
+        long serving = sample.servingCellId();
+        if (ServedReceivers.due(entry.servedCell, entry.servedNotedTick, serving, gameTime,
+                SitePower.SERVED_NOTE_INTERVAL_TICKS)) {
+            SitePower.noteServed(level, serving, key, gameTime);
+            entry.servedCell = serving;
+            entry.servedNotedTick = gameTime;
+        }
     }
 
     /**

@@ -7,6 +7,7 @@ import dev.rancraft.block.RadioLinkReceiverBlock;
 import dev.rancraft.block.RadioLinkTransmitterBlock;
 import dev.rancraft.block.SectorAntennaBlock;
 import dev.rancraft.block.SignalMastBlock;
+import dev.rancraft.block.SiteGeneratorBlock;
 import net.minecraft.world.level.block.SoundType;
 import net.minecraft.world.level.block.state.BlockBehaviour;
 import net.minecraft.world.level.material.MapColor;
@@ -80,6 +81,17 @@ public final class ModBlocks {
                     .strength(3.0F, 6.0F)
                     .requiresCorrectToolForDrops()
                     .sound(SoundType.METAL));
+
+    /** Phase 3 slice 15, §3C.5: burns furnace fuel and feeds the FE receivers next to it. */
+    public static final DeferredBlock<SiteGeneratorBlock> SITE_GENERATOR = BLOCKS.registerBlock(
+            "site_generator",
+            SiteGeneratorBlock::new,
+            BlockBehaviour.Properties.of()
+                    .mapColor(MapColor.STONE)
+                    .strength(3.5F, 6.0F)
+                    .requiresCorrectToolForDrops()
+                    .sound(SoundType.METAL)
+                    .lightLevel(state -> state.getValue(SiteGeneratorBlock.LIT) ? SiteGeneratorBlock.LIT_LIGHT : 0));
 
     public static void register(IEventBus modBus) {
         BLOCKS.register(modBus);

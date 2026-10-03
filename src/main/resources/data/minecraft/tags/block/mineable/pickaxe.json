@@ -6,6 +6,7 @@
     "rancraft:radio_link_transmitter",
     "rancraft:radio_link_receiver",
     "rancraft:core_site",
-    "rancraft:backhaul_dish"
+    "rancraft:backhaul_dish",
+    "rancraft:site_generator"
   ]
 }

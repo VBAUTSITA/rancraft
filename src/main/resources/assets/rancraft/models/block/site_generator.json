@@ -1,0 +1,9 @@
+{
+  "_comment": "Placeholder art: vanilla blast furnace textures, no PNGs shipped. The grate glows while the generator burns (the server LIT). Swap when real art exists.",
+  "parent": "minecraft:block/cube_bottom_top",
+  "textures": {
+    "top": "minecraft:block/blast_furnace_top",
+    "side": "minecraft:block/blast_furnace_front",
+    "bottom": "minecraft:block/blast_furnace_top"
+  }
+}

@@ -7,6 +7,7 @@ import dev.rancraft.block.RadioLinkReceiverBlockEntity;
 import dev.rancraft.block.RadioLinkTransmitterBlockEntity;
 import dev.rancraft.block.SectorAntennaBlockEntity;
 import dev.rancraft.block.SignalMastBlockEntity;
+import dev.rancraft.block.SiteGeneratorBlockEntity;
 import java.util.function.Supplier;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.world.level.block.entity.BlockEntityType;
@@ -49,6 +50,11 @@ public final class ModBlockEntities {
     public static final Supplier<BlockEntityType<BackhaulDishBlockEntity>> BACKHAUL_DISH =
             BLOCK_ENTITIES.register("backhaul_dish", () -> BlockEntityType.Builder
                     .of(BackhaulDishBlockEntity::new, ModBlocks.BACKHAUL_DISH.get())
+                    .build(null));
+
+    public static final Supplier<BlockEntityType<SiteGeneratorBlockEntity>> SITE_GENERATOR =
+            BLOCK_ENTITIES.register("site_generator", () -> BlockEntityType.Builder
+                    .of(SiteGeneratorBlockEntity::new, ModBlocks.SITE_GENERATOR.get())
                     .build(null));
 
     public static void register(IEventBus modBus) {

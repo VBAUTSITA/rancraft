@@ -6,11 +6,15 @@ import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 import com.mojang.brigadier.context.CommandContext;
 import dev.rancraft.RanCraft;
 import dev.rancraft.RanCraftConfig;
+import dev.rancraft.block.AntennaBlockEntity;
+import dev.rancraft.block.SectorAntennaBlockEntity;
 import dev.rancraft.rf.BackhaulGraph.BackhaulState;
 import dev.rancraft.rf.CellParams;
 import dev.rancraft.rf.PciConflict;
 import dev.rancraft.rf.PciPlanner;
+import dev.rancraft.rf.PowerModel;
 import dev.rancraft.world.BackhaulNetwork;
+import dev.rancraft.world.SitePower;
 import dev.rancraft.world.SiteRegistry;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -40,6 +44,11 @@ import net.neoforged.neoforge.event.RegisterCommandsEvent;
  * source that are off the air for want of backhaul, the LIMITED cells, and every microwave link near
  * it with its RSL, margin, Fresnel state and rain loss, as the server's backhaul network last worked
  * them out ({@link BackhaulNetwork}). It formats; it judges nothing.
+ *
+ * <p>{@code /rancraft power status [radius]} (Phase 3 slice 15, §3C.5) -- lists the loaded cells near
+ * the source with their draw (FE/t), their buffer, whether power keeps them on or off the air, and
+ * how many receivers each served in the served-receivers window (the Phase 4 seam), as
+ * {@link SitePower} keeps them. It formats; it judges nothing.
  */
 @EventBusSubscriber(modid = RanCraft.MOD_ID)
 public final class RanCraftCommands {
@@ -72,10 +81,17 @@ public final class RanCraftCommands {
                         .executes(context -> backhaulStatus(
                                 context, DoubleArgumentType.getDouble(context, "radius"))));
 
+        LiteralArgumentBuilder<CommandSourceStack> powerStatus = Commands.literal("status")
+                .executes(context -> powerStatus(context, DEFAULT_RADIUS_BLOCKS))
+                .then(Commands.argument("radius", DoubleArgumentType.doubleArg(MIN_RADIUS, MAX_RADIUS))
+                        .executes(context -> powerStatus(
+                                context, DoubleArgumentType.getDouble(context, "radius"))));
+
         dispatcher.register(Commands.literal("rancraft")
                 .requires(source -> source.hasPermission(2))
                 .then(Commands.literal("pci").then(pciCheck))
-                .then(Commands.literal("backhaul").then(backhaulStatus)));
+                .then(Commands.literal("backhaul").then(backhaulStatus))
+                .then(Commands.literal("power").then(powerStatus)));
     }
 
     private static int checkPci(CommandContext<CommandSourceStack> context, double radius) {
@@ -224,6 +240,67 @@ public final class RanCraftCommands {
             source.sendSuccess(() -> Component.literal(line).withStyle(colour), false);
         }
         more(source, cells.size());
+    }
+
+    // ---- /rancraft power status -------------------------------------------------------------------
+
+    /**
+     * The header (the flag, the buffer, the restart level, the count and the served window), then one
+     * line per loaded cell within the radius, nearest first, capped at {@value #MAX_LINES}: kind, Tx
+     * power, draw, buffer, state and receivers served in the window. Returns the number of cells.
+     */
+    private static int powerStatus(CommandContext<CommandSourceStack> context, double radius) {
+        CommandSourceStack source = context.getSource();
+        ServerLevel level = source.getLevel();
+        Vec3 origin = source.getPosition();
+        double radiusSq = radius * radius;
+        SitePower power = SitePower.of(level);
+        boolean required = RanCraftConfig.requirePower();
+        int capacity = RanCraftConfig.powerBufferFe();
+        double restartFraction = RanCraftConfig.powerRestartFraction();
+        PowerModel model = RanCraftConfig.powerModel();
+        long now = level.getGameTime();
+
+        List<AntennaBlockEntity> cells = new ArrayList<>();
+        for (AntennaBlockEntity cell : power.cells()) {
+            if (!cell.isRemoved() && cell.getBlockPos().distToCenterSqr(origin) <= radiusSq) {
+                cells.add(cell);
+            }
+        }
+        cells.sort(Comparator.comparingDouble(cell -> cell.getBlockPos().distToCenterSqr(origin)));
+
+        long windowMinutes = RanCraftConfig.servedWindowTicks() / (60L * 20L);
+        int count = cells.size();
+        source.sendSuccess(() -> Component.translatable("commands.rancraft.power.header",
+                format(radius), required ? "ON" : "OFF", capacity, Math.round(restartFraction * 100.0),
+                count, windowMinutes).withStyle(ChatFormatting.YELLOW), false);
+        if (cells.isEmpty()) {
+            source.sendSuccess(() -> Component.translatable("commands.rancraft.power.none")
+                    .withStyle(ChatFormatting.GRAY), false);
+            return 0;
+        }
+        for (AntennaBlockEntity cell : cells.subList(0, Math.min(count, MAX_LINES))) {
+            int stored = cell.energyBuffer().stored();
+            String state;
+            ChatFormatting colour;
+            if (!cell.onAir()) {
+                boolean outOfEnergy = required && !cell.energyBuffer().on();
+                state = outOfEnergy
+                        ? "OFF: out of energy (back above " + (long) Math.floor(restartFraction * capacity) + " FE)"
+                        : "off the air (not for power)";
+                colour = outOfEnergy ? ChatFormatting.RED : ChatFormatting.GRAY;
+            } else {
+                state = required ? "on the air" : "on the air (requirePower is off: no draw)";
+                colour = ChatFormatting.GREEN;
+            }
+            String line = String.format(Locale.ROOT, "  %s %s %.0f dBm: %.2f FE/t, %d/%d FE (%d%%), %s, served %d",
+                    xyz(cell.getBlockPos()), cell instanceof SectorAntennaBlockEntity ? "sector" : "mast",
+                    cell.txPowerDbm(), cell.fePerTick(model), stored, capacity,
+                    Math.round(100.0 * stored / capacity), state, power.servedCount(cell.cellId(), now));
+            source.sendSuccess(() -> Component.literal(line).withStyle(colour), false);
+        }
+        more(source, count);
+        return count;
     }
 
     private static void more(CommandSourceStack source, int total) {

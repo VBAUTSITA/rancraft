@@ -538,6 +538,8 @@ public final class SignalTicker {
             // Replays are dispatched too (§3A.3). The sample keeps the tick of the evaluation it
             // replays, which is what devices are idempotent on.
             dispatch(player, devices, cached.sample(), bands, config, level, level.getGameTime(), cap);
+            // Slice 15: the served-receivers seam (SitePower). A replay is still a receiver served.
+            SitePower.noteServed(level, cached.sample().servingCellId(), receiverKey, level.getGameTime());
             return;
         }
 
@@ -581,6 +583,7 @@ public final class SignalTicker {
         ServiceLevel cap = BackhaulNetwork.serviceCapAt(level, sample.servingCellId());
         send(player, payload.withServiceCap(cap), links);
         dispatch(player, devices, sample, bands, config, level, gameTime, cap);
+        SitePower.noteServed(level, sample.servingCellId(), receiverKey, gameTime);
     }
 
     /** The sample always; the link rays when the lens wants them ({@code links} is null otherwise). */

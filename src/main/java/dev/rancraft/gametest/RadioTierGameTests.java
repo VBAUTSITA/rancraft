@@ -174,7 +174,7 @@ public final class RadioTierGameTests {
         // Saved data, as the chunk load hands it over before onLoad.
         loadSaved(level, onBand3500, 2, "band_3500", 0, null);
         loadSaved(level, onBand1800, 2, "band_1800", 7, null);
-        loadSaved(level, savedV3, AntennaBlockEntity.DATA_VERSION, "band_900", 9, 3);
+        loadSaved(level, savedV3, 3, "band_900", 9, 3);
         loadSaved(level, mast, 2, "band_900", 11, null);
 
         check(helper, onBand3500.radioTier() == 3 && onBand3500.hasWidebandUnit(),

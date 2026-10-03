@@ -66,6 +66,9 @@ public final class ModItems {
 
     public static final DeferredItem<BlockItem> BACKHAUL_DISH = ITEMS.registerSimpleBlockItem(ModBlocks.BACKHAUL_DISH);
 
+    /** Phase 3 slice 15, §3C.5. No recipe yet (§3C.6, slice 16): creative-only for now. */
+    public static final DeferredItem<BlockItem> SITE_GENERATOR = ITEMS.registerSimpleBlockItem(ModBlocks.SITE_GENERATOR);
+
     /** Phase 3 slice 12, §3C.2: pairs two Backhaul Dishes. No recipe yet (§3C.6, slice 16). */
     public static final DeferredItem<LinkToolItem> LINK_TOOL = ITEMS.registerItem(
             "link_tool",

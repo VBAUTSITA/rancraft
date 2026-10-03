@@ -2,6 +2,7 @@ package dev.rancraft.world;
 
 import dev.rancraft.RanCraft;
 import dev.rancraft.device.FixedDevice;
+import dev.rancraft.rf.ReceiverState;
 import dev.rancraft.rf.ReceiverStateStore;
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
@@ -76,6 +77,13 @@ public final class FixedReceiverRegistry {
         FixedDevice device;
         /** The last evaluation, replayed while nothing it depends on changed. Ticker only. */
         FixedReceiverTicker.Cached cached;
+        /**
+         * The serving cell this receiver last reported to the served-receivers seam, and when (slice 15,
+         * {@link SitePower}). Ticker only: it reports again only when the cell changes or the report is
+         * {@link SitePower#SERVED_NOTE_INTERVAL_TICKS} old, so most turns touch no map.
+         */
+        long servedCell = ReceiverState.NO_CELL;
+        long servedNotedTick = Long.MIN_VALUE / 2;
 
         Entry(long key, FixedDevice device) {
             this.key = key;

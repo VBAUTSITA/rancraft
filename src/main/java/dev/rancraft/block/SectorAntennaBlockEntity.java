@@ -54,6 +54,12 @@ public class SectorAntennaBlockEntity extends AntennaBlockEntity implements Clea
         return radioTier >= RadioTier.WIDEBAND;
     }
 
+    /** A sector's radio: base load 4 FE/t, plus 4 with a Wideband Radio Unit (§3C.5, slice 15). */
+    @Override
+    protected boolean sectorRadio() {
+        return true;
+    }
+
     /**
      * Fits a Wideband Radio Unit: the radio becomes tier {@link RadioTier#WIDEBAND}. Server side; the
      * caller consumes the item. Returns false (and changes nothing) when one is already fitted.

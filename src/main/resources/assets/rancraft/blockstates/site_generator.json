@@ -1,0 +1,6 @@
+{
+  "variants": {
+    "lit=false": { "model": "rancraft:block/site_generator" },
+    "lit=true":  { "model": "rancraft:block/site_generator_on" }
+  }
+}

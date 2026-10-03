@@ -121,5 +121,20 @@
   "item.rancraft.proximity_scanner": "Proximity Scanner",
   "item.rancraft.proximity_scanner.tooltip.what": "Held: lists the hostile mobs around you on the HUD",
   "item.rancraft.proximity_scanner.tooltip.needs": "Needs %s service on a band of tier %s or higher (band_3500)",
-  "item.rancraft.proximity_scanner.tooltip.honest": "Not radar: a sensor feed that only a high-capacity link can carry"
+  "item.rancraft.proximity_scanner.tooltip.honest": "Not radar: a sensor feed that only a high-capacity link can carry",
+  "block.rancraft.site_generator": "Site Generator",
+  "block.rancraft.site_generator.tooltip": "Burns furnace fuel and feeds the antennas next to it (any mast of a tower feeds the tower)",
+  "block.rancraft.site_generator.tooltip.burn": "Burns only while its power is taken: 10 dB more Tx power, 10x the amplifier's fuel",
+  "block.rancraft.site_generator.tooltip.use": "Use with fuel: fill  Use: state  Sneak + use (empty hand): take the fuel out",
+  "rancraft.site_generator.burning": "Site Generator: burning, %s s left on this fuel, %s FE/t while its power is taken. Fuel: %s",
+  "rancraft.site_generator.idle": "Site Generator: idle, %s. Fuel: %s",
+  "rancraft.site_generator.reason.no_fuel": "no fuel",
+  "rancraft.site_generator.reason.no_taker": "nothing next to it takes power now (no antenna, or their buffers are full)",
+  "rancraft.site_generator.reason.power_off": "requirePower is off on this server, so antennas take no power",
+  "rancraft.site_generator.fuel": "%s x %s",
+  "rancraft.site_generator.fuel.empty": "empty",
+  "rancraft.site_generator.fuelled": "Site Generator: fuel slot %s",
+  "rancraft.site_generator.taken": "Site Generator: took out %s",
+  "commands.rancraft.power.header": "Power within %s blocks: requirePower %s, buffer %s FE, back on above %s%%; %s cell(s) here, served window %s min",
+  "commands.rancraft.power.none": "  no cells loaded here"
 }

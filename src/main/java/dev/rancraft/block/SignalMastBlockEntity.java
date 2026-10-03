@@ -10,6 +10,7 @@ import net.minecraft.core.HolderLookup;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.block.state.BlockState;
+import org.jetbrains.annotations.Nullable;
 
 /**
  * The omnidirectional Signal Mast: the cheap early-game site.
@@ -129,6 +130,58 @@ public class SignalMastBlockEntity extends AntennaBlockEntity {
         return MastColumn.powered(level, pos, column);
     }
 
+    /**
+     * Phase 3 slice 15 (§3C.5): "the mast column's base holds the buffer". Energy offered to any mast of
+     * the column goes to the base, so a generator at the foot of a tower or beside any mast of it feeds
+     * the cell. A mounting pole's masts feed the Sector Antenna on top instead: the pole carries the
+     * power up to the radio it holds, as a real pole's cabling does. {@code null} when this is no longer
+     * a mast, or the owner's entity is missing. Works out the column on every call (a few block reads),
+     * so the answer is never stale after the column changes.
+     */
+    @Override
+    public @Nullable AntennaBlockEntity bufferOwner() {
+        if (level == null) {
+            return this;
+        }
+        BlockPos pos = getBlockPos();
+        ColumnScan.Bounds column = MastColumn.bounds(level, pos);
+        if (column == null) {
+            return null;
+        }
+        if (MastColumn.mountingPole(level, pos, column)) {
+            BlockPos top = new BlockPos(pos.getX(), column.highestY() + 1, pos.getZ());
+            return level.getBlockEntity(top) instanceof SectorAntennaBlockEntity sector ? sector : null;
+        }
+        if (column.baseY() == pos.getY()) {
+            return this;
+        }
+        return level.getBlockEntity(MastColumn.basePos(pos, column)) instanceof SignalMastBlockEntity base
+                ? base : null;
+    }
+
+    /**
+     * A base that has just become structure (a mast was placed under it) hands its energy and its latch
+     * to the column's new base, so extending a tower downward does not strand the fuel already burnt.
+     * What does not fit the new base's buffer is lost. Slice 15.
+     */
+    private void handEnergyDown(ServerLevel serverLevel) {
+        if (energyBuffer().stored() == 0 && !energyBuffer().on()) {
+            return;
+        }
+        ColumnScan.Bounds column = MastColumn.bounds(serverLevel, getBlockPos());
+        if (column == null || column.baseY() == getBlockPos().getY()) {
+            return;
+        }
+        if (serverLevel.getBlockEntity(MastColumn.basePos(getBlockPos(), column)) instanceof SignalMastBlockEntity base) {
+            int capacity = RanCraftConfig.powerBufferFe();
+            base.energyBuffer().receive(energyBuffer().stored(), capacity, false);
+            base.energyBuffer().load(base.energyBuffer().stored(), base.energyBuffer().on() || energyBuffer().on());
+            base.markEnergyChanged();
+            energyBuffer().clear();
+            markEnergyChanged();
+        }
+    }
+
     /** A mast is planned only once it owns its column's cell; see the class javadoc. */
     @Override
     protected boolean readyForPciPlan() {
@@ -149,10 +202,13 @@ public class SignalMastBlockEntity extends AntennaBlockEntity {
      */
     @Override
     public void refreshRegistration() {
-        if (level instanceof ServerLevel) {
+        if (level instanceof ServerLevel serverLevel) {
             boolean base = isColumnBase();
             boolean promoted = base && seenAsStructure;
             seenAsStructure = !base;
+            if (!base) {
+                handEnergyDown(serverLevel);
+            }
             if (promoted) {
                 // The mast (or masts) under it went. A fresh plan, as for a new mast; it plans, then
                 // refreshes again (not promoted any more) to register the result.

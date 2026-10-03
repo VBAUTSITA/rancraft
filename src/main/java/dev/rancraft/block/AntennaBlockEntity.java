@@ -6,9 +6,12 @@ import dev.rancraft.data.RfDataLoader;
 import dev.rancraft.rf.CellParams;
 import dev.rancraft.rf.ParabolicPattern;
 import dev.rancraft.rf.PciPlanner;
+import dev.rancraft.rf.PowerModel;
 import dev.rancraft.rf.RadioTier;
 import dev.rancraft.util.ColumnScan;
+import dev.rancraft.util.EnergyBuffer;
 import dev.rancraft.world.BackhaulNetwork;
+import dev.rancraft.world.SitePower;
 import dev.rancraft.world.SiteRegistry;
 import java.util.concurrent.atomic.AtomicInteger;
 import net.minecraft.core.BlockPos;
@@ -23,6 +26,8 @@ import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.entity.BlockEntityType;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.properties.BlockStateProperties;
+import net.neoforged.neoforge.energy.IEnergyStorage;
+import org.jetbrains.annotations.Nullable;
 
 /**
  * Everything a radio site persists, shared by the omni Signal Mast and the Sector Antenna.
@@ -33,7 +38,9 @@ import net.minecraft.world.level.block.state.properties.BlockStateProperties;
  * a three-sector site is three blocks at azimuths 0/120/240, and Phase 4's planning table will group
  * them by proximity.
  *
- * <p>Passive. Antennas never tick; the receiver drives evaluation, so idle sites cost nothing.
+ * <p>Passive. Antennas never tick; the receiver drives evaluation, so idle sites cost nothing. With
+ * {@code requirePower} on (Phase 3 slice 15, §3C.5) a cell on the air pays its energy once a tick, but
+ * the antenna still does not tick: the dimension's {@link SitePower} draws from every cell's buffer.
  */
 public abstract class AntennaBlockEntity extends BlockEntity {
 
@@ -48,12 +55,21 @@ public abstract class AntennaBlockEntity extends BlockEntity {
      *       {@code max(blockDefault, tierOf(currentBand))} ({@link RadioTier#migrated}), so a sector
      *       already on band_3500 is grandfathered to tier 3. A PCI of 0 in a v2 save stays a
      *       deliberate PCI 0: only a v1 save's means "never assigned".
+     *   <li><b>4</b> -- Phase 3 slice 15 (§3C.5). Appends {@code Energy} (FE in the buffer) and
+     *       {@code PowerOn} (the restart latch, {@link EnergyBuffer#on()}). An older save has neither:
+     *       an empty buffer, latch off. With {@code requirePower} off (the default) neither is read.
      * </ul>
      */
-    public static final int DATA_VERSION = 3;
+    public static final int DATA_VERSION = 4;
 
     /** The saved radio tier (v3). Also in the update tag, as all saved fields are: it is public hardware. */
     public static final String RADIO_TIER_TAG = "RadioTier";
+
+    /** The saved buffer (v4): FE held. Server state: kept out of the update tag ({@link #getUpdateTag}). */
+    public static final String ENERGY_TAG = "Energy";
+
+    /** The saved restart latch (v4). Server state: kept out of the update tag. */
+    public static final String POWER_ON_TAG = "PowerOn";
 
     /** The update tag's on-air flag (slice 6). Never saved; see {@link #getUpdateTag}. */
     public static final String ON_AIR_TAG = "OnAir";
@@ -141,6 +157,17 @@ public abstract class AntennaBlockEntity extends BlockEntity {
 
     /** Set by {@link #onChunkUnloaded()}: the coming {@link #setRemoved()} is an unload, not a removal. */
     private boolean unloading;
+
+    /**
+     * This antenna's energy buffer and on-air latch (Phase 3 slice 15, §3C.5). Only a cell's owner uses
+     * its own: a Sector Antenna, or a mast column's base. Structure masts route energy to their owner
+     * ({@link #bufferOwner()}) and hold none, except for the moment a base becomes structure, when it
+     * hands its energy down ({@link SignalMastBlockEntity}). Server state; the client's stays empty.
+     */
+    private final EnergyBuffer energy = new EnergyBuffer();
+
+    /** What {@code Capabilities.EnergyStorage.BLOCK} returns for this antenna, on every side. */
+    private final SiteEnergyStorage energyStorage = new SiteEnergyStorage(this);
 
     protected AntennaBlockEntity(BlockEntityType<?> type, BlockPos pos, BlockState state, int defaultRadioTier) {
         super(type, pos, state);
@@ -242,6 +269,64 @@ public abstract class AntennaBlockEntity extends BlockEntity {
         return toldRadiatingY;
     }
 
+    // ---- power (Phase 3 slice 15, §3C.5) ------------------------------------
+
+    /** This antenna's own buffer; see {@link #energy}. Driven by {@link SitePower}. */
+    public EnergyBuffer energyBuffer() {
+        return energy;
+    }
+
+    /**
+     * The antenna's FE capability ({@code Capabilities.EnergyStorage.BLOCK}, registered in
+     * {@code registry.ModCapabilities}): receive-only, into {@link #bufferOwner()}'s buffer. One object
+     * per antenna for its lifetime, so a capability cache holding it stays right; NeoForge invalidates
+     * caches when the block entity comes or goes.
+     */
+    public IEnergyStorage energyStorage() {
+        return energyStorage;
+    }
+
+    /**
+     * The antenna whose buffer energy offered here goes into: this one (a Sector Antenna, or a mast
+     * column's base). A Signal Mast overrides it: any mast of a column feeds the column's base, or the
+     * Sector Antenna on top of a mounting pole. {@code null} when there is none (never for a sector).
+     */
+    public @Nullable AntennaBlockEntity bufferOwner() {
+        return this;
+    }
+
+    /** Whether this antenna's radio is a sector's (its base load, {@link PowerModel#baseFe}). */
+    protected boolean sectorRadio() {
+        return false;
+    }
+
+    /**
+     * FE per tick this cell draws while on the air: {@link PowerModel#fePerTick(boolean, int, double)}
+     * for its kind of radio, its radio tier and its Tx power.
+     */
+    public double fePerTick(PowerModel model) {
+        return model.fePerTick(sectorRadio(), radioTier, txPowerDbm);
+    }
+
+    /**
+     * Marks the chunk for saving after the buffer changed. Not {@link #setChanged()}: that also runs the
+     * comparator neighbour update ({@code updateNeighbourForOutputSignal}), every tick on a cell on the
+     * air, and an antenna has no comparator output.
+     */
+    public void markEnergyChanged() {
+        if (level != null) {
+            level.blockEntityChanged(getBlockPos());
+        }
+    }
+
+    /**
+     * The power's verdict on this cell: always yes with {@code requirePower} off (the default), on the
+     * client and with no level; otherwise the buffer's latch ({@link EnergyBuffer#on()}).
+     */
+    public boolean powerAllows() {
+        return !(level instanceof ServerLevel) || !RanCraftConfig.requirePower() || energy.on();
+    }
+
     /**
      * Applies a validated configuration. The caller is responsible for range-checking every value
      * first -- see {@code UpdateCellParamsPayload}. Never hand this a client packet unchecked.
@@ -280,13 +365,20 @@ public abstract class AntennaBlockEntity extends BlockEntity {
 
     /**
      * Whether this antenna is on the air: it would transmit by its own rules
-     * ({@link #eligibleToTransmit()}) and its backhaul allows it. Phase 3 slice 12 (§3C.2): with
-     * {@code requireBackhaul} on, a cell with no path to a Core Site (backhaul NONE) is not
-     * transmitting ({@code world.BackhaulNetwork}). With it off (the default) this is exactly
-     * {@link #eligibleToTransmit()}, as before. The client has no backhaul verdict and asks nothing.
+     * ({@link #eligibleToTransmit()}), its backhaul allows it and its power does. Phase 3 slice 12
+     * (§3C.2): with {@code requireBackhaul} on, a cell with no path to a Core Site (backhaul NONE) is
+     * not transmitting ({@code world.BackhaulNetwork}). Phase 3 slice 15 (§3C.5): with
+     * {@code requirePower} on, nor is a cell whose buffer ran out and has not refilled past the restart
+     * fraction ({@link #powerAllows()}). With both off (the default) this is exactly
+     * {@link #eligibleToTransmit()}, as before. The client has no backhaul or power verdict and asks
+     * nothing.
+     *
+     * <p>Power sits beside backhaul here, not in {@link #eligibleToTransmit()} (NOTES.md, slice 15,
+     * decision 1): a cell out of energy stays in the backhaul graph, so its site keeps relaying between
+     * its dishes. The dishes are the site's transport and are not on the power budget.
      */
     public boolean isTransmitting() {
-        return eligibleToTransmit() && backhaulAllows();
+        return eligibleToTransmit() && backhaulAllows() && powerAllows();
     }
 
     /**
@@ -333,8 +425,11 @@ public abstract class AntennaBlockEntity extends BlockEntity {
     @Override
     public void setRemoved() {
         unregister();
-        if (!unloading && level instanceof ServerLevel serverLevel) {
-            BackhaulNetwork.of(serverLevel).removeCell(cellId());
+        if (level instanceof ServerLevel serverLevel) {
+            if (!unloading) {
+                BackhaulNetwork.of(serverLevel).removeCell(cellId());
+            }
+            SitePower.of(serverLevel).untrack(this);
         }
         super.setRemoved();
     }
@@ -353,7 +448,10 @@ public abstract class AntennaBlockEntity extends BlockEntity {
             boolean eligible = eligibleToTransmit();
             BackhaulNetwork backhaul = BackhaulNetwork.of(serverLevel);
             backhaul.noteCell(cellId(), eligible);
-            boolean transmitting = eligible && backhaul.allowsOnAir(cellId());
+            // Slice 15: the dimension's power ticker draws from every loaded cell that passes its own
+            // rules, and refreshes it here when its latch changes, so OnAir still has one writer.
+            SitePower.of(serverLevel).track(this, eligible);
+            boolean transmitting = eligible && backhaul.allowsOnAir(cellId()) && powerAllows();
             BlockPos point = radiatingPoint();
             if (transmitting) {
                 registry.register(cellParamsAt(point));
@@ -446,10 +544,16 @@ public abstract class AntennaBlockEntity extends BlockEntity {
      * appends {@code RadiatingY} the same way (see {@link #toldRadiatingY}): where the cell radiates
      * from is the antenna's declared, public configuration, worked out on the server with the
      * server's {@code maxMastHeight}.
+     *
+     * <p>Slice 15 takes the buffer ({@code Energy}, {@code PowerOn}) out again: it is server state that
+     * changes every tick, and a client copy would be stale at once. Whether the cell is on the air is
+     * {@code OnAir}, which the client already has; so the update tag, and the wire, are as before.
      */
     @Override
     public CompoundTag getUpdateTag(HolderLookup.Provider registries) {
         CompoundTag tag = saveWithoutMetadata(registries);
+        tag.remove(ENERGY_TAG);
+        tag.remove(POWER_ON_TAG);
         tag.putBoolean(ON_AIR_TAG, onAir);
         if (level != null && !level.isClientSide()) {
             int radiatingY = radiatingPoint().getY();
@@ -486,6 +590,8 @@ public abstract class AntennaBlockEntity extends BlockEntity {
         tag.putDouble("VBeamwidthDeg", vBeamwidthDeg);
         tag.putInt("Pci", pci);
         tag.putInt(RADIO_TIER_TAG, radioTier);
+        tag.putInt(ENERGY_TAG, energy.stored());
+        tag.putBoolean(POWER_ON_TAG, energy.on());
     }
 
     @Override
@@ -528,6 +634,11 @@ public abstract class AntennaBlockEntity extends BlockEntity {
         if (tag.contains(RADIO_TIER_TAG)) {
             radioTier = RadioTier.loaded(defaultRadioTier, tag.getInt(RADIO_TIER_TAG));
         }
+        // v4 and later. Absent from older saves: an empty buffer with the latch off (the field's start).
+        // A crafted value is harmless: a buffer cannot pay out more than it holds.
+        if (tag.contains(ENERGY_TAG)) {
+            energy.load(tag.getInt(ENERGY_TAG), tag.getBoolean(POWER_ON_TAG));
+        }
         // Only an update tag carries it (the client's copy). On the server it is recomputed by the
         // next refreshRegistration(), so a crafted block_entity_data value does not stick there.
         if (tag.contains(ON_AIR_TAG)) {
@@ -557,6 +668,9 @@ public abstract class AntennaBlockEntity extends BlockEntity {
      *   <li>v2 (and v1) to v3: the radio tier is {@code max(blockDefault, tierOf(currentBand))}
      *       ({@link RadioTier#migrated}), from the band table loaded now. The datapacks load before
      *       any level, so on the server this is the world's table.
+     *   <li>v3 (and older) to v4: nothing to do. The buffer starts empty with its latch off, as a
+     *       newly placed antenna's does: turning {@code requirePower} on is a server's choice, and a
+     *       cell then needs a generator before it transmits.
      * </ul>
      */
     protected void migrate(int fromVersion) {
