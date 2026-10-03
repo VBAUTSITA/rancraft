@@ -4,6 +4,7 @@ import dev.rancraft.RanCraft;
 import dev.rancraft.item.FieldTestMeterItem;
 import dev.rancraft.item.LinkToolItem;
 import dev.rancraft.item.NetworkLocatorItem;
+import dev.rancraft.item.ProximityScannerItem;
 import dev.rancraft.item.RfLensItem;
 import dev.rancraft.item.StorageTerminalItem;
 import dev.rancraft.item.WidebandRadioUnitItem;
@@ -78,6 +79,16 @@ public final class ModItems {
     public static final DeferredItem<StorageTerminalItem> STORAGE_TERMINAL = ITEMS.registerItem(
             "storage_terminal",
             StorageTerminalItem::new,
+            new Item.Properties().stacksTo(1));
+
+    /**
+     * Phase 3 slice 14, §3C.4: lists hostile mobs on the HUD while held, with GOOD service on a tier-3
+     * band (band_3500). A {@code SignalDevice}; the list is not RF sensing (see the item). No recipe yet
+     * (§3C.6, slice 16): creative-only for now.
+     */
+    public static final DeferredItem<ProximityScannerItem> PROXIMITY_SCANNER = ITEMS.registerItem(
+            "proximity_scanner",
+            ProximityScannerItem::new,
             new Item.Properties().stacksTo(1));
 
     public static void register(IEventBus modBus) {

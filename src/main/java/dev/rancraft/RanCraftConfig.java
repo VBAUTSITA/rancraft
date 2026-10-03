@@ -261,6 +261,19 @@ public final class RanCraftConfig {
                     "in the spirit of ITU-R P.838 at 18 GHz. Turn off to take weather out of the backhaul.")
             .define("enableRainFade", true);
 
+    // ---- Phase 3: Proximity Scanner (§3C.4) ---------------------------------------------------
+    // Gameplay and server cost (an entity query per dispatch), not RF: it stays out of RfConfig. Not in
+    // §5's list; added so the spec's "24 blocks" is tunable like everything else (NOTES.md, slice 14).
+
+    /** The spec's figure, §3C.4: hostile mobs within 24 blocks. */
+    public static final double DEFAULT_SCANNER_RANGE_BLOCKS = 24.0;
+
+    public static final ModConfigSpec.DoubleValue SCANNER_RANGE_BLOCKS = BUILDER
+            .comment("Proximity Scanner: hostile mobs within this straight-line distance, in blocks, are listed",
+                    "while it is held with GOOD service on a tier-3 band. GAME ABSTRACTION: the list is not",
+                    "radio sensing; it stands in for a high-rate sensor feed that needs a high-capacity link.")
+            .defineInRange("scannerRangeBlocks", DEFAULT_SCANNER_RANGE_BLOCKS, 1.0, 64.0);
+
     public static final ModConfigSpec SPEC = BUILDER.build();
 
     // ---- RF Vision Step 3a: the drive-test trail (CLIENT) --------------------------------------
@@ -390,6 +403,14 @@ public final class RanCraftConfig {
      */
     public static int evaluationIntervalTicks() {
         return SPEC.isLoaded() ? EVALUATION_INTERVAL_TICKS.get() : EVALUATION_INTERVAL_TICKS.getDefault();
+    }
+
+    /**
+     * The Proximity Scanner's range (§3C.4), in blocks. Gameplay, deliberately not in {@link RfConfig}.
+     * Falls back to the default if read before the config has loaded.
+     */
+    public static double scannerRangeBlocks() {
+        return SPEC.isLoaded() ? SCANNER_RANGE_BLOCKS.get() : SCANNER_RANGE_BLOCKS.getDefault();
     }
 
     /** Immutable snapshot handed to the engine, so the engine never touches a config API. */

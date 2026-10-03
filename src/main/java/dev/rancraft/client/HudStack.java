@@ -16,6 +16,12 @@ package dev.rancraft.client;
  * row, which also resets the claim for the next frame. So a claim never outlives the frame it was
  * made in, even when the Locator is not drawn.
  *
+ * <p><b>The top-right corner, the same rule</b> (Phase 3 slice 14). The meter's <em>compact</em> readout
+ * is top-right, and the Proximity Scanner's list goes there too: the meter keeps the corner and
+ * {@link #claimTopRight claims} the rows it drew, and the scanner, registered above the Locator's layer
+ * (so after the meter's each frame), {@link #takeTopRight takes} the next free row. With the meter in
+ * detailed mode, or not held, the scanner starts at the corner.
+ *
  * <p>Plain integers and no Minecraft types, so the rule is unit-tested headless. Render thread only.
  */
 public final class HudStack {
@@ -46,6 +52,26 @@ public final class HudStack {
     public static int takeTopLeft() {
         int top = claimedBottom < 0 ? MARGIN : Math.max(MARGIN, claimedBottom + GAP);
         claimedBottom = -1;
+        return top;
+    }
+
+    private static int claimedBottomRight = -1;
+
+    /**
+     * The meter drew its compact readout top-right down to {@code bottomExclusive} this frame. A second
+     * claim in one frame keeps the lower of the two.
+     */
+    public static void claimTopRight(int bottomExclusive) {
+        claimedBottomRight = Math.max(claimedBottomRight, bottomExclusive);
+    }
+
+    /**
+     * The first free row of the top-right corner this frame, for the Proximity Scanner, and the claim is
+     * cleared for the next frame. {@link #MARGIN} when nothing was claimed.
+     */
+    public static int takeTopRight() {
+        int top = claimedBottomRight < 0 ? MARGIN : Math.max(MARGIN, claimedBottomRight + GAP);
+        claimedBottomRight = -1;
         return top;
     }
 }

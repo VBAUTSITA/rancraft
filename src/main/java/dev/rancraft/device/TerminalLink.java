@@ -102,10 +102,24 @@ public record TerminalLink(
         if (link == null || !link.fresh(now, intervalTicks)) {
             return Problem.NO_READING;
         }
-        return switch (link.verdict()) {
+        return reasonOf(link.verdict(), link.radio(), requirement);
+    }
+
+    /**
+     * The reason behind one verdict, or {@code null} for OK: the rule {@link #problemOf} applies to a
+     * fresh record. LOW_QUALITY is {@link Problem#BACKHAUL_LIMITED} when {@code radio} (the sample's own,
+     * uncapped level) reaches {@code requirement}'s level, so only the backhaul cap failed it, and
+     * {@link Problem#WEAK_SIGNAL} otherwise. Never {@link Problem#NO_READING}.
+     *
+     * <p>Phase 3 slice 14: shared with the Proximity Scanner, which judges each dispatch as it comes and
+     * keeps no record, so both devices tell "fix the signal" from "fix the backhaul" by one rule.
+     */
+    public static @Nullable Problem reasonOf(DeviceRequirement.Verdict verdict, ServiceLevel radio,
+                                             DeviceRequirement requirement) {
+        return switch (verdict) {
             case OK -> null;
             case NO_SERVICE -> Problem.NO_SERVICE;
-            case LOW_QUALITY -> link.radio().atLeast(requirement.minServiceLevel())
+            case LOW_QUALITY -> radio.atLeast(requirement.minServiceLevel())
                     ? Problem.BACKHAUL_LIMITED
                     : Problem.WEAK_SIGNAL;
             case LOW_TIER -> Problem.LOW_TIER;

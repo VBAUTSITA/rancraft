@@ -36,6 +36,7 @@ public final class ClientEvents {
     public static void onLoggingOut(ClientPlayerNetworkEvent.LoggingOut event) {
         ClientSignalState.clear();
         ClientLocatorState.clear();
+        ClientScannerState.clear();
         ClientLensState.clear();
         LensRenderer.clearCache();
         CoverageRenderer.clearCache();
@@ -52,6 +53,7 @@ public final class ClientEvents {
     public static void onClone(ClientPlayerNetworkEvent.Clone event) {
         ClientSignalState.clear();
         ClientLocatorState.clear();
+        ClientScannerState.clear();
         ClientLensState.clear();
         CoverageRenderer.clearCache();
     }
@@ -66,12 +68,18 @@ public final class ClientEvents {
      * <p>Here, not in the HUD layer: the layer returns early under F1 ({@code hideGui}), and
      * {@link LocatorRenderer} would still draw the old rings. The learned send cadence is kept
      * ({@link ClientLocatorState#putAway()}).
+     *
+     * <p>Phase 3 slice 14: the same for the Proximity Scanner, whose list is of mobs near where the
+     * player was when it was last held ({@link ClientScannerState#putAway()}).
      */
     @SubscribeEvent
     public static void onClientTick(ClientTickEvent.Post event) {
         LocalPlayer player = Minecraft.getInstance().player;
         if (player == null || LocatorHudOverlay.heldLocator(player) == null) {
             ClientLocatorState.putAway();
+        }
+        if (player == null || ScannerHudOverlay.heldScanner(player) == null) {
+            ClientScannerState.putAway();
         }
     }
 }

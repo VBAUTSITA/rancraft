@@ -12,6 +12,8 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.contents.TranslatableContents;
 import net.minecraft.network.protocol.Packet;
 import net.minecraft.network.protocol.PacketFlow;
+import net.minecraft.network.protocol.common.ClientboundCustomPayloadPacket;
+import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ClientInformation;
 import net.minecraft.server.level.ServerLevel;
@@ -24,7 +26,8 @@ import org.jetbrains.annotations.Nullable;
  * A real {@link ServerPlayer} for game tests that open menus (Phase 3 slice 13): built directly, never
  * on the server's player list (so the real {@code SignalTicker} never evaluates it, and no mod payload
  * is ever sent to it), with a connection that drops every packet, and keeping every message it is
- * told ({@link #messages}).
+ * told ({@link #messages}) and every custom payload sent to it ({@link #payloads}; Phase 3 slice 14, so a
+ * test sees what a device sends straight to its player, as the Proximity Scanner does).
  *
  * <p><b>Why not NeoForge's {@code FakePlayer}:</b> it overrides {@code openMenu} to open nothing and
  * {@code tick} to do nothing (NeoForge 21.1.251 sources), and both are what a Storage Terminal test
@@ -42,12 +45,19 @@ final class SilentServerPlayer extends ServerPlayer {
     /** Every message the game tried to show this player (chat and action bar), oldest first. */
     final List<Component> messages = new ArrayList<>();
 
+    /**
+     * Every custom payload sent to this player (a {@link ClientboundCustomPayloadPacket}, as NeoForge's
+     * {@code PacketDistributor.sendToPlayer} sends a single one), oldest first. Dropped like every packet,
+     * but kept here first. Slice 14.
+     */
+    final List<CustomPacketPayload> payloads = new ArrayList<>();
+
     SilentServerPlayer(ServerLevel level, String name) {
         super(level.getServer(), level,
                 new GameProfile(UUID.nameUUIDFromBytes((name + "/" + System.nanoTime()).getBytes(StandardCharsets.UTF_8)),
                         name),
                 ClientInformation.createDefault());
-        this.connection = new SilentConnection(level.getServer(), this);
+        this.connection = new SilentConnection(level.getServer(), this, payloads);
     }
 
     @Override
@@ -77,23 +87,35 @@ final class SilentServerPlayer extends ServerPlayer {
         return null;
     }
 
-    /** A game connection that sends nothing. */
+    /** A game connection that sends nothing, keeping each custom payload in {@code sink}. */
     private static final class SilentConnection extends ServerGamePacketListenerImpl {
 
-        SilentConnection(MinecraftServer server, ServerPlayer player) {
+        private final List<CustomPacketPayload> sink;
+
+        SilentConnection(MinecraftServer server, ServerPlayer player, List<CustomPacketPayload> sink) {
             super(server, new Connection(PacketFlow.SERVERBOUND) {
                 @Override
                 public void setListenerForServerboundHandshake(PacketListener listener) {
                 }
             }, player, CommonListenerCookie.createInitial(player.getGameProfile(), false));
+            this.sink = sink;
         }
 
         @Override
         public void send(Packet<?> packet) {
+            keep(packet);
         }
 
         @Override
         public void send(Packet<?> packet, @Nullable PacketSendListener listener) {
+            keep(packet);
+        }
+
+        /** {@code sink} is null only if the superclass constructor sends something, before it is set. */
+        private void keep(Packet<?> packet) {
+            if (sink != null && packet instanceof ClientboundCustomPayloadPacket custom) {
+                sink.add(custom.payload());
+            }
         }
     }
 }

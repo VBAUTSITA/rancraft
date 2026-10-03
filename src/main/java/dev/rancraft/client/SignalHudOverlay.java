@@ -61,13 +61,16 @@ public final class SignalHudOverlay {
      * The meter's layer, then (Phase 3 slice 5) the Network Locator's directly above it. Both here,
      * in this order, because {@code registerAbove} needs its anchor registered already and two
      * handlers of one event have no guaranteed order. The Locator renders after the meter each frame
-     * and stacks under its detailed readout ({@link HudStack}).
+     * and stacks under its detailed readout ({@link HudStack}). Phase 3 slice 14: the Proximity
+     * Scanner's above the Locator's, so it too renders after the meter, and stacks under its compact
+     * readout, top-right.
      */
     @SubscribeEvent
     public static void registerLayers(RegisterGuiLayersEvent event) {
         ResourceLocation signalHud = ResourceLocation.fromNamespaceAndPath(RanCraft.MOD_ID, "signal_hud");
         event.registerAboveAll(signalHud, SignalHudOverlay::render);
         event.registerAbove(signalHud, LocatorHudOverlay.ID, LocatorHudOverlay::render);
+        event.registerAbove(LocatorHudOverlay.ID, ScannerHudOverlay.ID, ScannerHudOverlay::render);
     }
 
     private static void render(GuiGraphics graphics, DeltaTracker deltaTracker) {
@@ -93,7 +96,9 @@ public final class SignalHudOverlay {
             // Locator stacks under them. Nothing the meter draws changes.
             HudStack.claimTopLeft(renderDetailed(graphics, minecraft.font, sample, noService));
         } else {
-            renderCompact(graphics, minecraft.font, sample, noService);
+            // Phase 3 slice 14: likewise the compact readout owns the top-right rows it drew; a held
+            // Proximity Scanner stacks under them.
+            HudStack.claimTopRight(renderCompact(graphics, minecraft.font, sample, noService));
         }
     }
 
@@ -111,14 +116,15 @@ public final class SignalHudOverlay {
 
     // ---- compact ------------------------------------------------------------
 
-    private static void renderCompact(
+    /** @return the y just past the last line drawn (slice 14, for {@link HudStack}; the drawing is unchanged). */
+    private static int renderCompact(
             GuiGraphics graphics, Font font, SignalSamplePayload sample, boolean noService) {
 
         int screenWidth = graphics.guiWidth();
 
         if (noService) {
             drawRight(graphics, font, "NO SERVICE", screenWidth - MARGIN, MARGIN, COLOR_BY_BARS[0]);
-            return;
+            return MARGIN + LINE_HEIGHT;
         }
 
         CellSample serving = sample.serving();
@@ -139,7 +145,9 @@ public final class SignalHudOverlay {
         String backhaul = sample.backhaulNote();
         if (!backhaul.isEmpty()) {
             drawRight(graphics, font, backhaul, screenWidth - MARGIN, MARGIN + LINE_HEIGHT, COLOR_WARN);
+            return MARGIN + 2 * LINE_HEIGHT;
         }
+        return MARGIN + LINE_HEIGHT;
     }
 
     // ---- detailed -----------------------------------------------------------

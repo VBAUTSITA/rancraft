@@ -35,6 +35,7 @@ public final class ModCreativeTabs {
                         output.accept(ModItems.BACKHAUL_DISH.get());
                         output.accept(ModItems.LINK_TOOL.get());
                         output.accept(ModItems.STORAGE_TERMINAL.get());
+                        output.accept(ModItems.PROXIMITY_SCANNER.get());
                     })
                     .build());
 

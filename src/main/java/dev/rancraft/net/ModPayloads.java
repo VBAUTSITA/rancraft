@@ -5,6 +5,7 @@ import dev.rancraft.client.ClientAntennaConfig;
 import dev.rancraft.client.ClientDriveTest;
 import dev.rancraft.client.ClientLensState;
 import dev.rancraft.client.ClientLocatorState;
+import dev.rancraft.client.ClientScannerState;
 import dev.rancraft.client.ClientSignalState;
 import net.minecraft.server.level.ServerPlayer;
 import net.neoforged.bus.api.SubscribeEvent;
@@ -50,9 +51,11 @@ public final class ModPayloads {
      *       {@link BackhaulLinksPayload} is new (the lens's microwave hops). The Link Tool's data
      *       component is synced. A slice 11 client would stop reading the sample one field early and has
      *       no handler for the hops.
+     *   <li><b>10</b> -- Phase 3 slice 14 (Proximity Scanner, §3C.4): {@link ScannerPayload} is new. A
+     *       slice 13 client has no handler for it.
      * </ul>
      */
-    private static final String PROTOCOL_VERSION = "9";
+    private static final String PROTOCOL_VERSION = "10";
 
     @SubscribeEvent
     public static void register(RegisterPayloadHandlersEvent event) {
@@ -99,6 +102,13 @@ public final class ModPayloads {
                 BackhaulLinksPayload.TYPE,
                 BackhaulLinksPayload.STREAM_CODEC,
                 (payload, context) -> context.enqueueWork(() -> ClientLensState.acceptBackhaul(payload)));
+
+        // Phase 3 slice 14: the held Proximity Scanner's list, or why it is off. Same pattern: the
+        // client state class is named only inside the handler.
+        registrar.playToClient(
+                ScannerPayload.TYPE,
+                ScannerPayload.STREAM_CODEC,
+                (payload, context) -> context.enqueueWork(() -> ClientScannerState.accept(payload)));
 
         registrar.playToServer(
                 UpdateCellParamsPayload.TYPE,

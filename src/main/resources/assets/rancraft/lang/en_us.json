@@ -117,5 +117,9 @@
   "rancraft.storage_terminal.problem.low_tier": "needs band tier %s, you're on %s (tier %s)",
   "rancraft.storage_terminal.problem.no_core": "storage unreachable: no Core Site within %s blocks of %s",
   "rancraft.storage_terminal.problem.unloaded": "storage unreachable: its chunk is not loaded (%s)",
-  "rancraft.storage_terminal.problem.not_storage": "storage unreachable: no chest or barrel at %s"
+  "rancraft.storage_terminal.problem.not_storage": "storage unreachable: no chest or barrel at %s",
+  "item.rancraft.proximity_scanner": "Proximity Scanner",
+  "item.rancraft.proximity_scanner.tooltip.what": "Held: lists the hostile mobs around you on the HUD",
+  "item.rancraft.proximity_scanner.tooltip.needs": "Needs %s service on a band of tier %s or higher (band_3500)",
+  "item.rancraft.proximity_scanner.tooltip.honest": "Not radar: a sensor feed that only a high-capacity link can carry"
 }
