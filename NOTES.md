@@ -5363,7 +5363,7 @@ advancement, so a survival player sees it. The seven blocks already had loot tab
 (slices 1, 9, 12 and 15), and every item was already in the creative tab. New in this slice: a game test
 per item that loads its recipe on the live server, crafts its grid from real stacks, and checks that no
 other recipe takes that grid, plus a creative-tab test. The code, data and tests went in `36cd29e`
-(part 1 of 2); these notes and the tracker are in "Phase 3 slice 16: recipes and loot tables".
+(part 1 of 2); these notes and the tracker in `2350ce9` "Phase 3 slice 16: recipes and loot tables".
 
 ### What was built
 
