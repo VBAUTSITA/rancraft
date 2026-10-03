@@ -64,6 +64,7 @@ Legend: `[x]` done and verified · `[~]` partly done / needs a manual in-game ch
 | 14 | Proximity Scanner | 3C | [~] item `proximity_scanner` (a `SignalDevice`, GOOD tier 3: band_3500's first use); `device/ProximityScanner`: held with an OK verdict, one `ScannerPayload` v1 per dispatch (the main hand's scanner, else the offhand's; none from the hotbar, none to a dead player) listing at most 16 hostile mobs (vanilla's `Enemy`) within `scannerRangeBlocks` 24 (new COMMON config, not in §5's list: follow-ups), straight line from the feet, nearest first, with entity type, distance and compass bearing; on any other verdict the payload carries the reason (no service, weak signal, backhaul limited, low tier) by the Storage Terminal's rule (`TerminalLink.reasonOf`, shared) and no list; `util/ProximityScan` (pure list); HUD list top-right under the meter's compact readout (`HudStack`), no world render, "needs tier 3, you're on band_1800 (tier 2)"; the scan labelled not RF physics at the code sites; `PROTOCOL_VERSION` 10. Headless green (594 tests, 0 skipped; `runGameTestServer` 40/40, 1 new: band_3500 lists the right mobs, 16 of 19, band_1800 refuses with "needs tier 3"); 23.7 µs per scan with 20 mobs; in-game checks below | 465d40e; docs 9e3fab5; tracker "PHASE_3.md, NOTES.md: record slice 14 commit hash" |
 | 15 | Power + generator | 3C | [~] `rf/PowerModel` (pure: §3C.5's formula and figures, the table and 10× per 10 dB pinned); `util/EnergyBuffer` (pure: whole FE with the fraction carried, out of energy → latch off, back strictly above `powerRestartFraction` 10 %); antennas expose `Capabilities.EnergyStorage.BLOCK` (`ModCapabilities`, receive-only, nothing with `requirePower` off), any mast of a column feeds its base (a pole's masts feed the sector on top; a demoted base hands its energy down), 10,000 FE; `isTransmitting()` = eligible ∧ backhaul ∧ power, `refreshRegistration` still the one `OnAir` writer; `world/SitePower` draws each cell on the air once a tick where block entities tick, refreshes on a latch change or a flag flip; block `site_generator` (furnace fuel by NeoForge's burn-time lookup, 40 FE/t only while taken, pushes to its six sides, one slot for hoppers: fuel in, a bucket out below; use with fuel / sneak + use / status; loot table, pickaxe tag); seam `util/ServedReceivers` per cell over `servedWindowMinutes` (fixed receivers throttled to a report per 20 s); `/rancraft power status [radius]`; config `requirePower` (false) and nine figures; `AntennaBlockEntity.DATA_VERSION` 4. Headless green (619 tests, 0 skipped; `runGameTestServer` 48/48, 7 new + 1 generated harvest test: 30 dBm 2,120 vs 20 dBm 320 burn ticks, model exact, 6.625×; the draw 0.06-0.2 µs per cell). No wire change. In-game checks below; the Radio Link cost gate's sensitivity to machine load (measured against slice 14's code: this slice adds nothing to it) and two owner decisions in follow-ups | 797d641; docs bce3a8a; tracker "PHASE_3.md, NOTES.md: record slice 15 commit hash" |
 | 16 | Recipes + loot tables + survival playthrough | 3C | [~] fourteen shaped recipes in `data/rancraft/recipe/` (1.21.1 format, `c:` tags for raw materials), one per item, from §3C.6's table and tiers: RF Lens early and cheap (2 copper, 1 amethyst, 2 glass), Signal Mast 4 per craft, the Radio Link Receiver taking a comparator **or a repeater** (a comparator needs Nether quartz, which is not early: spec conflict in follow-ups); a recipe-book unlock advancement per recipe (`data/rancraft/advancement/recipes/`, not in the spec: follow-ups); loot tables and the pickaxe tag already complete for all 7 blocks, every item already in the creative tab; `RecipeGameTests` (one per item, generated: a recipe loads, its grid from real stacks is matched by it alone with every ingredient alternative tried, and crafts the item, a RANCraft ingredient is craftable from non-RANCraft items, an advancement unlocks it; plus the creative tab), each check seen failing on broken data. Headless green (619 tests, 0 skipped; `runGameTestServer` 63/63, 15 new; recipes 1,291 → 1,305, advancements 1,400 → 1,414, no error in the log); 0 collisions with the 887 vanilla crafting recipes; no version bump. **3C ships here** (§7); the survival playthrough is the in-game check below | 36cd29e; docs 2350ce9; tracker "PHASE_3.md, NOTES.md: record slice 16 commit hash" |
+| 16a | Phase 3C review round 1: fixes (2 reported, 2 confirmed and fixed, 0 rejected) | 3C | [~] the LIMITED cap (FAIR) applies whatever `requireBackhaul` says, NONE caps only with it on (`BackhaulGraph.serviceCap`; slice 12 decision 1's reason was wrong: with no core every cell is NONE, so a world without backhaul is unchanged); the status command always says "devices capped at FAIR"; the Storage Terminal's 3C done-when game test now runs with the flag off (the default). Backhaul re-marches spread over ticks: new pure `util/BudgetedQueue` (clock read before each item, at least one per drain), `BackhaulNetwork` recompute split into begin / advance (marches under `backhaulMarchBudgetMs`, new COMMON 0.25 ms shared by every dimension) / finish (weather, solve, effects, in a tick of its own, all states published at once); the status command says "measuring" during the first one. Headless green (625 tests, 0 skipped; `runGameTestServer` 64/64 in three runs, 1 new: 64 dirty 1000-block hops, worst tick 0.31-0.76 ms against 3.3-4.6 ms in one tick; both fixes fail their tests when disabled); no wire or save change; one owner decision and two notes in follow-ups; in-game checks below | 3e5bdd1; docs "Phase 3 review: fixes" |
 | 17 | (optional) fix_x/fix_z/fix_err in drive-test CSV | — | [ ] | |
 
 ---
@@ -796,7 +797,9 @@ Headless (verified by `./gradlew build`, 559 tests, 0 skipped, and `./gradlew ru
       by the server's own recompute without a march.
 - [x] `requireBackhaul` off (the default) changes nothing: a NONE cell stays on the air, uncapped, and
       three recomputes never move the site registry (weather test;
-      `BackhaulGraphTest.requireBackhaulOffChangesNothing`).
+      `BackhaulGraphTest.requireBackhaulOffChangesNothing`). *(Revised in the Phase 3C review, row 16a:
+      with the flag off a LIMITED cell is now capped at FAIR too, as §3C.2 states; nothing goes off the
+      air and a NONE cell stays uncapped, so a world without a Core Site is still unchanged.)*
 - [x] `BackhaulLinksPayload` v1: round trip, cap 64 on build and on read, an unknown state rejected
       (`BackhaulLinksPayloadTest`); `linksNear` gives a site's hops at runtime. Not a `LensSettings` field.
 - [x] `/rancraft backhaul status 2000` **at runtime** through the server's dispatcher: two cells off the
@@ -1157,6 +1160,57 @@ are in NOTES.md, slice 16, and in the recipe book once unlocked.
   *Needs the client (headless half: `HarvestGameTests`).*
 - [~] **5. Creative tab.** The RANCraft tab lists all 14 blocks and items. *Needs the client.*
 
+## Phase 3C review (row 16a) checks
+
+Headless (verified by `./gradlew build`, 625 tests, 0 skipped, and `./gradlew runGameTestServer`, 64 of
+64 in three runs; details in NOTES.md, "Phase 3C review, round 1"):
+
+- [x] **Finding 1, headless:** `serviceCap(LIMITED, false)` is FAIR, `serviceCap(NONE, false)` and
+      `serviceCap(null, false)` no cap, nothing off the air with the flag off
+      (`BackhaulGraphTest.requireBackhaulOffChangesNothing`); with no Core Site every cell is NONE and
+      uncapped whatever the hops (`noCoreNoCapWithRequireBackhaulOff`, new); the flag-on behaviour is
+      unchanged (`serviceCapWithRequireBackhaul`, the chain game test).
+- [x] **Finding 1, at runtime, with `requireBackhaul` off (the default):** six leaves on a 1000-block
+      hop make the sector behind it LIMITED, capped at FAIR; the real Storage Terminal's session closes
+      with "backhaul limited" and its use is refused, while the Radio Link on the same cell keeps working
+      (`StorageTerminalGameTests.a_limited_cell_stops_the_terminal_the_radio_link_keeps_working`; fails
+      with the old gate: "capped at FAIR").
+- [x] **Finding 2, headless:** `BudgetedQueueTest` (5, fake clock): order, no duplicates; no item starts
+      after the budget is spent and a drain overruns by at most one; at least one item per drain whatever
+      the budget; unbounded drains all; a re-queued item waits.
+- [x] **Finding 2, at runtime:** 64 parallel 1000-block hops, all new (a server start) and then all
+      dirtied by one block in the bin they cross, are marched by the server's own recompute over 16 to 34
+      ticks; the worst tick is 0.31 to 0.76 ms on the final code, against 3.3 to 4.6 ms for the same
+      marches in one tick; nothing is published mid-way (hop 0 still reads UP while its stone is being
+      measured); the spread result equals an unbounded recompute exactly
+      (`BackhaulGameTests.many_dirty_long_hops_are_marched_over_ticks_under_the_budget`; fails with an
+      unlimited budget).
+- [x] Versions: none changed (`PROTOCOL_VERSION` 10, `AntennaBlockEntity.DATA_VERSION` 4,
+      `BackhaulNetwork.DATA_VERSION` 1). One COMMON config key added, `backhaulMarchBudgetMs` (0.25).
+
+Needs a human in game:
+
+- [~] **1. The LIMITED cap with the default config.**
+  - A world with `requireBackhaul` false (the default). Place a Core Site, and a Sector Antenna on a mast
+    at least 30 blocks away. Put a Backhaul Dish beside the core and one beside the sector's mast, pair
+    them with the Link Tool, and check that the link is clear (lens, lobes layer: the line is green).
+  - Bind a Storage Terminal to a chest near the core, and open it near the sector at GOOD or better.
+  - Put **one** stone block (or about six leaves) on the link's line, midway. Within 5 s:
+    - the line turns orange (DEGRADED);
+    - the meter's detailed readout shows "BH: LIMITED (capped FAIR)";
+    - the terminal closes with "backhaul limited";
+    - `/rancraft backhaul status` lists the sector under "LIMITED, devices capped at FAIR".
+  - Remove the block: the line is green again and the terminal opens.
+
+  *Needs the client (the meter line, the closing screen and the lens colour).*
+- [~] **2. A world without backhaul is unchanged.** Open a Phase 2 world (no Core Site, no dish) with
+      both logistics flags off: every cell transmits and every device works as before; the meter shows
+      no "BH:" line. *Needs a real Phase 2 save in the client (the 3C done-when's remaining check).*
+- [~] **3. No hitch after a restart with a large backhaul network (optional).** With twenty or more long
+      links built, save and quit, then reopen: no visible stutter in the first seconds (F3 tick graph, or
+      `/tick query`), and the links appear on the lens within a second or two. *Needs the client and a
+      large build; the cost itself is measured headless (above).*
+
 ## 3C done-when
 
 - [~] A tier-2 sector cannot use band_3500 until it gets a Wideband Radio Unit. *Server half verified
@@ -1182,7 +1236,9 @@ are in NOTES.md, slice 16, and in the recipe book once unlocked.
       closes with "backhaul limited" and its use is refused, while the real Radio Link on the same cell
       follows its transmitter off and on. With the leaves cut out, the terminal opens again. A real tree,
       the meter and the closing screen need the client: slice 12 checks, step 3, and slice 13 checks,
-      step 4.)*
+      step 4. Phase 3C review (row 16a): until then this held only with `requireBackhaul` on, which the
+      game test set; the cap now applies with the flag off too, and the same game test runs with the
+      default config. In game: row 16a checks, step 1.)*
 - [~] A marginal link drops in a thunderstorm and recovers after. *(Slice 11: pinned headless,
       `MicrowaveLinkTest.marginalHopInAThunderstorm`. Slice 12: server half verified at runtime,
       `BackhaulGameTests` weather: a one-stone 1000-block hop, DEGRADED, goes DOWN in a thunderstorm and
@@ -1216,7 +1272,10 @@ are in NOTES.md, slice 16, and in the recipe book once unlocked.
       and registered, their capability takes no energy, a generator with coal beside them does not light
       or burn, and the site registry does not move in 100 ticks; a v3 (or older) save loads with an empty
       buffer that nothing reads. A real Phase 2 world opened in the client is the remaining check: slice
-      15 checks, step 1.)*
+      15 checks, step 1. Phase 3C review (row 16a): with the flag off a LIMITED cell is now capped at
+      FAIR, as §3C.2 states, but LIMITED needs a Core Site and a player-built DEGRADED hop; with no core
+      every cell is NONE and uncapped (`BackhaulGraphTest.noCoreNoCapWithRequireBackhaulOff`), so a Phase 2
+      world is still untouched. The backhaul recompute's marches are now spread under a per-tick budget.)*
 
 ---
 
@@ -1755,13 +1814,18 @@ centroid, so 7 × 16 + 1 = 113). (g)
   (about 1414 voxels) out of range. Map `Biome.getPrecipitationAt(midpoint)` NONE / RAIN / SNOW to
   `Weather.CLEAR` / `RAIN` / `SNOW` and pass `Level.isRaining()` / `isThundering()` to `Weather.at`.
 - **[x] Done in slice 12 (from slice 11).** *Both wired: `requireBackhaul` gates the off-air effect
-  and the FAIR cap, `backhaulRecomputeTicks` the recompute interval.* `requireBackhaul` and
+  and the FAIR cap, `backhaulRecomputeTicks` the recompute interval. (Phase 3C review: the flag no
+  longer gates the FAIR cap, only NONE's effects.)* `requireBackhaul` and
   `backhaulRecomputeTicks` are in the config (COMMON) but nothing reads them yet; slice 12 wires them.
 - **[x] Decided in slice 12, spec silent (NOTES.md, slice 12, decision 1).** With `requireBackhaul` off,
   backhaul has no effect at all: no cell is held off the air and a LIMITED cell caps nothing (§3C.2
   states the cap without the flag; the task and §2 say a default world must play as before, and a
   world with no Core Site would otherwise cap every device at FAIR). The states are still worked out,
   once a core or dish exists, for the lens, the dish and the status command, which say so.
+  *Reversed in the Phase 3C review (row 16a, finding 1): the reason was wrong. With no Core Site
+  every cell is NONE, not LIMITED, so a flag-independent LIMITED cap cannot touch such a world. The
+  LIMITED cap now applies whatever the flag says, as §3C.2 states; NONE caps (and goes off the air)
+  only with the flag on.*
 - **[x] Decided in slice 12 (NOTES.md, slice 12, decisions 2 and 3).** The backhaul topology (cores,
   dishes, pairings, eligible cells) is saved per dimension, so a hop's far end, a relay or the core may
   be unloaded and still count; the graph's cells are those passing their own rules, not the
@@ -1772,7 +1836,10 @@ centroid, so 7 × 16 + 1 = 113). (g)
   `DeviceRequirement.check` a three-argument form; a cap adds no verdict (a capped device is
   `LOW_QUALITY`, `DeviceContext.backhaulLimited()` says why). `SignalSamplePayload` v4 carries the cap,
   not the text.
-- **[ ] Open, minor (from slice 12).** A recompute runs all its re-marches in one tick. One block
+- **[x] Done in the Phase 3C review (row 16a, finding 2) (from slice 12).** *A recompute marches its
+  queued hops under `backhaulMarchBudgetMs` (new, 0.25 ms per tick, shared by every dimension) through
+  `util/BudgetedQueue`, and solves once all are measured, in a tick of its own. Measured with 64
+  1000-block hops: worst tick 0.31-0.76 ms, against 3.3-4.6 ms in one tick.* A recompute runs all its re-marches in one tick. One block
   moving in a bin that many long hops cross invalidates them together: 50 hops of 1000 blocks over
   loaded ground would make that one tick about 7 ms (0.14 µs per block, measured), against an average
   of under 0.1 ms/tick. Not reachable at the done-when's scale. Option: a per-tick march budget (as
@@ -1785,6 +1852,9 @@ centroid, so 7 × 16 + 1 = 113). (g)
   with no backhaul transmits until the next recompute (at most `backhaulRecomputeTicks`, 5 s) before
   it goes off the air: a short-lived lit lobe. Option: when a cell is first noted, solve the graph for
   it at once without marching (marches stay bound by the interval). Not needed for the done-when.
+  *(Phase 3C review: the delay can now also include the recompute's spread marches, a tick or two for
+  a few hops and 16 to 34 ticks for 64 long ones. The option above would still remove it, solving
+  with the last published hop budgets, not the half re-marched ones.)*
 - **[x] Done in slice 13 (from slice 12).** *The cap needed no code of its own in the terminal, and
   "near a core" uses `BackhaulNetwork.cores()` with the graph's own fiber rule. Instead of
   `backhaulLimited()`, the terminal tells "backhaul limited" from "weak signal" by whether the radio
@@ -1888,6 +1958,57 @@ centroid, so 7 × 16 + 1 = 113). (g)
   `RecipeGameTests` re-checks collisions and reachability. Of the costs, the Core Site (15 iron, 9
   redstone) is the steepest mid-tier item. It is one per network, and nothing needs it while
   `requireBackhaul` is off. Watch it in the playthrough.
+- **[ ] Open, decision for the owner (from the Phase 3C review, row 16a, finding 1).** With
+  `requireBackhaul` off, a cell with no path to a core (NONE) is uncapped, but a cell behind a DEGRADED
+  hop is capped at FAIR. So with the flag off, a marginal link that drops from DEGRADED to DOWN (a
+  thunderstorm, a second tree) *lifts* the cap from the cells behind it, and breaking the dish of a
+  DEGRADED hop gives them full service. This follows §3C.2's wording and the review's fix, and it is
+  labelled at `BackhaulGraph.serviceCap`: with the flag off a cell nobody connected has implicit
+  transport. Options:
+  - (a) keep it;
+  - (b) with the flag off, cap a NONE cell at FAIR too when it has a dish on its site (the player built
+    backhaul for it and it is down);
+  - (c) cap NONE at FAIR whenever the dimension has a Core Site.
+  Each of (b) and (c) still leaves a world with no core untouched.
+- **[x] Decided in the Phase 3C review (row 16a), spec vs tree.** `backhaulMarchBudgetMs` (0.25 ms, COMMON,
+  not in `RfConfig`) is a new config key that §5 does not list. It makes the march budget tunable like
+  everything else, as `scannerRangeBlocks` did in slice 14.
+- **[ ] Open, minor (from the Phase 3C review, row 16a).** The backhaul solve (the weather, the graph
+  and the effects) is not budgeted. It runs once per recompute, in a tick of its own, and took 0.2 to
+  0.47 ms in the game test, with 64 hops, 128 dishes and about 230 cells. Slice 11 measured the graph
+  alone at about 2 ms for 1000 cells (allocation-bound). Options: primitive arrays in
+  `BackhaulGraph.solve`, or skip the solve when no hop changed state and the topology did not move.
+- **[ ] Note (from the Phase 3C review, row 16a).** Spreading the marches costs more CPU in total than
+  marching in one tick: about 1.1 to 1.2× for all-new hops, and about 2.5× when about two hops are
+  marched per tick, because each tick's first march starts with cold caches. That is the price of
+  keeping every tick short. If it matters, a larger `backhaulMarchBudgetMs` trades tick length back for
+  total cost.
+
+### Phase 3C review round 1: the two findings
+
+The Part C review reported two findings, both minor. Each was confirmed against the code and fixed in
+row 16a (3e5bdd1); none was rejected. They are recorded here in the reviewer's terms, with where each
+was closed, so that a later round does not re-raise them without new evidence. Each fix has a test that
+fails with the fix disabled. Details are in NOTES.md, "Phase 3C review, round 1".
+
+- **[x] Finding 1 (minor), fixed.** "The LIMITED to FAIR cap is gated on requireBackhaul, which §3C.2
+  does not ask for. The reason recorded for this (NOTES.md slice 12, decision 1) is wrong: in a world
+  with no Core Site every cell is NONE, not LIMITED, so a flag-independent LIMITED cap would not change
+  a Phase 2 world."
+  - *`BackhaulGraph.serviceCap`: LIMITED → FAIR whatever the flag; NONE → NONE with the flag on, no cap
+    with it off; FULL and unknown → no cap.*
+  - *The status command and the docs follow. Slice 12's decision 1 is marked reversed.*
+  - *The Storage Terminal's 3C done-when game test runs with the default config.*
+  - *`BackhaulGraphTest` gains `noCoreNoCapWithRequireBackhaulOff`.*
+  - *The non-monotonic side effect with the flag off is an owner decision above.*
+- **[x] Finding 2 (minor), fixed.** "A backhaul recompute re-marches every hop whose bins moved in one
+  server tick, with no per-tick budget. Chunk load and unload bumps along long hops, and the first
+  recompute after a server start, can therefore produce multi-millisecond ticks, above the 1 ms/tick RF
+  budget."
+  - *A per-tick march budget, `backhaulMarchBudgetMs`, through the pure `util/BudgetedQueue`.*
+  - *One solve once every hop is measured, in a tick of its own, with every state published at once.*
+  - *A game test times 64 dirty 1000-block hops: worst tick 0.31 to 0.76 ms, against 3.3 to 4.6 ms in
+    one tick.*
 
 ### Phase 3B review round 1: the four findings
 

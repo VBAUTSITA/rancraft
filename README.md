@@ -73,12 +73,12 @@ To run a headless dedicated server instead: `.\gradlew.bat runServer`
     unpairs). The server measures each 18 GHz hop on the real terrain (free-space loss, line of sight,
     first Fresnel zone clearance, rain fade in rain and thunderstorms; figures in
     `data/rancraft/rf/backhaul/microwave.json`): UP, DEGRADED or DOWN. Use a dish to read its hop's RSL
-    and margin. With the RF Lens on (lobes layer), hops are drawn green, orange or red. With
-    `requireBackhaul` on (COMMON config, **off by default**, so existing worlds are unaffected), a cell
-    with no path to a Core Site goes off the air, and one reached only over a DEGRADED hop caps the
-    devices it serves at FAIR (the meter shows `BH: LIMITED (capped FAIR)`). `/rancraft backhaul status
-    [radius]` lists off-air and limited cells and every link's figures. Also `backhaulRecomputeTicks`
-    and `enableRainFade`.
+    and margin. With the RF Lens on (lobes layer), hops are drawn green, orange or red. A cell reached
+    only over a DEGRADED hop caps the devices it serves at FAIR (the meter shows `BH: LIMITED (capped
+    FAIR)`). With `requireBackhaul` on (COMMON config, **off by default**, so existing worlds are
+    unaffected), a cell with no path to a Core Site also goes off the air. `/rancraft backhaul status
+    [radius]` lists off-air and limited cells and every link's figures. Also `backhaulRecomputeTicks`,
+    `backhaulMarchBudgetMs` (server time per tick for re-measuring links, 0.25 ms) and `enableRainFade`.
   - *Storage Terminal:* opens a chest or barrel in the data centre over the mobile network.
     - **Binding:** sneak + use it on a chest or barrel within `fiberRadiusBlocks` (24) of a Core Site.
     - **Opening:** use it in the air. The chest's ordinary screen opens if you have GOOD service on

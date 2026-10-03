@@ -4409,7 +4409,7 @@ runtime tests (`BackhaulGameTests`), measured, ran the game tests and committed.
 | NONE and `requireBackhaul` → not transmitting (unregister, OnAir false) | `AntennaBlockEntity.isTransmitting` / `refreshRegistration`, `BackhaulGraph.allowsOnAir` | chain (registry, `onAir()`, update tag), `BackhaulGraphTest.onAirWithRequireBackhaul` |
 | LIMITED → transmits, devices capped at FAIR in `DeviceContext`, sample untouched | `BackhaulGraph.serviceCap`, `DeviceContext`, `DeviceRequirement.check(…, cap)`, both tickers | `SignalTickerTest.backhaulCapIsAppliedInTheNetworkLayerOnly` (the 3C test), `DeviceRequirementTest.serviceCap`, chain (a live evaluation of a LIMITED cell) |
 | Meter "BH: LIMITED (capped FAIR)" | `SignalSamplePayload.serviceCap`, `backhaulNote`, `SignalHudOverlay` | `SignalSamplePayloadTest.backhaulCap`, chain |
-| `requireBackhaul` off: nothing changes | `BackhaulGraph.serviceCap` / `allowsOnAir`, `BackhaulNetwork.recompute` | `BackhaulGraphTest.requireBackhaulOffChangesNothing`, weather (a NONE cell on air, uncapped, registry never moved), chain (flag off: back on air) |
+| `requireBackhaul` off: nothing changes (since the Phase 3C review: nothing goes off the air and NONE is uncapped; LIMITED is still capped) | `BackhaulGraph.serviceCap` / `allowsOnAir`, `BackhaulNetwork.recompute` | `BackhaulGraphTest.requireBackhaulOffChangesNothing`, weather (a NONE cell on air, uncapped, registry never moved), chain (flag off: back on air) |
 | `BackhaulLinksPayload` to lens wearers in range; lines with the lobes layer | `BackhaulLinksPayload`, `BackhaulNetwork.sendLensLinks` / `linksNear`, `BackhaulRenderer` | `BackhaulLinksPayloadTest`, `LensStyleTest`, chain (`linksNear`) |
 | `/rancraft backhaul status [radius]` | `RanCraftCommands.backhaulStatus` | chain (run through the dispatcher, output checked) |
 
@@ -4421,6 +4421,9 @@ runtime tests (`BackhaulGameTests`), measured, ran the game tests and committed.
    Site would make every cell's devices FAIR at best. So `serviceCap(state, false)` is no cap whatever
    the state. The states are still worked out (once a core or dish exists) for the lens, the dish and
    the command, which say "no cap because requireBackhaul is off".
+   **Superseded by the Phase 3C review (finding 1, below).** The reason given was wrong: with no Core
+   Site every cell is NONE, not LIMITED, so a cap on LIMITED alone cannot touch a world built without
+   backhaul. The LIMITED cap now applies whatever the flag says; NONE still caps only with the flag on.
 2. **The topology is saved with the dimension, and the graph's cells are the eligible ones, not the
    registered ones.** A hop is up to 1400 blocks, so one end, a relay or the core is often in an
    unloaded chunk; the site registry forgets unloaded cells and, with the flag on, cells off the air
@@ -4507,7 +4510,8 @@ run, after a warm-up; wall-clock in a shared JVM, an order of magnitude:
   budget, but the re-marches of one recompute run in one tick: 50 long hops invalidated together (one
   block moving in a bin all of them cross) would make that tick about 7 ms. Not seen at the done-when's
   scale (a few hops); a follow-up records the fix (spread re-marches over ticks) if a large network
-  shows it.
+  shows it. **Done in the Phase 3C review (finding 2, below):** the marches now run under
+  `backhaulMarchBudgetMs` per tick.
 - The quiet path every server pays every tick is about a microsecond per dimension with a network.
 - The game tests' existing cost lines in this run, with the cap lookup now in every dispatch: 200 radio
   links, windows 48.3, 37.3 and 25.5 µs/tick (median 37.3, under the 100 µs gate); 200 fixed receivers,
@@ -5543,3 +5547,198 @@ other recipe takes that grid, plus a creative-tab test. The code, data and tests
 | `./gradlew runGameTestServer` | "All 63 required tests passed" (48 + 15; batch `rancraft_recipes` ran 15 tests, `rancraft_harvest` 7) on the final tree, and on the same data before the empty-tag fix. The two runs on broken data failed exactly as listed under Tests |
 | Versions | no wire or save change: `PROTOCOL_VERSION` 10, `AntennaBlockEntity.DATA_VERSION` 4 unchanged |
 | In game | needs the user (`PHASE_3.md`, slice 16 checks): the survival playthrough, crafting each recipe in a real crafting table and seeing it appear in the recipe book |
+
+---
+
+## Phase 3C review, round 1 — fixes (row 16a)
+
+The Part C review reported two findings, both minor. Each was checked against the code before it was
+fixed. Both are real and both are fixed; none was rejected. The build is green (**625 unit tests**, 0
+skipped) and `runGameTestServer` passes **64 of 64** (63 + 1 new) on the final code in two runs (runs
+3 and 4 below), and in one run before the last change to the solve's tick. Code commit `3e5bdd1`
+(checkpoint). The commit "Phase 3 review: fixes" adds these notes and the tracker.
+
+### 1. [minor] The LIMITED cap no longer needs `requireBackhaul`
+
+**The defect, confirmed.** `BackhaulGraph.serviceCap` returned no cap whenever `requireBackhaul` was
+off (`if (!requireBackhaul || state == null) return EXCELLENT;`). §3C.2 ties only NONE to the flag ("NONE
+and requireBackhaul → isTransmitting() is false"). It states the LIMITED effect without the flag: "the
+cell transmits, but devices served by it have their effective service level capped at FAIR". Slice 12's
+reason for the gate (decision 1: "a cap on a world with no Core Site would make every cell's devices
+FAIR at best") was wrong. With no core, `BackhaulGraph.solve` has no fiber seed, so every cell is NONE.
+LIMITED needs a core and a DEGRADED hop, both built by a player. So under the default config the 3C
+done-when "a tree grown into a link path turns it DEGRADED, the cells behind it read BH: LIMITED, and
+the Storage Terminal stops working" never held. The slice 13 game test passed only because it turned
+the flag on. The done-when does not ask for the flag; the one before it does ("With requireBackhaul
+on, three sites ...").
+
+**The fix** (`BackhaulGraph.serviceCap`):
+
+| Backhaul state | `requireBackhaul` off (default) | on |
+|---|---|---|
+| FULL, or not judged yet | no cap | no cap |
+| LIMITED | **FAIR** (was: no cap) | FAIR |
+| NONE | no cap | NONE (and off the air) |
+
+- `/rancraft backhaul status` lists LIMITED cells as "LIMITED, devices capped at FAIR" whatever the
+  flag says. The "no cap because requireBackhaul is off" line and its lang key are gone.
+- `requireBackhaul`'s config comment now says a cell behind a DEGRADED link is capped either way.
+- The javadocs of `BackhaulGraph`, `BackhaulNetwork`, `DeviceContext` and `SignalSamplePayload` were
+  corrected.
+- Slice 12's decision 1 is marked superseded where it stands.
+
+**Why a Phase 2 world is still unchanged.** Core Sites and Backhaul Dishes are Phase 3 blocks, and a
+cell can be LIMITED only behind a core and a player-built DEGRADED hop. `BackhaulGraphTest.
+noCoreNoCapWithRequireBackhaulOff` (new) pins it: dishes at every site, hops in every state, no core,
+and every cell is NONE and uncapped with the flag off. Nothing else changed with the flag off: no cell
+goes off the air and no antenna is refreshed. The cap is read at each dispatch (`serviceCapAt`).
+
+**Honest-abstraction note (new, at `BackhaulGraph.serviceCap`).** With the flag off, a cell with no path
+at all is uncapped, but a cell behind a DEGRADED hop is capped at FAIR. So with the flag off, a marginal
+link that drops from DEGRADED to DOWN (in a thunderstorm) lifts the cap from the cells behind it. The
+flag off means "a cell nobody connected has implicit transport", and the cap teaches the one thing it is
+there for: a player-built DEGRADED hop makes a backhaul-limited cell. A real cell whose transport is
+down carries nothing; that is what `requireBackhaul` on models. This follows the spec's wording and
+the review's fix; the alternative is in `PHASE_3.md` follow-ups as an owner decision.
+
+**Tests.**
+- `BackhaulGraphTest.requireBackhaulOffChangesNothing` was rewritten: nothing is off the air; LIMITED
+  is FAIR; FULL, NONE and unknown have no cap.
+- `noCoreNoCapWithRequireBackhaulOff` is new.
+- `serviceCapWithRequireBackhaul` (flag on) is unchanged.
+- `StorageTerminalGameTests.a_limited_cell_stops_the_terminal_the_radio_link_keeps_working` now runs
+  with `requireBackhaul` **off**, the default: the 3C done-when at runtime under the default config
+  (six leaves, DEGRADED, LIMITED, the session closes with "backhaul limited", the Radio Link keeps
+  working).
+- `BackhaulGameTests`' chain (flag on) still shows the cap and the off-air effect.
+
+No version bump. The payload already carried the cap (`SignalSamplePayload` v4); only the value the
+server sends changes.
+
+### 2. [minor] Backhaul re-marches are spread over ticks, under a budget
+
+**The defect, confirmed.** `BackhaulNetwork.recompute` marched every hop that was new or whose bins had
+moved in one tick, with no budget. One block in a bin that many long hops cross, chunks loading or
+unloading along a chain (chunk bumps move bins, Phase 3B review), and the first recompute after a server
+start (every hop new) each re-marched all of them at once. Measured on the live server (game test
+below): 64 hops of 1000 blocks marched in one call take **3.3 to 4.6 ms in one tick**. These hops run
+mostly over unloaded chunks, about 0.06 µs per block. Over loaded ground (0.14 to 0.40 µs per block,
+slices 12 and 13) the same work would be two to six times that, which is the review's 9 to 26 ms.
+
+**The fix.**
+- **`util/BudgetedQueue<T>`** (pure, new): a queue in insertion order with no duplicates.
+  - `drain(clock, start, budget, atLeastOne, work)` reads the clock before each item and stops once the
+    budget has passed since `start`.
+  - With `atLeastOne` the first item goes through whatever the clock says, so the caller always moves
+    on. A drain therefore overruns its budget by at most one item.
+  - This is the fixed-receiver ticker's rule, extracted so it can be unit-tested with a fake clock.
+- **`BackhaulNetwork`**: the recompute is split into three parts.
+  - `begin`: takes the config and figures it will use and syncs the hop set. It queues every hop that
+    is new, whose bins moved, or every hop after a figures change.
+  - `advance`, once per tick: drains the queue under the budget. Once the queue is empty it syncs the
+    hops again (a hop paired meanwhile is queued and marched). Then it finishes in a tick of its own:
+    the same tick if that tick marched nothing (a weather-only recompute), otherwise the next.
+  - `finish`: the weather, the graph solve and the effects. Every state the recompute publishes changes
+    there at once.
+  - While a recompute runs, the trigger check is skipped and the last published states stand: the
+    lens, the dish, the command and the cap all read them.
+  - Bumps during the run are not lost. `checkedBumps` is taken at `begin` and each hop's dependency
+    snapshot at its own march, so a bin that moves after its hop was marched is caught at the next
+    check.
+  - The interval counts from the end of a recompute.
+  - `recomputeNow` (game tests) is unbounded and finishes at once. It joins a recompute in progress,
+    and marches everything again if the figures changed in between.
+- **`backhaulMarchBudgetMs`** (new, COMMON): default 0.25, range 0.01 to 20. One budget per server
+  tick, shared by every dimension, as `fixedReceiverTickBudgetMs` is. This is a deviation: §5 does not
+  list the key, but it is needed so the budget is tunable like everything else (as `scannerRangeBlocks`
+  was). It is server cost, so it stays out of `RfConfig`.
+- `/rancraft backhaul status` during the first measurement, before anything is published, says
+  "measuring the links for the first time (N still to measure)". Before, it said "nothing measured yet
+  (no Core Site or Backhaul Dish, and requireBackhaul is off)", which would be wrong then.
+
+**Differences from the review's suggestion.**
+- The review offered a second option: solve with the stale budgets now and solve again later. This fix
+  solves once, when every hop is measured. That gives one publish per recompute, and a cell cannot
+  flip twice.
+- The solve gets a tick of its own after marching ticks. Runs 1 and 2 still let one tick do both, and
+  their longest all-new ticks (0.48 and 0.65 ms) are about what that costs: the budget plus the solve.
+
+**Measured** (`BackhaulGameTests.many_dirty_long_hops_are_marched_over_ticks_under_the_budget`: 64
+parallel hops of 1000 blocks, budget 250 µs; wall clock in a shared JVM, an order of magnitude. Runs 1
+and 2 are before the solve got its own tick; runs 3 and 4 are the final code):
+
+| | run 1 | run 2 | run 3 | run 4 |
+|---|---|---|---|---|
+| **All 64 new** (a server start): ticks | 17 | 22 | 16 | 16 |
+| longest tick | 484 µs | 650 µs | 313 µs | 510 µs |
+| longest single march | 204 µs | 210 µs | 168 µs | 217 µs |
+| solve (weather, graph, effects) | 413 µs | 466 µs | 229 µs | 441 µs |
+| total over the ticks | 4.74 ms | 6.46 ms | 4.17 ms | 4.51 ms |
+| **The same 64 at once** (`recomputeNow`, one tick) | 3.34 ms | 4.59 ms | 3.79 ms | 3.66 ms |
+| **All 64 dirtied by one block**: ticks | 34 | 30 | 29 | 27 |
+| longest tick | 913 µs | 595 µs | 760 µs | 651 µs |
+| longest single march | 709 µs | 478 µs | 547 µs | 645 µs |
+| total over the ticks | 11.8 ms | 11.1 ms | 9.6 ms | 9.3 ms |
+
+- On the final code the worst tick is **0.31 to 0.76 ms**, against 3.3 to 4.6 ms for the same work in
+  one tick. A tick above the budget plus about 0.2 ms is one where a single march was an outlier
+  (0.55 to 0.65 ms, against an average of 0.14 ms in that phase), or the solve's own tick.
+- **Spreading costs more CPU in total.** All-new: 4.2 to 4.5 ms spread, against 3.7 ms in one call.
+  All-dirty: 9.3 to 9.6 ms, about 0.15 µs per block against about 0.06. The likely cause: each tick's
+  first march starts with cold caches, and the dirty phase marches about two hops per tick against four.
+  That is the price of keeping every tick short.
+- **The solve is not budgeted:** 0.2 to 0.47 ms here. It covers 64 hops, 128 dishes and the 230 or so
+  cells that the overworld network holds from the other game tests. It runs once per recompute in a tick
+  of its own. Slice 11's follow-up on the solve's cost stands.
+- **Latency:** after a trigger, the states land at the next allowed recompute plus 16 to 34 ticks for
+  64 long hops (1 to 2 s). With a few hops it is a tick or two: in the chain test, one hop is re-marched
+  and published the next tick.
+
+**Honest-abstraction note (new, in the `BackhaulNetwork` class javadoc):** "a recompute's states land
+together, a little late". While the marches run, the last published states stand, and a cell nobody
+has judged yet stays on the air. The delay is a cost budget, not a model of anything.
+
+**Tests.**
+- `BudgetedQueueTest` (5, fake clock):
+  - order, and no duplicates;
+  - the drain stops at the budget and overruns it by at most one item, and with uneven costs no item
+    starts after the budget is spent;
+  - progress whatever the budget: `atLeastOne`, and a budget smaller than any item still drains one
+    per tick;
+  - no budget drains everything; an empty queue does nothing and reads no clock; a negative budget
+    throws;
+  - an item that its own work queues again waits for the next drain.
+- Game test `many_dirty_long_hops_are_marched_over_ticks_under_the_budget` (new batch
+  `rancraft_backhaul_march_budget`): 64 hops along +x from x 24584, z 24576 to 24702, two blocks
+  apart, all crossing the bin of their west ends, ends in forced chunks.
+  - **All new**, on the server's own recompute. Seen mid-way: nothing published, hops still queued.
+    At the end: 64 marched over at least 2 ticks, longest tick at most max(budget + longest march,
+    solve) + 2 ms (an allowance for a GC pause). The result equals an unbounded `recomputeNow(true)`
+    exactly.
+  - **All dirty**: a stone placed with its event on hop 0's line, 6 blocks from its dish, in the bin
+    every hop crosses. The next allowed recompute marches all 64 again, spread over ticks. Mid-way,
+    hop 0 still reads its last published state, UP. At the end hop 0 is DOWN at −75.55 dBm, equal to
+    a fresh march, and the other 63 are UP.
+
+**Found while verifying (behaviour as designed).** My first expectation for hop 0 was DEGRADED at
+−69.55 dBm, as with the chain test's mid-path stone. That was wrong. Six blocks from a dish, the four
+Fresnel offset paths still run through the line's voxel (their offset tapers from 0.6 r(0.5) at the
+midpoint to zero at the dishes). So the stone costs 36 dB on the line plus the 6 dB Fresnel penalty,
+and the hop is DOWN. Mid-path a block on the line costs only its own loss, because there the offset
+paths pass beside it (slice 11).
+
+### APIs verified against sources (new to this codebase)
+
+None. `BudgetedQueue` uses only `java.util`. The config key uses `ModConfigSpec.Builder.defineInRange`
+for a double, as the existing keys do.
+
+### Verification
+
+| Check | Result |
+|---|---|
+| `./gradlew build` | **625 passed, 0 failed, 0 skipped** (619 + 5 `BudgetedQueueTest` + 1 `BackhaulGraphTest`) |
+| `rf` / `util` purity | `PackagePurityTest` passes (`util/BudgetedQueue` imports `java.util` only) |
+| `./gradlew runGameTestServer` | "64 tests are now running" and "All 64 required tests passed" in runs 2, 3 and 4. Run 1: 63 of 64, the new test's own wrong expectation for hop 0 (above), corrected |
+| The fixes bite | one run with both fixes disabled (the old `!requireBackhaul` gate in `serviceCap`, and an unlimited budget in `onServerTick`): exactly the two tests failed. The Storage Terminal test failed on "capped at FAIR". The march-budget test failed on "the server's own recompute starts on the new hops": the recompute never spanned a tick. `BackhaulGraphTest.requireBackhaulOffChangesNothing` failed too (LIMITED expected FAIR, was EXCELLENT). Code restored afterwards |
+| Versions | no wire or save change: `PROTOCOL_VERSION` 10, `AntennaBlockEntity.DATA_VERSION` 4 and `BackhaulNetwork.DATA_VERSION` 1 unchanged. One config key added (COMMON; an older config file gets the default on load) |
+| In game | needs the user: `PHASE_3.md`, "Phase 3C review (row 16a) checks" |
