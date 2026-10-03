@@ -5556,7 +5556,7 @@ The Part C review reported two findings, both minor. Each was checked against th
 fixed. Both are real and both are fixed; none was rejected. The build is green (**625 unit tests**, 0
 skipped) and `runGameTestServer` passes **64 of 64** (63 + 1 new) on the final code in two runs (runs
 3 and 4 below), and in one run before the last change to the solve's tick. Code commit `3e5bdd1`
-(checkpoint). The commit "Phase 3 review: fixes" adds these notes and the tracker.
+(checkpoint). The commit `23bb7c8` "Phase 3 review: fixes" adds these notes and the tracker.
 
 ### 1. [minor] The LIMITED cap no longer needs `requireBackhaul`
 
