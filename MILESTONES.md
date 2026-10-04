@@ -4,15 +4,15 @@ A map of the whole project: where it started, every landmark crossed, and what s
 between here and "Phase 3 done". Detailed engineering notes live in `NOTES.md`; the Phase 3
 checklist lives in `PHASE_3.md`.
 
-**Where we are (2026-10-01):** Phases 1 and 2, RF Vision Steps 1–3a, and all the code for Phase 3
-Parts A and B are done, reviewed and documented. **485 unit tests** and **30 game tests** pass.
-Phase 3 Part C has not started.
+**Where we are (2026-10-03): all Phase 3 code is done.** Parts A, B and C are built and reviewed.
+**625 unit tests** and **64 game tests** pass. What is left is a little docs work (deferred on
+purpose, see "What is left"), merging into `main`, and your in-game checks.
 
 ```
 Phase 1 ████████████ done
 Phase 2 ████████████ done
 Vision  ██████████░░ Steps 1, 2, 3a done · 3b designed, not built
-Phase 3 ████████░░░░ Parts A and B done (in-game checks pending) · Part C not started
+Phase 3 ███████████░ Parts A, B, C built and reviewed · some docs deferred · in-game checks pending
 ```
 
 ---
@@ -127,7 +127,23 @@ Real bugs the review caught, each now fixed and tested:
 
 Tests: **382 → 485** unit tests, **5 → 30** game tests.
 
-### 9. Process lessons
+### 9. Phase 3, Part C: infrastructure and progression (2026-10-01 → 10-03)
+
+| Slice | What it gave you | Commit |
+|---|---|---|
+| 10 | **Radio tiers**: band_3500 needs a Wideband Radio Unit; old saves migrate to v3 and keep working | `4b3ce10` |
+| 11 | **Microwave backhaul maths**: link budget, Fresnel clearance, rain fade, UP / DEGRADED / DOWN | `53ce35f` |
+| 12 | **Backhaul in game**: core site, dish, link tool, lens link lines, `/rancraft backhaul status` | `8f2a31a` |
+| 13 | **Wireless Storage Terminal**: open a data-centre chest remotely while service is GOOD | `b1735d2` |
+| 14 | **Proximity Scanner**: nearby hostile mobs on the HUD, the reward for deploying band_3500 | `9e3fab5` |
+| 15 | **Power + Site Generator**: antennas burn fuel (off by default). A 30 dBm sector burns about 6.6x the fuel of a 20 dBm one | `bce3a8a` |
+| 16 | **Recipes and loot tables**: everything craftable in survival, every block drops itself | `2350ce9` |
+| — | Review round: 2 findings, **both real and fixed** | `23bb7c8` |
+
+Measured: worst backhaul recompute tick 0.68 ms; 200 radio links about 0.03 ms per tick.
+Tests: **485 → 625** unit tests, **30 → 64** game tests.
+
+### 10. Process lessons
 
 - The account **usage limit** stopped the agents several times, and the internet dropped twice.
   Nothing was lost: work is committed in small green steps and resumed from the last one.
@@ -139,7 +155,7 @@ Tests: **382 → 485** unit tests, **5 → 30** game tests.
 
 ## What is left
 
-### A. Finish Part A (running now)
+### A. Part A (done)
 
 - [x] All code, your two decisions, and the 9 review fixes. 382 tests green.
 - [x] Docs: `PHASE_3.md` / `NOTES.md` updated, and "How to test Part 3A in game" written at the end
@@ -156,18 +172,22 @@ Tests: **382 → 485** unit tests, **5 → 30** game tests.
 - [x] **9 · Radio Link:** remote redstone over the network. Flaky at POOR service, solid at FAIR.
 - [x] Review (4 findings, all fixed) and docs: "How to test Part 3B in game" at the end of
       `PHASE_3.md`.
-- [ ] Push the docs commits to GitHub.
+- [x] Pushed to GitHub.
 
-### C. Part 3C: infrastructure and progression (7 slices, not started; the biggest part)
+### C. Part 3C: infrastructure and progression (done; in-game checks pending)
 
-- [ ] **10 · Radio tiers:** band_3500 needs a Wideband Radio Unit (saves migrate to v3).
-- [ ] **11 · Microwave backhaul maths:** link budget, Fresnel clearance, rain fade.
-- [ ] **12 · Backhaul in game:** core site, dish, link tool; cells without backhaul go off air
-      (off by default).
-- [ ] **13 · Storage Terminal:** open a data-centre chest remotely while service is GOOD.
-- [ ] **14 · Proximity Scanner:** the reward for deploying band_3500.
-- [ ] **15 · Power:** antennas burn fuel; +10 dB Tx costs about 10× the energy (off by default).
-- [ ] **16 · Recipes and loot tables:** everything craftable in survival.
+- [x] **10–16** all built: radio tiers, backhaul maths, backhaul in game, Storage Terminal,
+      Proximity Scanner, power, recipes. Review: 2 findings, both fixed.
+- [x] Pushed to GitHub.
+
+### Deferred on purpose (docs only; independent; do any time, in any order)
+
+You asked to skip what can wait. None of these touch code, and each can be done on its own:
+
+- [ ] `NOTES.md` "Phase 3C summary".
+- [ ] README's Part 3C section, including how to turn on `requireBackhaul` / `requirePower`.
+- [ ] A single "How to test Part 3C in game" checklist. Until it exists, each 3C slice's own check
+      steps in `PHASE_3.md` cover the same ground.
 
 ### D. Wrap-up
 
@@ -176,10 +196,10 @@ Tests: **382 → 485** unit tests, **5 → 30** game tests.
       only a person playing can confirm (rings render, trail pillars land in the right place,
       blocks drop, and so on).
 
-### Plan to get there
+### Open decisions (yours, none blocking)
 
-Part C is next: seven slices, the biggest part. If the usage limit or the internet stops a run,
-say **"continue"** and it picks up from the last green commit. Two small decisions from Part B can
-wait for you (both in `PHASE_3.md` follow-ups): whether fixed devices should re-measure at least
-every so often even when nothing nearby changed, and whether a Radio Link receiver should forget a
-transmitter whose chunk has been unloaded for a long time.
+All in `PHASE_3.md` follow-ups: whether fixed devices should re-measure at least every so often
+even when nothing nearby changed; whether a Radio Link receiver should forget a transmitter whose
+chunk has been unloaded for a long time; and two Locator questions from Part A (nearly collinear
+towers can give a confident fix on the wrong side; whether the HUD should say "Sites" instead of
+"Cells").
