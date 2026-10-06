@@ -62,7 +62,7 @@ class LocatorHudTextTest {
         assertEquals(LocatorStyle.FIX_ARGB, screen.stateArgb());
         assertEquals(List.of(
                 "Est  x 1204   z -3391   y ~87   ±9.0 m   HDOP 1.4",
-                "Cells 4   best res 15 m (band_1800)",
+                "Sites 4   best res 15 m (band_1800)",
                 "WP 2/3 (saved ±9.0 m)   312 m   bearing 047°"), texts(screen));
     }
 
@@ -83,8 +83,8 @@ class LocatorHudTextTest {
                 payload(new LocatorFix.PoorGeometry(11.2, 3), 3), false, LocatorWaypoints.EMPTY, OVERWORLD);
         assertEquals("POOR GEOMETRY (HDOP 11.2)", screen.state());
         assertEquals(LocatorStyle.PARTIAL_ARGB, screen.stateArgb());
-        assertEquals("No position: the cells are too close to a line (limit HDOP 6.0)", texts(screen).get(0));
-        assertEquals("Cells 3   best res 15 m (band_1800)", texts(screen).get(1));
+        assertEquals("No position: the sites are too close to a line (limit HDOP 6.0)", texts(screen).get(0));
+        assertEquals("Sites 3   best res 15 m (band_1800)", texts(screen).get(1));
 
         LocatorHudText.Screen singular = LocatorHudText.screen(
                 payload(new LocatorFix.PoorGeometry(LocatorSolver.HDOP_CEILING, 3), 3), false,
@@ -100,7 +100,7 @@ class LocatorHudTextTest {
         assertEquals("AMBIGUOUS", likelyB.state());
         assertEquals("A  x 10  z 20    or    B  x -5  z 7", texts(likelyB).get(0));
         assertEquals("Likely B: nearer the last estimate", texts(likelyB).get(1));
-        assertEquals("Cells 2   best res 15 m (band_1800)", texts(likelyB).get(2));
+        assertEquals("Sites 2   best res 15 m (band_1800)", texts(likelyB).get(2));
 
         LocatorHudText.Screen none = LocatorHudText.screen(
                 payload(new LocatorFix.Ambiguous(10.2, 20.9, -4.5, 7.0, LocatorFix.Ambiguous.NO_PREFERENCE), 2),
@@ -112,11 +112,11 @@ class LocatorHudTextTest {
     @DisplayName("RANGE ONLY: a ring round one cell, and why (one cell, or two circles that do not meet)")
     void rangeOnly() {
         LocatorFix ring = new LocatorFix.RangeOnly(100.5, -49.5, 40.0);
-        assertEquals("On a ring 40 m from the cell at x 100  z -50  (one cell heard)",
+        assertEquals("On a ring 40 m from the site at x 100  z -50  (one site heard)",
                 texts(LocatorHudText.screen(payload(ring, 1), false, LocatorWaypoints.EMPTY, OVERWORLD)).get(0));
         LocatorHudText.Screen two = LocatorHudText.screen(payload(ring, 2), false, LocatorWaypoints.EMPTY, OVERWORLD);
         assertEquals("RANGE ONLY", two.state());
-        assertEquals("On a ring 40 m from the cell at x 100  z -50  (the two circles do not meet)", texts(two).get(0));
+        assertEquals("On a ring 40 m from the site at x 100  z -50  (the two circles do not meet)", texts(two).get(0));
     }
 
     @Test
@@ -126,7 +126,7 @@ class LocatorHudTextTest {
                 payload(new LocatorFix.NoSignal(), 0), false, LocatorWaypoints.EMPTY, OVERWORLD);
         assertEquals("NO SIGNAL", screen.state());
         assertEquals(LocatorStyle.NO_SIGNAL_ARGB, screen.stateArgb());
-        assertEquals(List.of("No cell at or above -100 dBm to range to", "Cells 0",
+        assertEquals(List.of("No cell at or above -100 dBm to range to", "Sites 0",
                 "WP -   sneak + use saves the estimate"), texts(screen));
 
         LocatorHudText.Screen nothing = LocatorHudText.screen(null, true, LocatorWaypoints.EMPTY, OVERWORLD);

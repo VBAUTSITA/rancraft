@@ -30,6 +30,9 @@ class FixedReceiverTickerTest {
 
     private static final int INTERVAL = 20;
     private static final long SITES = 4L;
+    private static final long EVALUATED = 1_000L;
+    private static final long NOW = EVALUATED + 20L;
+    private static final int NO_LIMIT = 0;
     private static final long BIN_A = BinTraversal.key(0, 0);
     private static final long BIN_B = BinTraversal.key(1, 0);
     private static final long OTHER_BIN = BinTraversal.key(-7, 3);
@@ -37,7 +40,7 @@ class FixedReceiverTickerTest {
     private final RegionEpochs epochs = new RegionEpochs();
 
     private Cached cached() {
-        return new Cached(SignalSample.empty(100L), epochs.snapshot(new long[] {BIN_A, BIN_B}), SITES);
+        return new Cached(SignalSample.empty(100L), epochs.snapshot(new long[] {BIN_A, BIN_B}), SITES, EVALUATED);
     }
 
     // ---- canReplay --------------------------------------------------------------------------------
@@ -46,10 +49,10 @@ class FixedReceiverTickerTest {
     @DisplayName("replay: caching on, no armed candidate, same antennas, no dependency bin bumped")
     void replaysWhenQuiet() {
         Cached cached = cached();
-        assertTrue(FixedReceiverTicker.canReplay(cached, true, false, epochs, SITES));
+        assertTrue(FixedReceiverTicker.canReplay(cached, true, false, epochs, SITES, NOW, NO_LIMIT));
         epochs.bumpBin(OTHER_BIN);
         epochs.bumpBlock(5_000, -5_000);
-        assertTrue(FixedReceiverTicker.canReplay(cached, true, false, epochs, SITES),
+        assertTrue(FixedReceiverTicker.canReplay(cached, true, false, epochs, SITES, NOW, NO_LIMIT),
                 "a block change outside its bins is not a reason to re-evaluate");
     }
 
@@ -57,22 +60,48 @@ class FixedReceiverTickerTest {
     @DisplayName("no replay: caching off, a candidate armed, no entry, another site version, or a dependency bin bumped")
     void eachConditionBlocksTheReplay() {
         Cached cached = cached();
-        assertFalse(FixedReceiverTicker.canReplay(cached, false, false, epochs, SITES), "caching off");
-        assertFalse(FixedReceiverTicker.canReplay(cached, true, true, epochs, SITES),
+        assertFalse(FixedReceiverTicker.canReplay(cached, false, false, epochs, SITES, NOW, NO_LIMIT), "caching off");
+        assertFalse(FixedReceiverTicker.canReplay(cached, true, true, epochs, SITES, NOW, NO_LIMIT),
                 "an armed candidate: replaying would freeze the time-to-trigger");
-        assertFalse(FixedReceiverTicker.canReplay(null, true, false, epochs, SITES), "nothing cached yet");
-        assertFalse(FixedReceiverTicker.canReplay(cached, true, false, epochs, SITES + 1),
+        assertFalse(FixedReceiverTicker.canReplay(null, true, false, epochs, SITES, NOW, NO_LIMIT), "nothing cached yet");
+        assertFalse(FixedReceiverTicker.canReplay(cached, true, false, epochs, SITES + 1, NOW, NO_LIMIT),
                 "an antenna was added, removed or reconfigured");
         epochs.bumpBin(BIN_B);
-        assertFalse(FixedReceiverTicker.canReplay(cached, true, false, epochs, SITES), "a block changed on a ray");
+        assertFalse(FixedReceiverTicker.canReplay(cached, true, false, epochs, SITES, NOW, NO_LIMIT), "a block changed on a ray");
     }
 
     @Test
     @DisplayName("an evaluation that marched nothing depends on no block")
     void nothingMarchedNothingDepended() {
-        Cached none = new Cached(SignalSample.empty(1L), RegionEpochs.Snapshot.NONE, SITES);
+        Cached none = new Cached(SignalSample.empty(1L), RegionEpochs.Snapshot.NONE, SITES, EVALUATED);
         epochs.bumpBin(BIN_A);
-        assertTrue(FixedReceiverTicker.canReplay(none, true, false, epochs, SITES));
+        assertTrue(FixedReceiverTicker.canReplay(none, true, false, epochs, SITES, NOW, NO_LIMIT));
+    }
+
+    @Test
+    @DisplayName("maximum replay age: a quiet receiver is evaluated again once its sample reaches its age limit")
+    void replayAgeLimit() {
+        Cached cached = cached();
+        assertTrue(FixedReceiverTicker.canReplay(cached, true, false, epochs, SITES, EVALUATED + 599, 600));
+        assertFalse(FixedReceiverTicker.canReplay(cached, true, false, epochs, SITES, EVALUATED + 600, 600),
+                "at the limit: evaluate again, nothing having changed");
+        assertTrue(FixedReceiverTicker.canReplay(cached, true, false, epochs, SITES, EVALUATED + 1_000_000, 0),
+                "0 is no limit");
+    }
+
+    @Test
+    @DisplayName("each receiver's age limit is fixed by its position, between half the maximum (exclusive) and the maximum")
+    void replayAgeLimitSpread() {
+        assertEquals(0, FixedReceiverTicker.replayAgeLimitTicks(BIN_A, 0), "off");
+        java.util.Set<Integer> seen = new java.util.HashSet<>();
+        for (long key = 0; key < 2_000; key++) {
+            int limit = FixedReceiverTicker.replayAgeLimitTicks(key * 7_919L, 600);
+            assertTrue(limit > 300 && limit <= 600, "limit " + limit);
+            assertEquals(limit, FixedReceiverTicker.replayAgeLimitTicks(key * 7_919L, 600), "stable per position");
+            seen.add(limit);
+        }
+        assertTrue(seen.size() > 200, "spread over the range, not bunched: " + seen.size() + " distinct limits");
+        assertEquals(1, FixedReceiverTicker.replayAgeLimitTicks(BIN_A, 1), "a 1-tick maximum still limits");
     }
 
     // ---- the stale-candidate threshold ------------------------------------------------------------

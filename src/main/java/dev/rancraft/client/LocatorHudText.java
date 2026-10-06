@@ -17,7 +17,7 @@ import java.util.Optional;
  * <pre>
  * Network Locator                              FIX
  * Est  x 1204   z -3391   y ~87   ±9.0 m   HDOP 1.4
- * Cells 4   best res 15 m (band_1800)
+ * Sites 4   best res 15 m (band_1800)
  * WP 2/3 (saved ±9.0 m)   312 m   bearing 047°
  * </pre>
  *
@@ -109,13 +109,13 @@ public final class LocatorHudText {
                 }, DIM_ARGB));
             }
             case LocatorFix.RangeOnly ring -> lines.add(new Line(String.format(Locale.ROOT,
-                    "On a ring %s from the cell at x %d  z %d  (%s)",
+                    "On a ring %s from the site at x %d  z %d  (%s)",
                     metres(ring.radius() * mpb), block(ring.cx()), block(ring.cz()),
-                    payload.rings().size() <= 1 ? "one cell heard" : "the two circles do not meet"), TEXT_ARGB));
+                    payload.rings().size() <= 1 ? "one site heard" : "the two circles do not meet"), TEXT_ARGB));
             case LocatorFix.PoorGeometry poor -> {
                 state = String.format(Locale.ROOT, "%s (HDOP %s)", state, hdop(poor.hdop()));
                 lines.add(new Line(String.format(Locale.ROOT,
-                        "No position: the cells are too close to a line (limit HDOP %.1f)", payload.maxHdop()),
+                        "No position: the sites are too close to a line (limit HDOP %.1f)", payload.maxHdop()),
                         TEXT_ARGB));
             }
             case LocatorFix.NoSignal ignored -> lines.add(new Line(String.format(Locale.ROOT,
@@ -128,13 +128,20 @@ public final class LocatorHudText {
         return new Screen(TITLE, state, LocatorStyle.stateArgb(kind), lines);
     }
 
-    /** {@code Cells 4   best res 15 m (band_1800)}; just {@code Cells 0} with no cell used. */
+    /**
+     * {@code Sites 4   best res 15 m (band_1800)}; just {@code Sites 0} with none used.
+     *
+     * <p>"Sites", not "Cells" (owner decision on the Phase 3A review's spec conflict, row 16d): the
+     * solver ranges to sites, antennas within {@code locatorSiteMergeBlocks} grouped as one
+     * ({@link LocatorSolver#cellsUsed}), so a three-sector site heard on all three sectors counts once.
+     * The wire and the solver keep the name {@code cellsUsed}.
+     */
     static String cellsLine(LocatorFixPayload payload) {
         int cells = payload.cellsUsed();
         if (cells == 0 || payload.bestResolutionBandId().isEmpty()) {
-            return "Cells " + cells;
+            return "Sites " + cells;
         }
-        return String.format(Locale.ROOT, "Cells %d   best res %s (%s)",
+        return String.format(Locale.ROOT, "Sites %d   best res %s (%s)",
                 cells, metres(payload.bestResolutionMeters()), payload.bestResolutionBandId());
     }
 

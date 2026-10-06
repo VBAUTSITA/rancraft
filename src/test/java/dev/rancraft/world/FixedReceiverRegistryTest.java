@@ -77,7 +77,7 @@ class FixedReceiverRegistryTest {
         registry.register(key, old);
         FixedReceiverRegistry.Entry entry = registry.entry(key);
         registry.setDueOf(key, 77L);
-        entry.cached = new FixedReceiverTicker.Cached(SignalSample.empty(5L), RegionEpochs.Snapshot.NONE, 3L);
+        entry.cached = new FixedReceiverTicker.Cached(SignalSample.empty(5L), RegionEpochs.Snapshot.NONE, 3L, 0L);
         registry.states.put(key, ReceiverState.NONE.reselected(9L, 5L), 5L);
 
         assertFalse(registry.register(key, successor), "not a new receiver");

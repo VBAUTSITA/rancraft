@@ -71,6 +71,7 @@ public final class FixedReceiverGameTests {
     private static final String BATCH_HOOKS = "rancraft_fixed_receivers_hooks";
     private static final String BATCH_COST = "rancraft_fixed_receivers_cost";
     private static final String BATCH_ACCESS = "rancraft_fixed_receivers_chunk_access";
+    private static final String BATCH_AGE = "rancraft_fixed_receivers_max_replay_age";
     private static final int TIMEOUT_TICKS = 900;
 
     /** Nether chunks, far from anything, one per test that needs one. */
@@ -87,6 +88,14 @@ public final class FixedReceiverGameTests {
     private static final int ACCESS_RX_CHUNK_X = 256;
     private static final int ACCESS_WALL_CHUNK_X = 260;
     private static final int ACCESS_CELL_CHUNK_X = 264;
+    /**
+     * The maximum-replay-age test (row 16d): a row of its own, region bins (32, 36) that no other test's
+     * chunks touch, so no other test's chunk load or unload can wake its receiver early.
+     */
+    private static final int AGE_CHUNK_X = 256;
+    private static final int AGE_CHUNK_Z = 288;
+    /** The maximum replay age that test sets: its receiver's own limit is 51 to 100 ticks. */
+    private static final int MAX_REPLAY_TEST_TICKS = 100;
     /** Above the Nether's bedrock roof (y 127): open air. */
     private static final int AIR_Y = 200;
     private static final int RECEIVERS_FOR_COST = 200;
@@ -120,6 +129,8 @@ public final class FixedReceiverGameTests {
         tests.add(test(BATCH_COST, prefix + "two_hundred_receivers_in_steady_state", FixedReceiverGameTests::cost));
         tests.add(test(BATCH_ACCESS, prefix + "a_chunk_on_its_ray_reaching_or_leaving_full_reevaluates_it",
                 FixedReceiverGameTests::chunkAccess));
+        tests.add(test(BATCH_AGE, prefix + "an_eventless_change_on_its_ray_is_seen_at_the_max_replay_age",
+                FixedReceiverGameTests::maxReplayAge));
         return tests;
     }
 
@@ -149,6 +160,11 @@ public final class FixedReceiverGameTests {
 
     @AfterBatch(batch = BATCH_ACCESS)
     public static void afterAccess(ServerLevel level) {
+        runCleanups();
+    }
+
+    @AfterBatch(batch = BATCH_AGE)
+    public static void afterAge(ServerLevel level) {
         runCleanups();
     }
 
@@ -347,6 +363,83 @@ public final class FixedReceiverGameTests {
                 .thenExecute(() -> helper.assertTrue(device.count() + lowTier.count() == mark[0],
                         "unregistered devices hear nothing"))
                 .thenSucceed();
+    }
+
+    // ---- 1b. the maximum replay age (row 16d) ---------------------------------------------------------
+
+    /**
+     * Row 16d: a block change that fires no event is still seen once the cached sample reaches the
+     * receiver's age limit. Stone goes on the link path with a plain {@code setBlock} and no epoch bump,
+     * as flowing water or {@code /fill} would put it there: the next dispatches replay the old, clear
+     * sample, then a fresh evaluation at the limit ({@link FixedReceiverTicker#replayAgeLimitTicks}, 51
+     * to 100 ticks here with {@value #MAX_REPLAY_TEST_TICKS}) reads the stone. With the limit off (0),
+     * nothing would ever re-evaluate it.
+     */
+    private static void maxReplayAge(GameTestHelper helper) {
+        ServerLevel nether = nether(helper);
+        forceNetherChunk(nether, AGE_CHUNK_X, AGE_CHUNK_Z);
+        int baseX = AGE_CHUNK_X * 16;
+        int baseZ = AGE_CHUNK_Z * 16;
+        BlockPos rx = new BlockPos(baseX + 1, AIR_Y, baseZ + 1);
+        BlockPos stone = new BlockPos(baseX + 7, AIR_Y, baseZ + 1);
+        long cellId = -8_100_003L;
+        CellParams cell = CellParams.omniDefaults(cellId, baseX + 14, AIR_Y, baseZ + 1);
+        int interval = interval();
+        int limit = FixedReceiverTicker.replayAgeLimitTicks(rx.asLong(), MAX_REPLAY_TEST_TICKS);
+        int configuredMaxReplay = RanCraftConfig.FIXED_RECEIVER_MAX_REPLAY_TICKS.get();
+
+        SiteRegistry sites = SiteRegistry.of(nether);
+        FixedReceiverRegistry registry = FixedReceiverRegistry.of(nether);
+        RecordingDevice device = new RecordingDevice(new DeviceRequirement(ServiceLevel.POOR, 1));
+        CLEANUPS.add(() -> {
+            RanCraftConfig.FIXED_RECEIVER_MAX_REPLAY_TICKS.set(configuredMaxReplay);
+            registry.unregister(rx, device);
+            sites.unregister(cellId);
+            nether.setBlock(stone, Blocks.AIR.defaultBlockState(), 3);
+        });
+        RanCraftConfig.FIXED_RECEIVER_MAX_REPLAY_TICKS.set(MAX_REPLAY_TEST_TICKS);
+        sites.register(cell);
+        helper.assertTrue(registry.register(rx, device), "registered");
+        double stoneDb = RfDataLoader.materials().attenuationDb(Blocks.STONE.defaultBlockState())
+                * RfDataLoader.bands().getOrFallback(cell.bandId()).penetrationFactor();
+
+        helper.startSequence()
+                .thenWaitUntil(() -> helper.assertTrue(device.count() >= 1, "evaluated once"))
+                .thenExecute(() -> {
+                    Dispatch first = device.dispatches.get(0);
+                    helper.assertTrue(first.tick() == first.sample().timestampTick() && obstruction(first) == 0.0,
+                            "a fresh evaluation in open air");
+                    // No event and no epoch bump: invisible to the region epochs.
+                    nether.setBlock(stone, Blocks.STONE.defaultBlockState(), 3);
+                })
+                .thenWaitUntil(() -> helper.assertTrue(firstFreshAfter(device, 1) >= 0, "evaluated afresh at last"))
+                .thenExecute(() -> {
+                    Dispatch first = device.dispatches.get(0);
+                    int index = firstFreshAfter(device, 1);
+                    Dispatch fresh = device.dispatches.get(index);
+                    long age = fresh.tick() - first.tick();
+                    helper.assertTrue(index >= 2, "at least one replay first: the change fired no event");
+                    for (int i = 1; i < index; i++) {
+                        helper.assertTrue(device.dispatches.get(i).sample() == first.sample(),
+                                "before the limit the stone is not seen: dispatch " + i + " replays the clear sample");
+                    }
+                    helper.assertTrue(age >= limit && age < limit + interval,
+                            "evaluated again at the first turn at or past the age limit " + limit + ": after " + age);
+                    helper.assertTrue(Math.abs(obstruction(fresh) - stoneDb) < 1e-9,
+                            "the fresh evaluation reads the stone: " + obstruction(fresh) + " dB, stone " + stoneDb + " dB");
+                })
+                .thenSucceed();
+    }
+
+    /** The index of the first fresh dispatch at or after {@code from}, or -1. */
+    private static int firstFreshAfter(RecordingDevice device, int from) {
+        for (int i = from; i < device.count(); i++) {
+            Dispatch dispatch = device.dispatches.get(i);
+            if (dispatch.tick() == dispatch.sample().timestampTick()) {
+                return i;
+            }
+        }
+        return -1;
     }
 
     private static double obstruction(Dispatch dispatch) {
@@ -641,8 +734,13 @@ public final class FixedReceiverGameTests {
                 registry.unregister(positions.get(i), devices.get(i));
             }
         };
+        // Row 16d: the steady state measured here is the replay path. The maximum replay age adds one
+        // fresh evaluation per receiver per 300-600 ticks on top (NOTES.md, row 16d), so it is off here.
+        int configuredMaxReplay = RanCraftConfig.FIXED_RECEIVER_MAX_REPLAY_TICKS.get();
+        RanCraftConfig.FIXED_RECEIVER_MAX_REPLAY_TICKS.set(0);
         CLEANUPS.add(() -> {
             RanCraftConfig.EVALUATION_INTERVAL_TICKS.set(configuredInterval);
+            RanCraftConfig.FIXED_RECEIVER_MAX_REPLAY_TICKS.set(configuredMaxReplay);
             unregisterAll.run();
             sites.unregister(cellId);
         });

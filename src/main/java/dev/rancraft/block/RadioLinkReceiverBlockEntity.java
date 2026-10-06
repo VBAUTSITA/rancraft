@@ -1,5 +1,6 @@
 package dev.rancraft.block;
 
+import dev.rancraft.RanCraftConfig;
 import dev.rancraft.device.DeviceContext;
 import dev.rancraft.device.RadioLinkMemory;
 import dev.rancraft.device.RadioLinkNetwork;
@@ -32,8 +33,9 @@ import net.minecraft.world.level.chunk.LevelChunk;
  * chunk is kept, and looked up again next turn: it cannot change its input while unloaded, so its last
  * delivered state is still the best knowledge there is (stale, as for a lost message). Honest label
  * (NOTES.md, slice 9): a real network learns that a terminal has gone from a detach or an inactivity
- * timer; here the transmitter's removal and the receiver's look at its block stand in for that, and an
- * unloaded transmitter is never timed out.
+ * timer; here the transmitter's removal and the receiver's look at its block stand in for the detach.
+ * The inactivity timer exists since row 16d ({@link RadioLinkMemory#expire}): a transmitter not heard
+ * from for {@code radioLinkTransmitterTimeoutTicks} (60 s), unloaded or out of service, is forgotten.
  *
  * <p><b>Changing the receiver's own address</b> forgets everything it heard: the old address's
  * transmitters say nothing about the new one's. Its output goes to 0 until a message on the new address
@@ -60,13 +62,17 @@ public class RadioLinkReceiverBlockEntity extends RadioLinkBlockEntity implement
 
     /**
      * Joins the address book (first, so that from now on no departure is missed), looks up the
-     * transmitters remembered from a save that are not yet verified, forgets the ones that are gone, and
-     * makes the output match. In steady state nothing is unverified and nothing is looked up.
+     * transmitters remembered from a save that are not yet verified, forgets the ones that are gone and
+     * the ones silent past the timeout (row 16d), and makes the output match. In steady state nothing is
+     * unverified and nothing is looked up.
      */
     @Override
     protected void afterSample(ServerLevel level, BlockPos pos, DeviceContext ctx) {
         RadioLinkNetwork.of(level).attach(pos.asLong(), this);
         if (memory.unverifiedCount() > 0 && memory.verify(txKey -> presence(level, txKey))) {
+            unsavedChange = true;
+        }
+        if (memory.expire(level.getGameTime(), RanCraftConfig.radioLinkTransmitterTimeoutTicks())) {
             unsavedChange = true;
         }
         if (unsavedChange) {
@@ -92,7 +98,7 @@ public class RadioLinkReceiverBlockEntity extends RadioLinkBlockEntity implement
     public void deliver(long txKey, boolean powered, long gameTime) {
         delivered++;
         lastDeliveredTick = gameTime;
-        if (memory.hear(txKey, powered)) {
+        if (memory.hear(txKey, powered, gameTime)) {
             memoryChanged();
         }
     }

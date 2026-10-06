@@ -70,7 +70,10 @@ public final class RadioLinkGameTests {
     private static final String BATCH_CHUNKS = "rancraft_radio_link_chunks";
     private static final String BATCH_COST = "rancraft_radio_link_cost";
     private static final String BATCH_OUTSIDE_FULL = "rancraft_radio_link_outside_full";
+    private static final String BATCH_SILENT = "rancraft_radio_link_silent_timeout";
     private static final int TIMEOUT_TICKS = 1_600;
+    /** The transmitter timeout the silent-transmitter test sets (row 16d): 3 intervals at the default. */
+    private static final int SILENT_TIMEOUT_TICKS = 60;
 
     /** Nether chunks, far from slice 8's (x 256-264, z 256) and from each other. */
     private static final int CHUNK_Z = 272;
@@ -91,6 +94,7 @@ public final class RadioLinkGameTests {
     private static final int OUTSIDE_FULL_CHUNK_X = 380;
     private static final int OUTSIDE_FULL_KEEPER_CHUNK_X = 384;
     private static final int COST_CHUNK_X = 304;
+    private static final int SILENT_CHUNK_X = 296;
     private static final int AIR_Y = 200;
 
     /** Sends counted per link in the BLER test, at interval {@value #BLER_INTERVAL}. */
@@ -121,6 +125,8 @@ public final class RadioLinkGameTests {
         tests.add(test(BATCH_COST, prefix + "two_hundred_radio_links_in_steady_state", RadioLinkGameTests::cost));
         tests.add(test(BATCH_OUTSIDE_FULL, prefix + "a_receiver_outside_full_hears_but_does_not_write_its_block",
                 RadioLinkGameTests::outsideFull));
+        tests.add(test(BATCH_SILENT, prefix + "a_receiver_forgets_a_transmitter_silent_past_the_timeout",
+                RadioLinkGameTests::silentTimeout));
         return tests;
     }
 
@@ -150,6 +156,11 @@ public final class RadioLinkGameTests {
 
     @AfterBatch(batch = BATCH_OUTSIDE_FULL)
     public static void afterOutsideFull(ServerLevel level) {
+        runCleanups();
+    }
+
+    @AfterBatch(batch = BATCH_SILENT)
+    public static void afterSilent(ServerLevel level) {
         runCleanups();
     }
 
@@ -248,6 +259,58 @@ public final class RadioLinkGameTests {
         player.setShiftKeyDown(sneaking);
         nether.getBlockState(pos).useWithoutItem(nether, player,
                 new BlockHitResult(Vec3.atCenterOf(pos), Direction.UP, pos, false));
+    }
+
+    // ---- 1b. a silent transmitter times out (row 16d) ---------------------------------------------
+
+    /**
+     * Row 16d: a receiver forgets a transmitter it has not heard from for
+     * {@code radioLinkTransmitterTimeoutTicks} ({@value #SILENT_TIMEOUT_TICKS} here). A powered
+     * transmitter and its receiver on one omni; the cell is taken away, so both lose service and the
+     * transmitter's messages stop getting through. The receiver holds 15 for a while (a lost message is
+     * a stale state, as in the follow test), then lets go at its first turn at or past the timeout after
+     * the last delivered message. The cell comes back: the next message turns it on again.
+     */
+    private static void silentTimeout(GameTestHelper helper) {
+        ServerLevel nether = nether(helper);
+        forceChunk(nether, SILENT_CHUNK_X, CHUNK_Z);
+        int baseX = SILENT_CHUNK_X * 16;
+        int baseZ = CHUNK_Z * 16;
+        BlockPos txPos = new BlockPos(baseX + 2, AIR_Y, baseZ + 2);
+        BlockPos rxPos = new BlockPos(baseX + 12, AIR_Y, baseZ + 2);
+        CellParams cell = CellParams.omniDefaults(-9_100_051L, baseX + 7, AIR_Y, baseZ + 12);
+        int interval = interval();
+        int configuredTimeout = RanCraftConfig.RADIO_LINK_TRANSMITTER_TIMEOUT_TICKS.get();
+        CLEANUPS.add(() -> RanCraftConfig.RADIO_LINK_TRANSMITTER_TIMEOUT_TICKS.set(configuredTimeout));
+        CLEANUPS.add(() -> power(nether, txPos, false));
+        RanCraftConfig.RADIO_LINK_TRANSMITTER_TIMEOUT_TICKS.set(SILENT_TIMEOUT_TICKS);
+
+        RadioLinkTransmitterBlockEntity tx = transmitter(helper, nether, txPos);
+        RadioLinkReceiverBlockEntity rx = receiver(helper, nether, rxPos);
+        cell(nether, cell);
+        long[] lastHeard = new long[1];
+
+        helper.startSequence()
+                .thenWaitUntil(() -> helper.assertTrue(tx.served() && rx.served(), "both served"))
+                .thenExecute(() -> power(nether, txPos, true))
+                .thenWaitUntil(() -> helper.assertTrue(outputOn(nether, rxPos), "the receiver follows the transmitter"))
+                .thenExecute(() -> SiteRegistry.of(nether).unregister(cell.cellId()))
+                .thenWaitUntil(() -> helper.assertTrue(!tx.served() && !rx.served(), "no cell: both lose service"))
+                .thenExecute(() -> lastHeard[0] = rx.lastDeliveredTick())
+                .thenWaitUntil(() -> helper.assertTrue(nether.getGameTime() - lastHeard[0] >= SILENT_TIMEOUT_TICKS / 2,
+                        "half the timeout since the last message"))
+                .thenExecute(() -> helper.assertTrue(outputOn(nether, rxPos) && rx.lastDeliveredTick() == lastHeard[0],
+                        "within the timeout the receiver holds its last state, and nothing more got through"))
+                .thenWaitUntil(() -> helper.assertTrue(!outputOn(nether, rxPos), "silent past the timeout: forgotten"))
+                .thenExecute(() -> {
+                    long silentFor = nether.getGameTime() - lastHeard[0];
+                    helper.assertTrue(silentFor >= SILENT_TIMEOUT_TICKS && silentFor <= SILENT_TIMEOUT_TICKS + interval + 1,
+                            "let go at its first turn at or past the timeout: silent for " + silentFor + " ticks");
+                    helper.assertTrue(rx.knownOnCount() == 0 && signalFrom(nether, rxPos) == 0, "nothing remembered, no signal");
+                    SiteRegistry.of(nether).register(cell);
+                })
+                .thenWaitUntil(() -> helper.assertTrue(outputOn(nether, rxPos), "service back: the next message turns it on"))
+                .thenSucceed();
     }
 
     // ---- 1. follow, hold, forget ------------------------------------------------------------------
@@ -706,6 +769,11 @@ public final class RadioLinkGameTests {
         int baseZ = CHUNK_Z * 16;
         int configuredInterval = RanCraftConfig.EVALUATION_INTERVAL_TICKS.get();
         CLEANUPS.add(() -> RanCraftConfig.EVALUATION_INTERVAL_TICKS.set(configuredInterval));
+        // Row 16d: the steady state measured here is the replay path. The maximum replay age adds one
+        // fresh evaluation per receiver per 300-600 ticks on top (NOTES.md, row 16d), so it is off here.
+        int configuredMaxReplay = RanCraftConfig.FIXED_RECEIVER_MAX_REPLAY_TICKS.get();
+        CLEANUPS.add(() -> RanCraftConfig.FIXED_RECEIVER_MAX_REPLAY_TICKS.set(configuredMaxReplay));
+        RanCraftConfig.FIXED_RECEIVER_MAX_REPLAY_TICKS.set(0);
         cell(nether, CellParams.omniDefaults(-9_100_041L, baseX + 8, AIR_Y + 8, baseZ + 8));
 
         List<RadioLinkTransmitterBlockEntity> txs = new ArrayList<>();

@@ -209,6 +209,16 @@ public final class RanCraftConfig {
                     "wait for the next tick. 0.5 ms is 1% of a 50 ms tick.")
             .defineInRange("fixedReceiverTickBudgetMs", 0.5, 0.05, 20.0);
 
+    // Not in §5: added in row 16d (owner decision on a slice 8 follow-up). Server cost and a staleness
+    // bound, not an engine parameter: stays out of RfConfig.
+    public static final ModConfigSpec.IntValue FIXED_RECEIVER_MAX_REPLAY_TICKS = BUILDER
+            .comment("Longest a fixed receiver (a device block such as the Radio Link) replays its last sample before",
+                    "it is evaluated again, even when nothing nearby changed. Block changes that fire no event",
+                    "(flowing water, fire, leaf decay, falling blocks, /fill, other mods) are only seen this way.",
+                    "Each receiver uses between half this and this, by its position, so they do not all come due",
+                    "at once. 600 = 30 s; 0 = no limit (replay until something changes).")
+            .defineInRange("fixedReceiverMaxReplayTicks", 600, 0, 72_000);
+
     // ---- Phase 3: Radio Link (§3B.4) ----------------------------------------------------------
     // The block-error-rate curve. rf code reads it (BlerModel), so it crosses into RfConfig in
     // snapshot(), as the locator's tunables do. See NOTES.md, Phase 3 slice 9.
@@ -225,6 +235,15 @@ public final class RanCraftConfig {
                     "At the defaults (0 dB, 2 dB) a link at POOR service (SINR 0-5 dB) loses many updates",
                     "and one at FAIR (5 dB and up) almost none.")
             .defineInRange("blerSlopeDb", BlerModel.DEFAULT_SLOPE_DB, 0.1, 20.0);
+
+    // Not in §5: added in row 16d (owner decision on a slice 9 follow-up). Gameplay, not an engine
+    // parameter: stays out of RfConfig.
+    public static final ModConfigSpec.IntValue RADIO_LINK_TRANSMITTER_TIMEOUT_TICKS = BUILDER
+            .comment("Radio Link: a receiver forgets a transmitter it has not heard from for this long (its chunk",
+                    "unloaded, or out of service), as a real network drops a silent terminal. A lost message or",
+                    "two changes nothing. A receiver loaded from a save starts the clock again, so coming back to",
+                    "a base does not time anything out. 1200 = 60 s; 0 = never (hold the last state forever).")
+            .defineInRange("radioLinkTransmitterTimeoutTicks", 1200, 0, 72_000);
 
     // ---- Phase 3: backhaul (§3C.2) ------------------------------------------------------------
     // fiberRadiusBlocks, siteRadiusBlocks and enableRainFade are read by rf code (BackhaulGraph,
@@ -441,6 +460,23 @@ public final class RanCraftConfig {
      */
     public static double fixedReceiverTickBudgetMs() {
         return SPEC.isLoaded() ? FIXED_RECEIVER_TICK_BUDGET_MS.get() : FIXED_RECEIVER_TICK_BUDGET_MS.getDefault();
+    }
+
+    /**
+     * The longest a fixed receiver replays a cached sample (row 16d), in ticks; 0 is no limit. Falls back
+     * to the default if read before the config has loaded, rather than throwing.
+     */
+    public static int fixedReceiverMaxReplayTicks() {
+        return SPEC.isLoaded() ? FIXED_RECEIVER_MAX_REPLAY_TICKS.get() : FIXED_RECEIVER_MAX_REPLAY_TICKS.getDefault();
+    }
+
+    /**
+     * How long a Radio Link receiver remembers a silent transmitter (row 16d), in ticks; 0 is forever.
+     * Falls back to the default if read before the config has loaded, rather than throwing.
+     */
+    public static int radioLinkTransmitterTimeoutTicks() {
+        return SPEC.isLoaded()
+                ? RADIO_LINK_TRANSMITTER_TIMEOUT_TICKS.get() : RADIO_LINK_TRANSMITTER_TIMEOUT_TICKS.getDefault();
     }
 
     /**

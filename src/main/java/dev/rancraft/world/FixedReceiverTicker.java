@@ -53,6 +53,16 @@ import net.neoforged.neoforge.event.tick.ServerTickEvent;
  * and one dispatch. An armed handover candidate skips the cache, as for a player, so the
  * time-to-trigger keeps running.
  *
+ * <p><b>A maximum replay age</b> (row 16d, owner decision on a slice 8 follow-up). The epochs miss
+ * block changes that fire no event (fluid flow above all, fire, leaf decay, falling blocks,
+ * {@code /fill}, other mods), and a player's stale sample ends when they move but a fixed receiver's
+ * never would. So a cached sample is replayed for at most {@code fixedReceiverMaxReplayTicks} (600, 30 s;
+ * 0 turns the limit off), less a spread of up to half of it by position ({@link #replayAgeLimitTicks}),
+ * so that receivers evaluated together (every one in a dimension, after any antenna change) do not all
+ * come due again in the same interval. GAME ABSTRACTION: a bound on how long an unseen change can go
+ * unnoticed, not a model of anything a real receiver does. Cost: one fresh evaluation per receiver per
+ * 300-600 ticks, about 200 x 25 µs / 450 ≈ 11 µs/tick for 200 receivers.
+ *
  * <h2>Stale handover candidates</h2>
  * A player is evaluated exactly once per interval, so the player ticker reads a longer gap as a pause
  * and drops an armed candidate ({@link SignalTicker#staleCandidateGapTicks}). This ticker cannot
@@ -100,8 +110,9 @@ public final class FixedReceiverTicker {
      * @param dependencies the epochs of its dependency bins when it ran
      *                     ({@code RfEngine.Evaluation.dependencyBins}).
      * @param siteVersion  the site registry version when it ran.
+     * @param evaluatedTick the game time it ran at (the maximum replay age, row 16d).
      */
-    record Cached(SignalSample sample, RegionEpochs.Snapshot dependencies, long siteVersion) {
+    record Cached(SignalSample sample, RegionEpochs.Snapshot dependencies, long siteVersion, long evaluatedTick) {
     }
 
     /**
@@ -151,18 +162,34 @@ public final class FixedReceiverTicker {
      * Whether a receiver's cached sample is replayed instead of evaluated. Pure, pinned by
      * {@code FixedReceiverTickerTest}. All must hold: caching enabled; no handover candidate armed
      * (replaying would freeze the time-to-trigger clock); an entry exists; the site registry version is
-     * the one it was evaluated under; and no dependency bin was bumped since. There is no move check:
-     * a fixed receiver never moves.
+     * the one it was evaluated under; no dependency bin was bumped since; and the sample is younger than
+     * its age limit. There is no move check: a fixed receiver never moves.
      *
      * @param candidateArmed the <em>stored</em> handover state has a candidate.
+     * @param gameTime       now.
+     * @param ageLimitTicks  the receiver's {@link #replayAgeLimitTicks}; 0 or less, no limit.
      */
-    static boolean canReplay(
-            Cached cached, boolean cachingEnabled, boolean candidateArmed, RegionEpochs epochs, long siteVersion) {
+    static boolean canReplay(Cached cached, boolean cachingEnabled, boolean candidateArmed, RegionEpochs epochs,
+                             long siteVersion, long gameTime, int ageLimitTicks) {
         return cachingEnabled
                 && !candidateArmed
                 && cached != null
                 && cached.siteVersion() == siteVersion
+                && (ageLimitTicks <= 0 || gameTime - cached.evaluatedTick() < ageLimitTicks)
                 && epochs.unchanged(cached.dependencies());
+    }
+
+    /**
+     * How long one receiver's cached sample may be replayed, in game ticks: {@code maxReplayTicks} less a
+     * spread of 0 to {@code maxReplayTicks / 2 - 1} from its position, so between half the maximum
+     * (exclusive) and the maximum. Fixed per receiver, so receivers evaluated together drift apart
+     * rather than all coming due again at once. 0 or less turns the limit off (returns 0).
+     */
+    public static int replayAgeLimitTicks(long key, int maxReplayTicks) {
+        if (maxReplayTicks <= 0) {
+            return 0;
+        }
+        return maxReplayTicks - staggerTicks(key, maxReplayTicks / 2);
     }
 
     /**
@@ -356,6 +383,7 @@ public final class FixedReceiverTicker {
 
         RfConfig config = RanCraftConfig.snapshot();
         int interval = Math.max(1, config.evaluationIntervalTicks());
+        int maxReplayTicks = RanCraftConfig.fixedReceiverMaxReplayTicks();
         BandTable bands = RfDataLoader.bands();
         long deadline = started + (long) (RanCraftConfig.fixedReceiverTickBudgetMs() * 1_000_000.0);
 
@@ -368,7 +396,7 @@ public final class FixedReceiverTicker {
         int served = runTick(registries, roundRobin++, server.getTickCount(), interval, System::nanoTime, deadline,
                 (index, entry, lag) -> {
                     long serveStarted = System.nanoTime();
-                    serve(tickLanes.get(index), entry, lag, config, interval, bands);
+                    serve(tickLanes.get(index), entry, lag, config, interval, maxReplayTicks, bands);
                     statServeNanos += System.nanoTime() - serveStarted;
                 });
 
@@ -385,6 +413,7 @@ public final class FixedReceiverTicker {
      * path left behind) is skipped: neither evaluated nor dispatched.
      */
     private static void serve(Lane lane, FixedReceiverRegistry.Entry entry, long lag, RfConfig config, int interval,
+                              int maxReplayTicks,
                               BandTable bands) {
         ServerLevel level = lane.level;
         long key = entry.key;
@@ -406,7 +435,8 @@ public final class FixedReceiverTicker {
         SignalSample sample;
         Cached cached = entry.cached;
         if (canReplay(cached, config.enableSampleCaching(), registry.states.get(key).hasCandidate(),
-                lane.epochs, siteVersion)) {
+                lane.epochs, siteVersion, gameTime,
+                replayAgeLimitTicks(key, maxReplayTicks))) {
             sample = cached.sample();
             statReplays++;
         } else {
@@ -418,7 +448,7 @@ public final class FixedReceiverTicker {
             sample = evaluation.sample();
             // No block event can fire between the evaluation and this snapshot (one thread).
             entry.cached = new Cached(sample,
-                    lane.epochs.snapshot(evaluation.dependencyBins(RegionEpochs.BIN_SIZE)), siteVersion);
+                    lane.epochs.snapshot(evaluation.dependencyBins(RegionEpochs.BIN_SIZE)), siteVersion, gameTime);
             statEvaluations++;
         }
         dispatch(level, BlockPos.of(key), entry.device, sample, bands, config, gameTime,
