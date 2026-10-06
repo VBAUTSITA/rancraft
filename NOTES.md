@@ -5853,3 +5853,108 @@ no path at all (review finding 1).
 | `rf` / `util` purity | `PackagePurityTest` passes |
 | In-game checklist | written in row 16c from the slice and review steps, checked against the code's thresholds; one review step corrected (row 16a step 1: one stone leaves a 30-block hop UP, since a clear hop there reads about −3 dBm; the checklist uses a 1000-block hop and a second Core Site for the chest) |
 | In game | not run by the agent; the route is at the end of `PHASE_3.md` |
+
+---
+
+## Rows 16d and 16e — owner decisions on four Phase 3 follow-ups
+
+The owner asked to finish the pending items. Each open "decision for the owner" with a proposed option
+was implemented as that option, behind a config value where it changes behaviour, so it can be turned
+off again.
+
+### 16d.1 The Locator HUD says "Sites"
+
+Since the Phase 3A review the solver counts sites (antennas within `locatorSiteMergeBlocks` are one), but
+the HUD still said "Cells N" and "(one cell heard)". Now: "Sites N", "On a ring .. from the site at ..
+(one site heard)" and "No position: the sites are too close to a line". "No cell at or above −100 dBm to
+range to" keeps "cell": it is about cells' RSRP. The wire (`LocatorFixPayload.cellsUsed`) and the solver
+keep their names. No version bump (text only).
+
+### 16d.2 A maximum replay age for fixed receivers
+
+`fixedReceiverMaxReplayTicks` (COMMON, not in §5): 600, range 0-72,000, 0 = no limit. A fixed receiver's
+cached sample is replayed at most that long; each receiver's own limit is the maximum less a spread of up
+to half of it by position (`FixedReceiverTicker.replayAgeLimitTicks`, the stagger hash), so receivers
+evaluated together (all of a dimension's, after any antenna change) do not all come due again in one
+interval, and drift further apart on every cycle. **Why:** the region epochs miss block changes that
+fire no event (flowing water, fire, leaf decay, falling blocks, `/fill`, other mods), and a fixed
+receiver never moves, so such a change could be missed forever; now for at most 30 s. **Cost:** one fresh
+evaluation per receiver per 300-600 ticks, about 200 × 25 µs / 450 ≈ 11 µs/tick for 200 receivers, inside
+the ticker's budget. The two steady-state cost game tests (200 receivers, 200 radio links) turn it off
+while they measure, so their numbers stay the replay path's and comparable with every earlier run; the
+refresh's own cost is the arithmetic above. **Labelled** in the `FixedReceiverTicker` class javadoc as a
+game abstraction (a bound on how long an unseen change goes unnoticed, not a model of a receiver).
+
+### 16d.3 A Radio Link transmitter timeout
+
+`radioLinkTransmitterTimeoutTicks` (COMMON, not in §5): 1200 (60 s), range 0-72,000, 0 = never. The
+receiver's memory (`RadioLinkMemory`) now keeps, per transmitter last heard powered, the game tick of
+its last delivered message, and on the receiver's turn forgets one silent for the timeout
+(`expire`): its chunk unloaded, or out of service. **A lost message still changes nothing**: at POOR about
+half get through, so 60 lost in a row happen about once in 10^18. **A receiver loaded from a save** starts
+the clock at its first turn (the last-heard ticks are not saved), so coming back to a base times nothing
+out; the transmitter's next message refreshes it. The receiver javadoc's honest label ("an unloaded
+transmitter is never timed out") is replaced by the timer. Cost: a map write per delivered powered
+message (fastutil `Long2LongOpenHashMap`), and a walk over the few remembered transmitters per turn.
+
+### 16e The Locator's mirror check
+
+**The problem** (slices 2-3 gate, measured in row 5b): with towers nearly in a line, seen from off the
+line the lines of sight fan out, so HDOP looks good, while the mirror image across the line fits the
+coarse ranges about as well; quantisation picked the side, so about a third of FIX results were on the
+wrong side, about 140 blocks off with a "±" of about 12.
+
+**The fix** (`LocatorSolver.leastSquares`): after the centroid and crossing starts, one more Gauss-Newton
+run from the estimate mirrored across the sites' best-fit line (`siteLine`: the major axis of their
+spread through their centroid; `mirrored`). If that run ends in another basin (more than 1 block away):
+a fit better by more than `MIRROR_COST_MARGIN` replaces the estimate (as an extra start's would); one
+within the margin, and more than 3 reported "±" away, makes the answer `LocatorFix.Ambiguous` (A the
+better fit, B the other, "likely" the one nearer the last estimate). The HUD, the payload and the
+renderer already handle AMBIGUOUS for any number of sites. **A deviation from §3A.5**, which defines
+AMBIGUOUS only for two cells: here it is three or more sites whose ranges do not tell the two sides apart.
+
+**Choosing the margin** (weighted cost = Σ residual² / σ², so a difference of 4 is about 7:1 odds for
+Gaussian errors). band_900 on flat ground, three masts at x = −150, 0, +150 with the middle one d blocks
+off the line (toward the receiver, +, or away, −), the receiver uniform in x [−150, 150], 20-120 blocks
+from the line, 4,000 seeded scenes per row (a scratch harness, not committed; the committed test pins the
+±10 rows). "Wrong" is a FIX on the other side of the line from the receiver, as a share of all scenes:
+
+| Middle mast off the line | old solver: wrong / AMBIGUOUS | margin 1 | margin 2 | **margin 4** | margin 8 |
+|---|---|---|---|---|---|
+| ±2 | 44.3 % / 0 % | 0.1 % / 92 % | 0 % / 92 % | **1.1 % / 92 %** | 1.1 % / 92 % |
+| ±5 | 41.8 % / 0 % | 17.1 % / 56 % | 5.6 % / 86 % | **4.4 % / 92 %** | 3.6 % / 93 % |
+| ±10 | 31.5 % / 0 % | 21.1 % / 23 % | 11.4 % / 47 % | **1.8 % / 84 %** | 0.8 % / 94 % |
+| ±20 | 17.6 % / 0 % | 16.3 % / 3 % | 10.6 % / 17 % | **5.2 % / 41 %** | 1.9 % / 74 % |
+| ±40 | 3.3 % / 0 % | 3.3 % / 0 % | 3.1 % / 2 % | **1.7 % / 9 %** | 1.4 % / 27 % |
+
+Every AMBIGUOUS answer, in every row and at every margin, had the truth within 40 blocks of one of its
+two candidates. The controls (a triangle of radius 100 with the receiver inside, and 120-260 blocks
+outside; a 200-block square with the receiver inside; a wedge 60 blocks deep) gave **0 AMBIGUOUS** at
+every margin. Margin 4 removes most confident wrong answers without giving up the fixes that were right
+at 40 blocks off (9 % become AMBIGUOUS there). The remaining wrong-side FIX results are mostly near the
+line, where the two sides are within 3 "±" of each other (mean error 39-64 blocks at margin 4).
+
+**Side effect on an existing test:** Test 10's west-only scene (three band_900 sites in a 20° wedge,
+150 blocks west of the receiver) is now AMBIGUOUS: its sites are nearly on a north-south line, and the
+point 150 blocks beyond them fits every range to about 2 blocks, far inside band_900's 30-block step. The
+old FIX there said "± 35" with the other side 296 blocks away. The test reads its "before" numbers with
+the check off (`solve(..., -1.0)`, a package-private seam) and asserts the AMBIGUOUS answer with it on.
+The pre-review per-cell test likewise now gets AMBIGUOUS instead of a FIX on the mirror image.
+
+**Cost:** one more Gauss-Newton run per fix: the worst case is now 8 × 16 + 1 = 129 ground lookups
+(`LocatorTrackerTest`, `LocatorGameTests.LOOKUPS_PER_WORST_FIX`), about 10 µs at the measured 77.9 ns per
+lookup. 4,000 solves take about 30 ms headless.
+
+### Verification (rows 16d and 16e)
+
+| Check | Result |
+|---|---|
+| `./gradlew build` | **633 passed, 0 failed, 0 skipped** (625 + 2 `FixedReceiverTickerTest` + 3 `RadioLinkMemoryTest` + 3 `LocatorSolverTest`; 2 Locator tests updated, above) |
+| `rf` / `util` purity | `PackagePurityTest` passes (`LocatorSolver` uses `java.util` only) |
+| `./gradlew runGameTestServer`, three runs | "All 66 required tests passed" each time (64 + the two new tests) |
+| 200 radio links, steady state | medians 64.8, 87.3 and 57.6 µs/tick over the three runs, under the 0.1 ms gate each time. Earlier runs on the Phase 3B and 3C code measured 26-59. The 200-fixed-receiver line in the same runs, a path these rows did not touch with the age limit off, moved in step (19.1, 30.3, 18.6), so most of the spread is the machine. The rows' own additions to this path are one hash operation per delivery (as before: a map `put` for the set `add`, after the first run's two were cut to one) and a walk over about 12 remembered transmitters per receiver turn, estimated under 2 µs/tick. The margin to the gate at the slow run is 1.15x: an open note below |
+| In game | not run by the agent; `PHASE_3.md`, "Row 16d and 16e checks" |
+
+**Open note.** The 200-radio-link cost gate is close to its limit when the machine is busy (87.3 µs/tick in
+one of three runs here; three slice 15 runs failed it outright while the machine was slow). The first
+thing to cut, if it ever matters, is still the scan of every due tick (a timing wheel, row 9b).

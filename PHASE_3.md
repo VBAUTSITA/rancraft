@@ -67,6 +67,8 @@ Legend: `[x]` done and verified · `[~]` partly done / needs a manual in-game ch
 | 16a | Phase 3C review round 1: fixes (2 reported, 2 confirmed and fixed, 0 rejected) | 3C | [~] the LIMITED cap (FAIR) applies whatever `requireBackhaul` says, NONE caps only with it on (`BackhaulGraph.serviceCap`; slice 12 decision 1's reason was wrong: with no core every cell is NONE, so a world without backhaul is unchanged); the status command always says "devices capped at FAIR"; the Storage Terminal's 3C done-when game test now runs with the flag off (the default). Backhaul re-marches spread over ticks: new pure `util/BudgetedQueue` (clock read before each item, at least one per drain), `BackhaulNetwork` recompute split into begin / advance (marches under `backhaulMarchBudgetMs`, new COMMON 0.25 ms shared by every dimension) / finish (weather, solve, effects, in a tick of its own, all states published at once); the status command says "measuring" during the first one. Headless green (625 tests, 0 skipped; `runGameTestServer` 64/64 in three runs, 1 new: 64 dirty 1000-block hops, worst tick 0.31-0.76 ms against 3.3-4.6 ms in one tick; both fixes fail their tests when disabled); no wire or save change; one owner decision and two notes in follow-ups; in-game checks below | 3e5bdd1; docs 23bb7c8; tracker e417e0b |
 | 16b | Phase 3 final docs: code-site labels, 3C done-when re-checked, follow-ups, Part 3C summary, in-game checklist, README, MILESTONES | 3C | [~] **partly done; the rest deferred on purpose (owner: skip what can wait).** Done: four sites that NOTES.md called labelled described their abstraction without marking it, and now mark it (`SitePower`: no standby load, power stands still where block entities do not tick, the seam counts what the server evaluates; `ServedReceivers`: the same count; `SignalMastBlockEntity.bufferOwner`: a pole carrying power up is a game rule; `TerminalLink`: the session lives on the last verdict); `MicrowaveLink` now says its rain figures are 18 GHz ones that do not follow `frequency_mhz` (how §6's "rain fade rising with frequency" is shown); the `BackhaulNetwork` javadoc's tick counts now cover every recorded run; the slice rows' tracker hashes filled in; the 3C done-when re-checked against the code and the tests (2 `[x]`, 6 `[~]`); two slice check steps made current with the review (slice 12 step 5, slice 13 step 4); every 3C follow-up marked. **Deferred, not written yet** (independent docs-only work, see Follow-ups): NOTES.md "Phase 3C summary"; README's 3C section; a consolidated "How to test Part 3C in game" checklist (until then, use each 3C slice's own check steps in its section above). MILESTONES.md was updated by hand instead. Headless green (625 tests, 0 skipped; `runGameTestServer` 64/64 after part 1: fuel 320 vs 2,120 burn ticks, ratio 6.625 as in every run; worst backhaul march tick 0.68 ms; 200 radio links median 32.5 µs/tick) | 48393aa; docs "Phase 3: final docs"; tracker: the hash-recording commit after it |
 | 16c | Deferred docs (owner: skip what can wait, then finish the pendings): README 3C section, NOTES.md "Phase 3C summary", "How to test Part 3C in game" | 3C | [x] README "Turn on backhaul and power" (where `rancraft-common.toml` is, the two flags, what each changes) and the test counts; NOTES.md "Phase 3C summary" (commits, test counts, one paragraph per feature, config and versions, measured numbers, review outcome, owner decisions); the 3C in-game checklist at the end of this file, checked against the code's thresholds. Found while writing it: row 16a's in-game step 1 cannot work as written (one stone leaves a 30-block hop UP: a clear hop reads about −3 dBm there and one stone costs 36 dB; at 1000 blocks it reads −69.55), annotated there; the checklist uses a 1000-block hop, clear weather, and a second Core Site so the chest stays loaded. Docs only, no build needed | 403fcc7; docs "Phase 3: deferred docs" |
+| 16d | Owner decisions on three Phase 3 follow-ups (owner: finish the pendings) | 3A/3B | [~] (1) the Locator HUD says "Sites N", "(one site heard)" and "the sites are too close to a line": it counts sites since the Phase 3A review (`LocatorHudText`; wire and solver keep `cellsUsed`); (2) a maximum replay age for fixed receivers, `fixedReceiverMaxReplayTicks` 600 (0 = off), each receiver between half and all of it by position (`FixedReceiverTicker.replayAgeLimitTicks`), so an event-less change (water, fire, `/fill`) is seen within 30 s; the two cost game tests turn it off to keep measuring the replay path; (3) a Radio Link receiver forgets a transmitter silent for `radioLinkTransmitterTimeoutTicks` 1200 (60 s; 0 = never), unloaded or out of service; a receiver loaded from a save restarts the clock (`RadioLinkMemory.expire`). New game tests: `an_eventless_change_on_its_ray_is_seen_at_the_max_replay_age`, `a_receiver_forgets_a_transmitter_silent_past_the_timeout`. In game: row 16d checks | 8a0d365; docs "Phase 3 follow-ups: docs" |
+| 16e | The Locator's mirror check (slices 2-3 gate follow-up: nearly collinear towers gave a confident FIX on the wrong side) | 3A | [~] after the fit, one more Gauss-Newton run from the estimate mirrored across the sites' best-fit line; a clearly better fit there wins, one within `MIRROR_COST_MARGIN` (4.0 weighted-cost units, about 7:1 odds) makes the answer AMBIGUOUS with both candidates (a deviation: §3A.5 defines AMBIGUOUS for two cells). Measured over 4,000 seeded scenes per row (NOTES.md, row 16e): middle mast 10 blocks off a 300-block line, wrong-side FIX 31.5 % → 1.8 % of scenes, every AMBIGUOUS holding the truth; well-spread controls (triangle inside and outside, square, wedge) 0 AMBIGUOUS. Worst-case ground lookups per fix 113 → 129. In game: the 3A checklist's step 3, last item | 83e01c1; docs "Phase 3 follow-ups: docs" |
 | 17 | (optional) fix_x/fix_z/fix_err in drive-test CSV | — | [ ] | |
 
 ---
@@ -1562,7 +1564,8 @@ centroid, so 7 × 16 + 1 = 113). (g)
   whenever a lens shows the trail. *(Review round 1: the client now drops the reading every tick no
   Locator is held (`ClientLocatorState.putAway`), so read from the client state the columns are
   blank then, which matches the first option.)*
-- **[ ] Spec conflict, deviation for the owner (from the Phase 3A review round 1, row 5a).** §3A.5
+- **[x] Decided in row 16d: keep counting sites, and the HUD says "Sites N", "(one site heard)" and "the
+  sites are too close to a line".** *(Owner: finish the pendings.)* Was: **Spec conflict, deviation for the owner (from the Phase 3A review round 1, row 5a).** §3A.5
   says "3 or more usable **cells**" (and "2 cells", "1 cell"). In this tree a sector is its own cell
   on a neighbouring block (NOTES.md, Phase 2 "Sector antenna": no site container), so a three-sector
   site is three cells one block apart. Counted as cells they gave one site AMBIGUOUS on a ring, two
@@ -1694,7 +1697,7 @@ centroid, so 7 × 16 + 1 = 113). (g)
   chunk, over 300 ticks) registers only when they tick again (NeoForge defers `onLoad`; no chunk event
   for a loaded chunk); the Radio Link blocks can close it by also registering from their server-side
   `onPlace`.
-- **[ ] Open, decision for the owner (from slice 8).** A fixed receiver never moves, so slice 7's
+- **[x] Decided in row 16d: a maximum replay age, `fixedReceiverMaxReplayTicks` 600.** Was: **Open, decision for the owner (from slice 8).** A fixed receiver never moves, so slice 7's
   event-less block changes (fluid flow above all: water is 15 dB; fire, leaf decay, falling blocks,
   `/fill`, other mods) can leave its replayed sample stale indefinitely, where a player's ends when
   they move half a block. Option: a maximum replay age (e.g. `fixedReceiverMaxReplayTicks`, a new
@@ -1715,7 +1718,7 @@ centroid, so 7 × 16 + 1 = 113). (g)
   key order. "200 radio links" is measured as 200 transmitter-receiver pairs (400 blocks), and the game
   test asserts the median of three windows because the same code varies by up to a factor of two
   between runs on the development machine. Any later cost assertion needs a similar margin.
-- **[ ] Open, decision for the owner (from slice 9).** An unloaded transmitter is never timed out: its
+- **[x] Decided in row 16d: a transmitter timeout, `radioLinkTransmitterTimeoutTicks` 1200.** Was: **Open, decision for the owner (from slice 9).** An unloaded transmitter is never timed out: its
   receivers hold its last delivered state for as long as its chunk stays unloaded (a real network
   would time out a silent terminal). Option: a maximum age for a remembered transmitter, a new
   `RanCraftConfig` value not in §5. Not needed for the done-when.
@@ -2096,7 +2099,7 @@ disabled; details in NOTES.md, "Phase 3B review, round 1".
 
 The per-slice gate reviews left these unfixed at the time. Each was re-read against the tree.
 
-- **[ ] Open, minor, decision for the owner (from the slices 2-3 gate; measured in row 5b).**
+- **[x] Done in row 16e: the mirror check (AMBIGUOUS instead of a confident wrong-side FIX).** Was: **Open, minor, decision for the owner (from the slices 2-3 gate; measured in row 5b).**
   **Nearly collinear towers give a confident FIX on the wrong side of the line.** Only an exact line
   is POOR GEOMETRY (singular from the centroid, which lies on the line). The HDOP gate is read at the
   estimate, and seen from off the line the lines of sight fan out, so HDOP looks good while the
@@ -2221,15 +2224,15 @@ steps 2-5 and note F3's x and z.
 - [ ] Hold the Network Locator in the main hand: "Network Locator ... NO SIGNAL", "No cell at or
       above -100 dBm to range to". Its tooltip has three lines and says "not GPS". In a hotbar slot
       you have not selected: no Locator HUD.
-- [ ] Place **one** mast about 100 blocks east (+x): RANGE ONLY, "On a ring .. m from the cell at
-      x .. z .. (one cell heard)", and one ring on the ground round the mast passing within about
+- [ ] Place **one** mast about 100 blocks east (+x): RANGE ONLY, "On a ring .. m from the site at
+      x .. z .. (one site heard)", and one ring on the ground round the mast passing within about
       15 blocks of your feet (half of band_900's 30-block ranging step; about 10 in the scratch run).
 - [ ] Place a **second** mast about 100 blocks south (+z): AMBIGUOUS, two yellow vertical markers,
       one near you (about 15 blocks off) and one mirrored across the line between the two masts,
       and "No last estimate to choose between them" (both markers alike).
 - [ ] Place a **third** mast about 100 blocks north-west (-x, -z), so the three surround you: FIX, a
       green marker with an error circle near your feet, "±" about 10 m (10.5), HDOP about 1.2,
-      "Cells 3   best res 30 m (band_900)"; the three rings cross at the green marker. "Est" vs F3:
+      "Sites 3   best res 30 m (band_900)"; the three rings cross at the green marker. "Est" vs F3:
       within the ± about half the time and within twice it almost always (scratch sweep over 441
       standing spots: 44 % and 100 %), and the same error while you stand still (the rounding of
       the ranges is deterministic, not noise).
@@ -2246,17 +2249,18 @@ steps 2-5 and note F3's x and z.
 **3. Towers in a line (3 min).** Break the three masts.
 - [ ] Place three masts on **exactly** one east-west line (the same z for all three), at your x - 150,
       your x and your x + 150, and stand 50 blocks south of the middle one: POOR GEOMETRY (HDOP
-      99.9+), "No position: the cells are too close to a line (limit HDOP 6.0)".
-- [ ] Known limit, logged as an open follow-up (not a fault in your test): move the middle mast 10
-      blocks off the line, once toward you and once away, and try a few standing spots. You get a
-      FIX with a normal-looking ± (about 10-12 m), and at some spots (about a third in a measured
-      sweep) the marker is on the **wrong side** of the line, up to about twice your distance from
-      the line away from you (one scratch scene: 70 blocks off, ± 10.5).
+      99.9+), "No position: the sites are too close to a line (limit HDOP 6.0)".
+- [ ] Nearly in a line (row 16e, the mirror check): move the middle mast 10 blocks off the line, once
+      toward you and once away, and try a few standing spots. At most spots the Locator says
+      **AMBIGUOUS**, with two yellow markers mirrored across the line, one near you (before row 16e:
+      a FIX with a normal-looking ± of about 10-12 m, on the **wrong side** of the line at about a
+      third of the spots). A FIX on the wrong side is now rare (about 2 % of spots in the measured
+      sweep).
 
 **4. band_3500 shrinks the ± (5 min).** Break the line; rebuild the step 2 triangle (FIX, about ± 10 m).
 - [ ] Place a Sector Antenna about 50 blocks north (-z) of your test spot. Right-click it with an
       empty hand: Band band_3500, Azimuth 180 (pointing south, at you; 0 = north, 90 = east), Apply.
-      Back at the spot: "Cells 4   best res 3.0 m (band_3500)" and the ± down from about 10.5 m to
+      Back at the spot: "Sites 4   best res 3.0 m (band_3500)" and the ± down from about 10.5 m to
       about 7 m (about 1.5x inside a good triangle, accepted by the owner; the same sector on
       band_900 gives about 9).
 - [ ] The big effect, at the edge of a network: break the triangle **and the sector**, and place
@@ -2277,12 +2281,12 @@ steps 2-5 and note F3's x and z.
 - [ ] Build a three-sector site: one Signal Mast with a Sector Antenna on its east, south and west
       side, each placed while you stand on its outer side so it faces away from the mast. Stand 100
       blocks east, where you hear two or three of its cells and nothing else: RANGE ONLY, one ring,
-      "Cells 1" (before review round 1: AMBIGUOUS). The line still says "one cell heard": it counts
-      sites (see the spec-conflict follow-up).
+      "Sites 1" (before review round 1: AMBIGUOUS) and "(one site heard)": the Locator counts sites
+      (row 16d; before it, the HUD said "Cells" and "one cell heard" for the same count).
 - [ ] Build a second such site about 200 blocks from the first and stand between them, off to one
       side: AMBIGUOUS, the two candidates mirrored across the line through the sites, one on your
       side (before review round 1: a green FIX on the far side with a small ±).
-- [ ] Build a third such site so the three surround you: FIX with "Cells 3" and a ± like three
+- [ ] Build a third such site so the three surround you: FIX with "Sites 3" and a ± like three
       single masts (about 10 m), not smaller.
 
 **7. Waypoints (4 min).** With a FIX (the step 6 sites, or the step 2 triangle).
@@ -2616,3 +2620,36 @@ world**. The grids are in NOTES.md, slice 16, and in the recipe book once unlock
 
 If a step fails, note its number and what the HUD or the action bar said; the matching detailed check in
 the sections above says what the code is meant to do there.
+
+## Row 16d and 16e checks
+
+Headless (`./gradlew build` 633 passed, 0 skipped; `runGameTestServer` "All 66 required tests passed" in three runs;
+200 radio links median 64.8, 87.3, 57.6 µs/tick, under the 0.1 ms gate: NOTES.md, rows 16d and 16e):
+
+- [x] `LocatorHudTextTest`: "Sites N", "(one site heard)", "the sites are too close to a line".
+- [x] `FixedReceiverTickerTest`: a quiet receiver replays until its age limit and is evaluated at it; 0 is no
+      limit; each receiver's limit is fixed by position, between half the maximum (exclusive) and the
+      maximum, spread over more than 200 values.
+- [x] **At runtime** (`FixedReceiverGameTests.an_eventless_change_on_its_ray_is_seen_at_the_max_replay_age`):
+      stone put on a receiver's ray with no event is not seen by the replays, then is, at the receiver's
+      own age limit.
+- [x] `RadioLinkMemoryTest`: a transmitter silent for the timeout is forgotten, one heard since is kept; 0
+      never times out; entries loaded from a save start their clock at the first turn.
+- [x] **At runtime** (`RadioLinkGameTests.a_receiver_forgets_a_transmitter_silent_past_the_timeout`): the
+      cell taken away, the receiver holds 15 within the timeout and lets go at its first turn past it;
+      the cell back, it follows again.
+- [x] `LocatorSolverTest`: the mirror check on the near-collinear scenes (wrong-side FIX under 5 % of
+      scenes, every AMBIGUOUS holding the truth) and on well-spread controls (no AMBIGUOUS); Test 10's
+      west-only wedge is now AMBIGUOUS (its sites are nearly in a line 150 blocks away), its numbers read
+      with the check off.
+
+Needs a human in game:
+
+- [ ] **Sites.** The Locator HUD with three single masts around you: "Sites 3   best res 30 m
+      (band_900)"; one mast only: "On a ring .. m from the site at x .. z .. (one site heard)".
+- [ ] **Mirror check.** The 3A checklist's step 3, last item: masts nearly in a line give AMBIGUOUS.
+- [ ] **Radio Link timeout.** A powered transmitter and its receiver on one Signal Mast, the lamp on. Break
+      the mast: both lamp tops go dark, and the redstone lamp stays on (the receiver holds). About 60 s
+      later the redstone lamp goes off. Place the mast again: it comes back on within a second or two.
+- [ ] **Coming back to a base.** Lever on, receiver lamp on. Fly 600+ blocks away for two minutes and come
+      back: the lamp is still on, and it still follows the lever (a reloaded receiver restarts the clock).

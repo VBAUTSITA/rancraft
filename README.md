@@ -47,7 +47,8 @@ To run a headless dedicated server instead: `.\gradlew.bat runServer`
   it shows the position the network works out from timing ranges to the cells you hear (FIX with a
   ± and HDOP, or RANGE ONLY / AMBIGUOUS / POOR GEOMETRY / NO SIGNAL), draws the range rings in the
   world, saves waypoints of the *estimate* (sneak + use; use cycles them) and keeps a "last fix
-  before death".
+  before death". It counts **sites** (sectors of one tower are one), and towers nearly in a line give
+  AMBIGUOUS (both sides of the line) rather than a confident fix that may be on the wrong side.
 - **Phase 3B** — towers and fixed devices:
   - *Mast columns:* Signal Masts stacked in one column are one cell, owned by the lowest mast (so
     adding masts on top keeps its PCI) and radiating from above the top one (at most
@@ -62,6 +63,9 @@ To run a headless dedicated server instead: `.\gradlew.bat runServer`
     a transmitter on its address is powered. Both ends need POOR service or better, updates arrive
     about once a second by design, and at low SINR some are lost (a lost update leaves the old
     state; at FAIR or better the link is solid). The lamp on top lights while the block has service.
+    A receiver forgets a transmitter it has not heard from for 60 s (`radioLinkTransmitterTimeoutTicks`;
+    its chunk unloaded or out of service), and device blocks re-measure at least every 30 s
+    (`fixedReceiverMaxReplayTicks`) so changes that fire no event, such as flowing water, are seen.
 - **Phase 3C** — infrastructure and progression (backhaul and power are off until you turn them on;
   see [Turn on backhaul and power](#turn-on-backhaul-and-power)):
   - *Radio tiers:* a Sector Antenna's radio takes band_700, band_900 and band_1800; band_3500 needs a
@@ -154,7 +158,7 @@ every tuning decision, every deviation from spec, and what's honestly modeled vs
 ```
 
 Compiles the mod and runs the full unit test suite (382 tests at the end of Phase 3A, 485 at the
-end of Phase 3B, 625 at the end of Phase 3C): the RF maths in `dev.rancraft.rf` and `dev.rancraft.util`, which is pure
+end of Phase 3B, 625 at the end of Phase 3C, 633 after the follow-ups): the RF maths in `dev.rancraft.rf` and `dev.rancraft.util`, which is pure
 Java and must stay free of Minecraft (`PackagePurityTest` fails the build otherwise), plus the
 payloads, HUD text and device logic.
 

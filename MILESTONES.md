@@ -143,7 +143,19 @@ Tests: **382 → 485** unit tests, **5 → 30** game tests.
 Measured: worst backhaul recompute tick 0.68 ms; 200 radio links about 0.03 ms per tick.
 Tests: **485 → 625** unit tests, **30 → 64** game tests.
 
-### 10. Process lessons
+### 10. Phase 3 follow-ups: the open decisions, done (2026-10-06)
+
+| What | Now |
+|---|---|
+| Locator HUD | says "Sites N" (it counts towers, not sectors) |
+| Towers nearly in a line | AMBIGUOUS (both sides) instead of a confident wrong-side fix: 31.5 % → 1.8 % wrong in the measured sweep |
+| Device blocks | re-measure at least every 30 s (`fixedReceiverMaxReplayTicks`), so flowing water and `/fill` are seen |
+| Radio Link | a receiver forgets a transmitter silent for 60 s (`radioLinkTransmitterTimeoutTicks`) |
+| Docs | README 3C section, NOTES 3C summary, "How to test Part 3C in game" |
+
+Tests: **625 → 633** unit tests, **64 → 66** game tests.
+
+### 11. Process lessons
 
 - The account **usage limit** stopped the agents several times, and the internet dropped twice.
   Nothing was lost: work is committed in small green steps and resumed from the last one.
