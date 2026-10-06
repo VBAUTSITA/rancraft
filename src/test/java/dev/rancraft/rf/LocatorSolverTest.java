@@ -497,9 +497,14 @@ class LocatorSolverTest {
         cells.addAll(site(11L, 200, 0, 3, BAND_900, rx));
         List<RangeMeasurement> ranges = measure(cells);
         assertEquals(ranges, LocatorSolver.cellsUsed(ranges, PER_CELL));
-        LocatorFix.Fix mirror = fix(LocatorSolver.solve(ranges, FLAT, null, PER_CELL));
+        // With the mirror check off (the solver before row 16d): the old answer, a FIX on the mirror image.
+        LocatorFix.Fix mirror = fix(LocatorSolver.solve(ranges, FLAT, null, PER_CELL, -1.0));
         assertEquals(6, mirror.cellsUsed());
         assertTrue(mirror.z() < 0.0, "the old answer: a FIX on the mirror image, " + mirror);
+        // Row 16d: the mirror check sees that both sides fit, so per-cell counting is now AMBIGUOUS.
+        LocatorFix.Ambiguous both = assertInstanceOf(LocatorFix.Ambiguous.class,
+                LocatorSolver.solve(ranges, FLAT, null, PER_CELL), "the mirror check, per cell");
+        assertTrue(both.az() * both.bz() < 0.0, "one candidate each side of the line: " + both);
 
         // One site, two sectors: two circles one block apart, crossing on their bisector.
         Rx near = Rx.standingOn(FLAT, 70.5, 40.5);
@@ -574,7 +579,14 @@ class LocatorSolverTest {
         List<CellSample> plus900 = new ArrayList<>(west);
         plus900.add(heard(9L, 0, 80, 60, BAND_900, rx));
 
-        LocatorFix.Fix before = fix(solve(west, FLAT, LocatorParams.DEFAULTS));
+        // The three west sites are nearly in a north-south line, 150 blocks from the receiver, so the
+        // point 150 blocks beyond them fits every range to about 2 blocks: since row 16d the mirror
+        // check reports that as AMBIGUOUS, the truth one of the two. The "before" numbers below are the
+        // fit itself, read with the check off.
+        LocatorFix.Ambiguous westOnly = assertInstanceOf(LocatorFix.Ambiguous.class, solve(west, FLAT, LocatorParams.DEFAULTS));
+        assertTrue(Math.hypot(westOnly.ax() - rx.x(), westOnly.az() - rx.z()) < 40.0
+                || Math.hypot(westOnly.bx() - rx.x(), westOnly.bz() - rx.z()) < 40.0, "the truth is a candidate: " + westOnly);
+        LocatorFix.Fix before = fix(LocatorSolver.solve(measure(west), FLAT, null, LocatorParams.DEFAULTS, -1.0));
         LocatorFix.Fix after = fix(solve(plus3500, FLAT, LocatorParams.DEFAULTS));
         LocatorFix.Fix control = fix(solve(plus900, FLAT, LocatorParams.DEFAULTS));
 
@@ -919,5 +931,96 @@ class LocatorSolverTest {
         if (result instanceof LocatorFix.Ambiguous a) {
             assertTrue(a.likely() >= LocatorFix.Ambiguous.NO_PREFERENCE && a.likely() <= 1, result.toString());
         }
+    }
+
+    // ---- the mirror check (row 16d) -------------------------------------------------------------
+
+    /** Outcomes over seeded scenes: FIX, FIX on the wrong side of z = 0, AMBIGUOUS, AMBIGUOUS holding the truth. */
+    private record MirrorTally(int fix, int wrongSide, int ambiguous, int ambiguousHoldsTruth) {
+    }
+
+    /**
+     * band_900 scenes on flat ground: masts radiating at y 80 from {@code masts} ({x, z} each), the
+     * receiver uniform in x [x0, x1], z [z0, z1]. "Wrong side" is a FIX on the other side of z = 0
+     * from the receiver; "holds the truth" is an AMBIGUOUS with a candidate within 40 blocks of it.
+     */
+    private static MirrorTally mirrorScenes(int[][] masts, double x0, double x1, double z0, double z1,
+                                            double margin, long seed) {
+        java.util.Random random = new java.util.Random(seed);
+        int fix = 0;
+        int wrong = 0;
+        int ambiguous = 0;
+        int holds = 0;
+        for (int scene = 0; scene < 4_000; scene++) {
+            Rx rx = Rx.standingOn(FLAT, x0 + random.nextDouble() * (x1 - x0), z0 + random.nextDouble() * (z1 - z0));
+            List<CellSample> cells = new java.util.ArrayList<>();
+            for (int i = 0; i < masts.length; i++) {
+                cells.add(heard(i + 1L, masts[i][0], 80, masts[i][1], BAND_900, rx));
+            }
+            LocatorFix result = LocatorSolver.solve(measure(cells), FLAT, null, LocatorParams.DEFAULTS, margin);
+            if (result instanceof LocatorFix.Fix f) {
+                fix++;
+                if (f.z() * rx.z() < 0.0) {
+                    wrong++;
+                }
+            } else if (result instanceof LocatorFix.Ambiguous a) {
+                ambiguous++;
+                if (Math.min(Math.hypot(a.ax() - rx.x(), a.az() - rx.z()), Math.hypot(a.bx() - rx.x(), a.bz() - rx.z())) < 40.0) {
+                    holds++;
+                }
+            }
+        }
+        return new MirrorTally(fix, wrong, ambiguous, holds);
+    }
+
+    /**
+     * Row 16d, the slices 2-3 gate's follow-up: three band_900 masts 300 blocks end to end with the
+     * middle one 10 blocks off the line, the receiver 20-120 blocks from it. Without the mirror check
+     * about a third of all scenes were a FIX on the wrong side, about 140 blocks off with a "±" of
+     * about 12. With it (margin {@link LocatorSolver#MIRROR_COST_MARGIN}) under 5 % are, the rest of
+     * those being AMBIGUOUS with the truth among the two candidates (NOTES.md, row 16d: the full
+     * table, measured 1.8 % over both offsets).
+     */
+    @Test
+    @DisplayName("Nearly collinear sites: AMBIGUOUS (both sides) instead of a confident FIX on the wrong side")
+    void mirrorCheckNearlyCollinear() {
+        for (int offset : new int[] {10, -10}) {
+            int[][] masts = {{-150, 0}, {0, offset}, {150, 0}};
+            MirrorTally before = mirrorScenes(masts, -150, 150, 20, 120, -1.0, 42L + offset);
+            MirrorTally after = mirrorScenes(masts, -150, 150, 20, 120, LocatorSolver.MIRROR_COST_MARGIN, 42L + offset);
+            assertTrue(before.wrongSide() > 800 && before.ambiguous() == 0,
+                    "the old solver's confident wrong-side FIX (offset " + offset + "): " + before);
+            assertTrue(after.wrongSide() < 200, "now under 5 % of scenes (offset " + offset + "): " + after);
+            assertTrue(after.ambiguous() > 2_500, "most become AMBIGUOUS (offset " + offset + "): " + after);
+            assertEquals(after.ambiguous(), after.ambiguousHoldsTruth(),
+                    "every AMBIGUOUS has the truth among its candidates (offset " + offset + "): " + after);
+        }
+    }
+
+    @Test
+    @DisplayName("The mirror check leaves well-spread sites alone: no AMBIGUOUS from three or more good sites")
+    void mirrorCheckLeavesGoodGeometryAlone() {
+        int[][] triangle = {{100, 0}, {-50, 87}, {-50, -87}};
+        int[][] square = {{-100, -100}, {100, -100}, {100, 100}, {-100, 100}};
+        double margin = LocatorSolver.MIRROR_COST_MARGIN;
+        assertEquals(0, mirrorScenes(triangle, -50, 50, -50, 50, margin, 7L).ambiguous(), "triangle, inside");
+        assertEquals(0, mirrorScenes(triangle, 120, 260, -100, 100, margin, 8L).ambiguous(), "triangle, outside");
+        assertEquals(0, mirrorScenes(square, -90, 90, -90, 90, margin, 9L).ambiguous(), "square, inside");
+    }
+
+    @Test
+    @DisplayName("The sites' line and the mirror image across it")
+    void siteLineAndMirror() {
+        List<RangeMeasurement> sites = List.of(
+                new RangeMeasurement(1L, -100.0, 80.0, -100.0, 10.0, 1.0, "band_900", 0.0),
+                new RangeMeasurement(2L, 0.0, 80.0, 0.0, 10.0, 1.0, "band_900", 0.0),
+                new RangeMeasurement(3L, 100.0, 80.0, 100.0, 10.0, 1.0, "band_900", 0.0));
+        double[] line = LocatorSolver.siteLine(sites);
+        assertEquals(0.0, line[0], 1e-9);
+        assertEquals(0.0, line[1], 1e-9);
+        assertEquals(1.0, Math.abs(line[2] * line[3]) * 2.0, 1e-9, "along the diagonal x = z");
+        double[] image = LocatorSolver.mirrored(line, 30.0, -10.0);
+        assertEquals(-10.0, image[0], 1e-9);
+        assertEquals(30.0, image[1], 1e-9);
     }
 }

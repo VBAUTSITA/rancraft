@@ -81,14 +81,16 @@ import java.util.Objects;
  *   <li><b>The "±" is a reported uncertainty, not a guarantee.</b> It is the 1-sigma horizontal
  *       uncertainty of the weighted fit, from the random quantisation error only; the NLOS bias is
  *       systematic and is not in it, and neither is a mirror ambiguity.
- *   <li><b>Nearly collinear towers can give a confident FIX on the wrong side of the line</b> (open
- *       follow-up in PHASE_3.md). Only an exact line is caught (singular at the centroid). The HDOP
- *       gate is read at the estimate, and seen from off the line the lines of sight fan out, so HDOP
- *       looks good while the mirror image fits the coarse ranges about as well. Measured with
- *       band_900 quantisation, three masts 300 blocks end to end with the middle one 10 blocks off
- *       the line and the receiver 20-120 blocks from it: 32 % of FIX results on the wrong side, on
- *       average 139 blocks from the truth with a reported "±" of about 12 (NOTES.md, Phase 3A
- *       summary). With exact ranges it does not happen.
+ *   <li><b>Nearly collinear towers: the mirror check</b> (row 16d). Only an exact line is singular at
+ *       the centroid. The HDOP gate is read at the estimate, and seen from off a nearly straight line
+ *       the lines of sight fan out, so HDOP looks good while the mirror image fits the coarse ranges
+ *       about as well. Before row 16d that gave a confident FIX on the wrong side: band_900, three
+ *       masts 300 blocks end to end with the middle one 10 blocks off the line, the receiver 20-120
+ *       blocks from it, 32 % of FIX results on the wrong side, about 139 blocks off with a "±" of
+ *       about 12. Now the fit is also run from the estimate mirrored across the sites' line, and a
+ *       mirror about as good ({@link #MIRROR_COST_MARGIN}) makes the answer
+ *       {@link LocatorFix.Ambiguous}: both candidates, as for two sites. A deviation from §3A.5,
+ *       which defines AMBIGUOUS only for two cells (NOTES.md, row 16d, with the measurement).
  * </ul>
  *
  * <h2>Robustness</h2>
@@ -137,6 +139,20 @@ public final class LocatorSolver {
     /** Two runs ending closer than this found the same minimum; the centroid's run is kept. */
     static final double SAME_BASIN_BLOCKS = 1.0;
 
+    /**
+     * The mirror check (row 16d): the fit is run once more from the estimate mirrored across the sites'
+     * best-fit line, and a mirror minimum whose weighted residual is within this of the best one is as
+     * well supported by the ranges, so the answer is AMBIGUOUS. In weighted-cost units (squared
+     * residuals over sigma squared, summed). Chosen from the measurement in NOTES.md, row 16d.
+     */
+    static final double MIRROR_COST_MARGIN = 4.0;
+
+    /**
+     * A mirror candidate closer to the fix than this many reported "±" changes nothing: the "±"
+     * already covers it, so the FIX is not a confident wrong answer.
+     */
+    static final double MIRROR_MIN_SEPARATION_ERRORS = 3.0;
+
     private LocatorSolver() {
     }
 
@@ -150,6 +166,16 @@ public final class LocatorSolver {
      */
     public static LocatorFix solve(List<RangeMeasurement> ranges, SurfaceProbe ground,
                                    LocatorFix previous, LocatorParams params) {
+        return solve(ranges, ground, previous, params, MIRROR_COST_MARGIN);
+    }
+
+    /**
+     * {@link #solve} with the mirror check's margin given ({@link #MIRROR_COST_MARGIN} in the game); a
+     * negative margin turns the check off, which is the solver as it was before row 16d. For measuring
+     * the check.
+     */
+    static LocatorFix solve(List<RangeMeasurement> ranges, SurfaceProbe ground,
+                            LocatorFix previous, LocatorParams params, double mirrorCostMargin) {
         Objects.requireNonNull(ranges, "ranges");
         Objects.requireNonNull(ground, "ground");
         Objects.requireNonNull(params, "params");
@@ -162,7 +188,7 @@ public final class LocatorSolver {
             case 0 -> new LocatorFix.NoSignal();
             case 1 -> rangeOnly(used.get(0));
             case 2 -> twoCells(used.get(0), used.get(1), ground, previous);
-            default -> leastSquares(used, ground, previous, params.maxHdop());
+            default -> leastSquares(used, ground, previous, params.maxHdop(), mirrorCostMargin);
         };
     }
 
@@ -300,7 +326,7 @@ public final class LocatorSolver {
     // ---- 3+ cells ------------------------------------------------------------------------------
 
     private static LocatorFix leastSquares(List<RangeMeasurement> used, SurfaceProbe ground,
-                                           LocatorFix previous, double maxHdop) {
+                                           LocatorFix previous, double maxHdop, double mirrorCostMargin) {
         int n = used.size();
 
         double centroidX = 0.0;
@@ -351,6 +377,27 @@ public final class LocatorSolver {
             return new LocatorFix.PoorGeometry(HDOP_CEILING, n);
         }
 
+        // Row 16d, the mirror check (owner decision on the slices 2-3 gate's collinear follow-up). Seen
+        // from off a nearly straight line of sites the lines of sight fan out, so HDOP looks good, yet
+        // the mirror image across the line fits coarse ranges about as well, and quantisation alone
+        // picked the side: up to 46 % of such FIX results were on the wrong side, about 140 blocks off
+        // with a "±" of about 12. So the fit is run once more from the estimate mirrored across the
+        // sites' best-fit line. A clearly better fit there replaces the estimate, as an extra start's
+        // would; one about as good (within the margin) makes the answer AMBIGUOUS, both sides shown.
+        Fit mirror = null;
+        if (mirrorCostMargin >= 0.0) {
+            double[] start = mirrored(siteLine(used), best.x(), best.z());
+            Fit run = gaussNewton(used, ground, start[0], start[1], best.yRx());
+            if (run.status() == Status.CONVERGED_OR_CAPPED
+                    && Math.hypot(run.x() - best.x(), run.z() - best.z()) > SAME_BASIN_BLOCKS) {
+                if (run.cost() < best.cost() - mirrorCostMargin) {
+                    best = run;
+                } else if (run.cost() <= best.cost() + mirrorCostMargin) {
+                    mirror = run;
+                }
+            }
+        }
+
         double[] ux = new double[n];
         double[] uz = new double[n];
         unitVectors(used, best.x(), best.z(), ux, uz);
@@ -368,7 +415,54 @@ public final class LocatorSolver {
             // where H^T H is. Kept so that no infinity can ever leave the solver (test 12).
             return new LocatorFix.PoorGeometry(HDOP_CEILING, n);
         }
+        if (mirror != null && Math.hypot(mirror.x() - best.x(), mirror.z() - best.z())
+                > MIRROR_MIN_SEPARATION_ERRORS * errorBlocks) {
+            // Candidate A is the better fit, B its mirror; "likely" is the one nearer the last estimate.
+            boolean bestFirst = best.cost() <= mirror.cost();
+            Fit a = bestFirst ? best : mirror;
+            Fit b = bestFirst ? mirror : best;
+            double[] pa = {a.x(), a.z()};
+            double[] pb = {b.x(), b.z()};
+            return new LocatorFix.Ambiguous(pa[0], pa[1], pb[0], pb[1], likely(previous, pa, pb));
+        }
         return new LocatorFix.Fix(best.x(), best.yRx(), best.z(), hdop, errorBlocks, n);
+    }
+
+    /**
+     * The sites' best-fit line, {cx, cz, ux, uz}: through their centroid along the major axis of their
+     * spread (total least squares). For sites nearly in a line it is that line; for a well-spread set
+     * it is some axis through the middle, and the mirror run from across it finds the same minimum or
+     * a clearly worse one.
+     */
+    static double[] siteLine(List<RangeMeasurement> used) {
+        double cx = 0.0;
+        double cz = 0.0;
+        for (RangeMeasurement m : used) {
+            cx += m.x();
+            cz += m.z();
+        }
+        cx /= used.size();
+        cz /= used.size();
+        double sxx = 0.0;
+        double sxz = 0.0;
+        double szz = 0.0;
+        for (RangeMeasurement m : used) {
+            double dx = m.x() - cx;
+            double dz = m.z() - cz;
+            sxx += dx * dx;
+            sxz += dx * dz;
+            szz += dz * dz;
+        }
+        double angle = 0.5 * Math.atan2(2.0 * sxz, sxx - szz);
+        return new double[] {cx, cz, Math.cos(angle), Math.sin(angle)};
+    }
+
+    /** (px, pz) mirrored across {@code line} ({@link #siteLine}). */
+    static double[] mirrored(double[] line, double px, double pz) {
+        double vx = px - line[0];
+        double vz = pz - line[1];
+        double along = vx * line[2] + vz * line[3];
+        return new double[] {line[0] + 2.0 * along * line[2] - vx, line[1] + 2.0 * along * line[3] - vz};
     }
 
     private enum Status { CONVERGED_OR_CAPPED, SINGULAR_AT_START, FAILED }

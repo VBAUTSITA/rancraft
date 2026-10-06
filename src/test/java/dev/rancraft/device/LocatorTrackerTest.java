@@ -292,7 +292,7 @@ class LocatorTrackerTest {
                 fixes++;
             }
         }
-        assertTrue(maxLookups <= 7 * 16 + 1, "lookups " + maxLookups);
+        assertTrue(maxLookups <= 8 * 16 + 1, "lookups " + maxLookups);
 
         // Timing: JIT-warm, repeated; printed for NOTES.md. Loose bound: the whole server budget.
         long start = 0;
