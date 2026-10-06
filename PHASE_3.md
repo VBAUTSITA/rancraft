@@ -66,6 +66,7 @@ Legend: `[x]` done and verified · `[~]` partly done / needs a manual in-game ch
 | 16 | Recipes + loot tables + survival playthrough | 3C | [~] fourteen shaped recipes in `data/rancraft/recipe/` (1.21.1 format, `c:` tags for raw materials), one per item, from §3C.6's table and tiers: RF Lens early and cheap (2 copper, 1 amethyst, 2 glass), Signal Mast 4 per craft, the Radio Link Receiver taking a comparator **or a repeater** (a comparator needs Nether quartz, which is not early: spec conflict in follow-ups); a recipe-book unlock advancement per recipe (`data/rancraft/advancement/recipes/`, not in the spec: follow-ups); loot tables and the pickaxe tag already complete for all 7 blocks, every item already in the creative tab; `RecipeGameTests` (one per item, generated: a recipe loads, its grid from real stacks is matched by it alone with every ingredient alternative tried, and crafts the item, a RANCraft ingredient is craftable from non-RANCraft items, an advancement unlocks it; plus the creative tab), each check seen failing on broken data. Headless green (619 tests, 0 skipped; `runGameTestServer` 63/63, 15 new; recipes 1,291 → 1,305, advancements 1,400 → 1,414, no error in the log); 0 collisions with the 887 vanilla crafting recipes; no version bump. **3C ships here** (§7); the survival playthrough is the in-game check below | 36cd29e; docs 2350ce9; tracker ad91e3a |
 | 16a | Phase 3C review round 1: fixes (2 reported, 2 confirmed and fixed, 0 rejected) | 3C | [~] the LIMITED cap (FAIR) applies whatever `requireBackhaul` says, NONE caps only with it on (`BackhaulGraph.serviceCap`; slice 12 decision 1's reason was wrong: with no core every cell is NONE, so a world without backhaul is unchanged); the status command always says "devices capped at FAIR"; the Storage Terminal's 3C done-when game test now runs with the flag off (the default). Backhaul re-marches spread over ticks: new pure `util/BudgetedQueue` (clock read before each item, at least one per drain), `BackhaulNetwork` recompute split into begin / advance (marches under `backhaulMarchBudgetMs`, new COMMON 0.25 ms shared by every dimension) / finish (weather, solve, effects, in a tick of its own, all states published at once); the status command says "measuring" during the first one. Headless green (625 tests, 0 skipped; `runGameTestServer` 64/64 in three runs, 1 new: 64 dirty 1000-block hops, worst tick 0.31-0.76 ms against 3.3-4.6 ms in one tick; both fixes fail their tests when disabled); no wire or save change; one owner decision and two notes in follow-ups; in-game checks below | 3e5bdd1; docs 23bb7c8; tracker e417e0b |
 | 16b | Phase 3 final docs: code-site labels, 3C done-when re-checked, follow-ups, Part 3C summary, in-game checklist, README, MILESTONES | 3C | [~] **partly done; the rest deferred on purpose (owner: skip what can wait).** Done: four sites that NOTES.md called labelled described their abstraction without marking it, and now mark it (`SitePower`: no standby load, power stands still where block entities do not tick, the seam counts what the server evaluates; `ServedReceivers`: the same count; `SignalMastBlockEntity.bufferOwner`: a pole carrying power up is a game rule; `TerminalLink`: the session lives on the last verdict); `MicrowaveLink` now says its rain figures are 18 GHz ones that do not follow `frequency_mhz` (how §6's "rain fade rising with frequency" is shown); the `BackhaulNetwork` javadoc's tick counts now cover every recorded run; the slice rows' tracker hashes filled in; the 3C done-when re-checked against the code and the tests (2 `[x]`, 6 `[~]`); two slice check steps made current with the review (slice 12 step 5, slice 13 step 4); every 3C follow-up marked. **Deferred, not written yet** (independent docs-only work, see Follow-ups): NOTES.md "Phase 3C summary"; README's 3C section; a consolidated "How to test Part 3C in game" checklist (until then, use each 3C slice's own check steps in its section above). MILESTONES.md was updated by hand instead. Headless green (625 tests, 0 skipped; `runGameTestServer` 64/64 after part 1: fuel 320 vs 2,120 burn ticks, ratio 6.625 as in every run; worst backhaul march tick 0.68 ms; 200 radio links median 32.5 µs/tick) | 48393aa; docs "Phase 3: final docs"; tracker: the hash-recording commit after it |
+| 16c | Deferred docs (owner: skip what can wait, then finish the pendings): README 3C section, NOTES.md "Phase 3C summary", "How to test Part 3C in game" | 3C | [x] README "Turn on backhaul and power" (where `rancraft-common.toml` is, the two flags, what each changes) and the test counts; NOTES.md "Phase 3C summary" (commits, test counts, one paragraph per feature, config and versions, measured numbers, review outcome, owner decisions); the 3C in-game checklist at the end of this file, checked against the code's thresholds. Found while writing it: row 16a's in-game step 1 cannot work as written (one stone leaves a 30-block hop UP: a clear hop reads about −3 dBm there and one stone costs 36 dB; at 1000 blocks it reads −69.55), annotated there; the checklist uses a 1000-block hop, clear weather, and a second Core Site so the chest stays loaded. Docs only, no build needed | 403fcc7; docs "Phase 3: deferred docs" |
 | 17 | (optional) fix_x/fix_z/fix_err in drive-test CSV | — | [ ] | |
 
 ---
@@ -1196,6 +1197,10 @@ Headless (verified by `./gradlew build`, 625 tests, 0 skipped, and `./gradlew ru
 Needs a human in game:
 
 - [~] **1. The LIMITED cap with the default config.**
+  - *(Row 16c correction: at 30 blocks one stone leaves the hop UP. A clear hop's RSL is about −3 dBm
+    at 30 blocks and one stone costs 36 dB, so the hop must be roughly 110 to 1,000 blocks long; and a
+    chest by a core that far away is not loaded. Follow "How to test Part 3C in game", step 5, which
+    uses a 1000-block hop and a second Core Site for the chest.)*
   - A world with `requireBackhaul` false (the default). Place a Core Site, and a Sector Antenna on a mast
     at least 30 blocks away. Put a Backhaul Dish beside the core and one beside the sector's mast, pair
     them with the Link Tool, and check that the link is clear (lens, lobes layer: the line is green).
@@ -1223,8 +1228,7 @@ build` 625 passed, 0 skipped; `runGameTestServer` "All 64 required tests passed"
 part 1). Two are `[x]`: verified at runtime with real blocks, nothing left that only the client shows.
 Six are `[~]`: the server half of each is verified at runtime on the final code, and what is left is
 on screen (a greyed band, a grey lobe, a line's colour, a HUD list, the meter's "BH:" line) or needs
-a real Phase 2 save. The route through all of them will be "How to test Part 3C in game" (deferred, not written yet;
-use each slice's own check steps meanwhile).*
+a real Phase 2 save. The route through all of them is "How to test Part 3C in game" at the end of this file (row 16c).*
 
 - [~] A tier-2 sector cannot use band_3500 until it gets a Wideband Radio Unit. *Server half verified
       at runtime (slice 10: refused through the real `applyOn`, accepted after a unit is fitted through
@@ -1513,8 +1517,7 @@ centroid, so 7 × 16 + 1 = 113). (g)
   Slice 15's served-receivers seam is recorded for players inside the loop (`SignalTicker` calls
   `SitePower.noteServed` on an evaluation and on a replay), so its player half has no runtime test; its
   game test counts a Radio Link receiver, a fixed device. The loop itself is exercised by every in-game
-  step that holds a device (the deferred "How to test Part 3C in game" checklist; meanwhile each
-  3C slice's own check steps), and `/rancraft power
+  step that holds a device ("How to test Part 3C in game", row 16c), and `/rancraft power
   status` shows the served count there.)*
 - **[x] Done in slice 8 (02d1790) (from slice 4).** *`FixedReceiverTicker.staleCandidateGapTicks(interval,
   lag)` is the receiver's own gap, `interval + lag` (lag = server ticks it was served past its due
@@ -2023,12 +2026,12 @@ centroid, so 7 × 16 + 1 = 113). (g)
   each other; any can be written later in any order: (a) NOTES.md "Phase 3C summary" (slices 10-16,
   the review's 2 fixes, measurements: fuel ratio 6.625, worst backhaul march tick 0.68 ms, 200 radio
   links median 32.5 us/tick, 625 tests, 64/64 game tests); (b) ~~README's Part 3C section and how to turn on
-  requireBackhaul / requirePower~~ **done 2026-10-05** (README "Turn on backhaul and power"); (c) a consolidated "How to test Part 3C in game" checklist built from
-  the slice check steps above.
+  requireBackhaul / requirePower~~ **done 2026-10-05** (README "Turn on backhaul and power"); (c) ~~a consolidated "How to test Part 3C in game" checklist built from
+  the slice check steps above~~ **done in row 16c** (end of this file).
 - **[x] Done in row 16b.** Two in-game steps written before the Phase 3C review no longer matched the
   code: slice 12 step 5 (with the flag off, a cell behind step 4's DEGRADED hop now reads "BH: LIMITED
   (capped FAIR)") and slice 13 step 4 (the flag is no longer needed). Both are annotated where they
-  stand; "How to test Part 3C in game" is written for the final code.
+  stand; "How to test Part 3C in game" (row 16c) is written for the final code.
 
 ### Phase 3C review round 1: the two findings
 
@@ -2440,3 +2443,176 @@ exact steps.
 
 If a step fails, note its number and what the HUD said; the matching detailed check in the sections
 above says what the code is meant to do there.
+
+## How to test Part 3C in game
+
+For the project owner. Steps 1-8 are one creative sitting of about 75 minutes; step 9 is a survival
+playthrough (an evening); step 10 is optional and needs a world saved before Phase 3C. Everything that
+can run headless has passed (625 unit tests, 64 game tests); this is what only a person at the client
+can see. The sections above (slices 10-16 and the row 16a review) carry the detail for each check;
+this list is the route through them, written for the final code. Directions: +x is east, +z is
+**south**; F3 shows your block position.
+
+**Setup.** From `C:\Users\k_ale\Downloads\rancraft` run `.\gradlew.bat runClient` (no other Gradle
+running). Create a **Creative, Superflat** world (plains: it rains there, which step 5 needs). From the
+**RANCraft** creative tab take: Field Test Meter, RF Lens, Signal Masts, Sector Antennas, Wideband Radio
+Units, Core Sites, Backhaul Dishes, a Link Tool, a Storage Terminal, a Proximity Scanner, Site
+Generators, a Radio Link Transmitter and Receiver; from vanilla: chests, a furnace, stone, dirt, an oak
+sapling, bone meal, oak leaves, a lever, a redstone lamp, coal, a hopper, a lava bucket, spawn eggs (a
+zombie, a skeleton, a creeper, a cow). Right-click the meter once for the **detailed** readout. Both
+logistics flags stay **off** (the default) until step 6. To change one: close the game, edit
+`run\client\config\rancraft-common.toml`, start again (README, "Turn on backhaul and power"; NeoForge
+also reloads the file while the game runs, but closing first always works). Start the game once on this
+build before editing, so the file has the new lines.
+
+**1. Radio tiers (5 min; slice 10).**
+- [ ] Place a Sector Antenna and right-click it with an empty hand: "Radio tier: 2" under Apply. Cycle
+      the band: band_3500 reads "band_3500 (locked)" in grey, hovering it says "needs Wideband Radio
+      Unit", Apply is greyed with the same reason under it. band_700, band_900 and band_1800 are white
+      and Apply works.
+- [ ] Right-click the sector with a Wideband Radio Unit: the action bar says it was fitted, a smithing
+      sound plays, and the screen does not open. Open the screen: "Radio tier: 3", band_3500 white.
+      Apply it, aimed at where you will stand: the meter near the sector shows band_3500.
+- [ ] Right-click it again with a unit: "already has a Wideband Radio Unit", the unit stays in hand. A
+      unit used on a Signal Mast does nothing.
+
+**2. Proximity Scanner (6 min; slice 14).** Step 1's band_3500 sector, aimed at you.
+- [ ] Stand 10-30 blocks out on its beam, where the meter reads GOOD or EXCELLENT, and hold a Proximity
+      Scanner. Top right: "Proximity Scanner", "0 within 24", "via band_3500 (tier 3)" and "No hostiles
+      within 24 blocks".
+- [ ] Spawn a few hostile mobs, one behind a wall. Within about a second they are listed nearest first:
+      an arrow, the name, whole blocks and a compass point with degrees ("NE 047°"). The one behind the
+      wall is listed too (the scanner is not radar). Turn round: the arrows turn, the list does not
+      change. A cow is never listed.
+- [ ] Meter in the other hand, compact mode: the list starts under the meter's top-right readout and
+      never overlaps it. Meter detailed (top-left): the list moves up to the corner.
+- [ ] Set the sector to band_1800 (still GOOD or better): "OFF", "needs tier 3, you're on band_1800
+      (tier 2)" and "change the band: the feed needs a high-capacity one", no list. Back on band_3500,
+      walk out along the beam until the meter drops below GOOD: "signal too weak: FAIR, needs GOOD".
+- [ ] Move the scanner to the hotbar: its HUD goes at once. Take it back: "NO DATA" for up to a second,
+      then the list. Afterwards `/kill @e[type=!player]`.
+
+**3. Backhaul blocks and the Link Tool (4 min; slice 12 step 1).**
+- [ ] Place a Core Site and right-click it: the action bar gives the fiber radius (24).
+- [ ] Two Backhaul Dishes 40 blocks apart, each on a 10-block pillar. Right-click one with an empty hand:
+      "not paired". Use the Link Tool on one (it glints, the tooltip names the dish), then on the other:
+      "paired ... (40 m)". Within 5 s, right-click a dish: "UP, RSL ... dBm, margin +... dB, Fresnel
+      clear, rain 0.0 dB". Sneak + use the tool on a dish: "unpaired".
+
+**4. Storage Terminal (8 min; slice 13 steps 1-3 and 5).** A Sector Antenna set to band_1800, aimed at
+where you stand, and step 3's Core Site.
+- [ ] A chest 5 blocks from the core and a second 30 blocks away. Sneak + use the Storage Terminal on the
+      far chest: "no Core Site within 24 blocks of this Chest". On the near chest: "bound to the Chest
+      at x, y, z (Core Site 5 blocks away)", and the tooltip shows "Bound to …". On a furnace: "only a
+      chest or a barrel can be bound".
+- [ ] Where the meter reads GOOD or EXCELLENT on band_1800, carry the terminal for a second and use it in
+      the air: the ordinary chest screen opens, titled "Storage Terminal: Chest", with the chest's items.
+      Move items in and out, then open the chest by hand: they are there. If the chest is in view, its
+      lid stays shut.
+- [ ] Set the sector to band_900 and use the terminal: "needs band tier 2, you're on band_900 (tier 1)".
+      Set it back to band_1800.
+- [ ] With the screen open, move the terminal out of the hotbar: within about 2 s the screen closes and
+      the action bar reads "connection lost (no signal reading …)".
+- [ ] Walk out along the beam until the meter reads FAIR (about 200 blocks in open air) and use it:
+      "signal too weak: FAIR, needs GOOD".
+- [ ] `/tp ~400 ~ ~` (the chest's chunk unloads), place a Sector Antenna on band_1800 aimed at you and
+      use the terminal at GOOD: "storage unreachable: its chunk is not loaded (x, y, z)". In the Nether:
+      "storage unreachable: it is in minecraft:overworld …".
+
+**5. A degraded hop, flags off (15 min; row 16a step 1, slice 12 steps 3-4, slice 13 step 4).** A
+DEGRADED hop caps the cells behind it at FAIR even with `requireBackhaul` off. One stone (36 dB) makes a
+hop DEGRADED only when the hop is long: at 1000 blocks it reads −69.55 dBm, just above DOWN (−70), so do
+this step in **clear weather** (`/weather clear`).
+- [ ] Build it: back in the Overworld, `/tp ~1000 ~ ~` from step 4's area so nothing else is near. Core Site A with a dish beside
+      it on a 10-block pillar. `/tp ~1000 ~ ~` again: a Signal Mast with a Sector Antenna on top, on
+      band_1800, and a dish within 8 blocks of the mast on a 10-block pillar. Pair the two dishes with the
+      Link Tool (the far one's chunk may unload; it still counts). Core Site B about 40 blocks from the
+      sector, on the far side from its dish (more than 24 from both, so neither is on fiber) with a chest beside it; bind the
+      terminal to that chest. A Radio Link pair beside the sector on one address, a lever on the
+      transmitter, a redstone lamp by the receiver.
+- [ ] RF Lens on (lobes layer): the hop is a green line, "UP · ... dBm (+... dB)". Near the sector, at GOOD
+      or better, the terminal opens.
+- [ ] `/tp` to the hop's midpoint (500 blocks from either end) and put **one** stone block on the line.
+      Within 5 s: the line is orange (DEGRADED, about −69.5 dBm); the dish reads DEGRADED; back at the
+      sector, the meter's detailed readout shows "BH: LIMITED (capped FAIR)" while its bars stay the
+      radio's own; `/rancraft backhaul status` lists the sector under "LIMITED, devices capped at FAIR".
+- [ ] With the terminal open when the stone goes in (or used afterwards): the screen closes with
+      "connection lost (backhaul limited: the serving cell is capped at FAIR, needs GOOD)", and a use is
+      refused with the same words. The Radio Link still follows its lever.
+- [ ] Storm: with the stone still there, `/weather thunder`. Within 5 s the line is red (DOWN) and the dish
+      reads "rain 6.0 dB". `/weather clear`: orange again. (A DOWN hop leaves the sector with no backhaul;
+      with the flag off that means on the air and uncapped, so the meter's "BH:" line goes while it is
+      DOWN. That is correct.)
+- [ ] Take the stone out: green, and the terminal opens again.
+- [ ] A tree: put a dirt pillar under the midpoint whose top is about 6 blocks below the line, plant an
+      oak sapling on it and bone-meal it. Within 5 s of the tree growing into the line, the line is orange
+      and the meter reads "BH: LIMITED (capped FAIR)". It needs at least six leaves on the line (3 dB
+      each): if the line stays green, the canopy crossed fewer, so add oak leaves on the line by hand.
+      Cut the leaves out: green again.
+
+**6. requireBackhaul on (12 min; slice 12 steps 2 and 5).** Close the game, set `requireBackhaul =
+true`, start again. Every tower with no path to a Core Site is now off the air (steps 1-4's sectors
+too).
+- [ ] Next to step 5's Core Site A (`/tp` there): a dish D0 within 24 blocks of the core. Site 1, a Signal
+      Mast about 50 blocks out, with two dishes within 8 blocks of its base; site 2 the same about 50
+      blocks further; site 3, one mast and one dish 50 blocks further. Dishes on 10-block pillars. Pair D0
+      with site 1's first dish, site 1's second with site 2's first, site 2's second with site 3's dish.
+      Lens on: three green lines, all three lobes lit.
+- [ ] Break site 2's first dish: within 5 s the lobes of sites 2 and 3 turn grey, the middle line goes,
+      and the meter beside site 3 loses it. `/rancraft backhaul status` lists sites 2 and 3 under "Off the
+      air". Put the dish back and pair it again: lit within 5 s.
+- [ ] Close the game, set `requireBackhaul = false`, start again: every site is lit whatever its backhaul,
+      and `/rancraft backhaul status` says "still on the air because requireBackhaul is off". (Leave step
+      5's stone off the line, or the meter behind it reads "BH: LIMITED (capped FAIR)", which is
+      correct.)
+
+**7. Power (15 min; slice 15 steps 1-5).** `/rancraft power status` (operator) shows each cell's draw,
+buffer and state.
+- [ ] Flag off (the default): place a Site Generator next to a Sector Antenna and use coal on it. It stays
+      dark; using it says "idle, requirePower is off on this server", and the coal stays in it.
+- [ ] Close the game, set `requirePower = true`, start again. Every tower without power is off the air
+      (grey lobe; the meter loses it). Put coal in the generator beside the sector: it lights (glowing
+      front, light level 13), and about a second later the sector's lobe lights. Power status: about
+      10.67 FE/t at 20 dBm, the buffer filling towards 10,000.
+- [ ] Take the coal out (sneak + use with an empty hand) and let the item already burning finish (at 20
+      dBm a coal lasts about 5 minutes). Then the full buffer keeps the sector on for about 47 s and it
+      goes grey. Put fuel back: it returns once the buffer passes 1,000 FE (about 25 s), not at the
+      first FE.
+- [ ] Set the sector to 30 dBm: power status about 70.67 FE/t. On one generator it cycles, about 1.3 s
+      off and 1.7 s on (the lobe blinks slowly, never every tick). Add a second generator beside it: it
+      stays on. (3C done-when: about 6.6x the fuel of 20 dBm.)
+- [ ] A column of three Signal Masts with the generator next to the top one: the tower comes on. A Sector
+      Antenna on top: the column goes quiet and the same generator feeds the sector, which comes on.
+- [ ] A hopper with coal on top of a generator fills it. A lava bucket in a generator leaves an empty
+      bucket, which a hopper under it takes out.
+
+**8. Back to the defaults (1 min).** Close the game and set `requirePower = false` (and check
+`requireBackhaul = false`).
+
+**9. Survival playthrough (an evening; slice 16, slice 10 step 4, slice 12 step 6).** A **new survival
+world**. The grids are in NOTES.md, slice 16, and in the recipe book once unlocked.
+- [ ] Early: with a copper ingot in the inventory the recipe book shows the Field Test Meter, the RF Lens
+      and the Signal Mast. Craft 4 masts (6 iron bars and a copper ingot), a meter, and, with an amethyst
+      shard, the lens. A placed mast: the meter reads it and the lens shows its lobe. A compass shows the
+      Network Locator; a redstone torch shows both Radio Links; the receiver crafts with a repeater and
+      with a comparator.
+- [ ] Mid: holding a Signal Mast shows the Sector Antenna, Core Site, Backhaul Dish and Site Generator.
+      Craft a sector (it uses up a mast); two dishes show the Link Tool; pair them.
+- [ ] Late: with a Sector Antenna in the inventory the Wideband Radio Unit appears (4 gold, 4 amethyst, a
+      redstone block). Fitting one consumes it; band_3500 unlocks. An ender pearl shows the Storage
+      Terminal; a sculk sensor, or holding the Wideband Radio Unit, shows the Proximity Scanner.
+- [ ] Breaking, iron pickaxe: each of the seven blocks drops itself with the crack animation (Signal Mast,
+      Sector Antenna, both Radio Links, Core Site, Backhaul Dish, Site Generator); the sector with a unit
+      drops the unit too, and placed again it is tier 2. A generator drops its fuel. Bare-handed, each is
+      slow to break and drops nothing.
+- [ ] The creative tab (`/gamemode creative`) lists all 14 blocks and items.
+
+**10. Optional.**
+- [ ] A world saved before Phase 3C (on `main`), both flags off: every tower transmits and every device
+      works as before; the meter shows no "BH:" line. A sector there on band_3500 shows "Radio tier: 3"
+      with band_3500 unlocked, and breaking it drops a unit; a sector with PCI 0 keeps PCI 0.
+- [ ] With twenty or more long links built, save and quit, then reopen: no visible stutter in the first
+      seconds (F3 tick graph, or `/tick query`), and the links appear on the lens within a second or two.
+
+If a step fails, note its number and what the HUD or the action bar said; the matching detailed check in
+the sections above says what the code is meant to do there.

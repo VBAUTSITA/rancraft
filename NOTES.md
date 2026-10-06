@@ -5742,3 +5742,114 @@ for a double, as the existing keys do.
 | The fixes bite | one run with both fixes disabled (the old `!requireBackhaul` gate in `serviceCap`, and an unlimited budget in `onServerTick`): exactly the two tests failed. The Storage Terminal test failed on "capped at FAIR". The march-budget test failed on "the server's own recompute starts on the new hops": the recompute never spanned a tick. `BackhaulGraphTest.requireBackhaulOffChangesNothing` failed too (LIMITED expected FAIR, was EXCELLENT). Code restored afterwards |
 | Versions | no wire or save change: `PROTOCOL_VERSION` 10, `AntennaBlockEntity.DATA_VERSION` 4 and `BackhaulNetwork.DATA_VERSION` 1 unchanged. One config key added (COMMON; an older config file gets the default on load) |
 | In game | needs the user: `PHASE_3.md`, "Phase 3C review (row 16a) checks" |
+
+---
+
+## Phase 3C summary — deferred docs (rows 16b and 16c)
+
+Part 3C (infrastructure and progression) is complete in code, review fixes included. Every check that
+can run headless passes: `./gradlew build` **625 tests, 0 failed, 0 skipped**, `runGameTestServer`
+**64 of 64** (row 16b's run, after part 1's comment-only labels). What is left needs a person at the
+client: the route is "How to test Part 3C in game" at the end of `PHASE_3.md` (row 16c). This section
+is the one-page view; the detail stays in the slice sections above (slices 10-16 and "Phase 3C review,
+round 1"). Row 16b was interrupted by a usage limit after its part 1 (`48393aa`); its part 2
+(`95be3c8`) corrected the tracker and `MILESTONES.md`, and the owner chose to defer this summary, the
+README's 3C section (`403fcc7`) and the in-game checklist, each written afterwards on its own.
+
+### Slices and commits
+
+| Row | What | Commits (tracker-only commits in brackets) | Unit tests after | Game tests after |
+|---|---|---|---|---|
+| 10 | Radio tiers, Wideband Radio Unit, v2 → v3 save migration | 4b3ce10 (4a242af) | 499 | 32 |
+| 11 | `MicrowaveLink`, `BackhaulGraph`, `microwave.json` (pure `rf`) | 0d45aca, 53ce35f (f8c44fa) | 539 | 32 |
+| 12 | Core Site, Backhaul Dish, Link Tool, backhaul state, lens lines, status command | ea9c98d, 8f2a31a (b5def28) | 559 | 36 |
+| 13 | Wireless Storage Terminal | 6a0ab89, b1735d2 (744103a) | 567 | 39 |
+| 14 | Proximity Scanner | 465d40e, 9e3fab5 (a1e9611) | 594 | 40 |
+| 15 | Power, cell buffers, Site Generator | 797d641, bce3a8a (e50a0fb) | 619 | 48 |
+| 16 | Recipes, recipe-book unlocks, loot tables, creative tab (**3C ships**) | 36cd29e, 2350ce9 (ad91e3a) | 619 | 63 |
+| 16a | Phase 3C review round 1 fixes | 3e5bdd1, 23bb7c8 (e417e0b) | 625 | 64 |
+| 16b | Final docs: code-site labels, tracker, `MILESTONES.md` | 48393aa, 95be3c8 | 625 | 64 |
+| 16c | Deferred docs: README 3C section, this summary, the 3C in-game checklist | 403fcc7 and the commit with this section | 625 | 64 |
+
+Part 3C took the unit tests from 485 to 625 (+140) and the game tests from 30 to 64 (+34).
+
+### What Part 3C added, in one paragraph each
+
+- **Radio tiers (§3C.1).** `rf/RadioTier`: a radio of tier n takes bands of `capacityTier` ≤ n. A
+  Signal Mast is tier 1, a Sector Antenna 2, and a Wideband Radio Unit used on a sector makes it 3
+  (band_3500); breaking the sector drops the unit. The server refuses a band the radio cannot take
+  (`UpdateCellParamsPayload.applyOn`) and the screen greys it with the reason. Saves move to
+  `DATA_VERSION` 3; a Phase 2 sector already on band_3500 is migrated to tier 3 and keeps working.
+- **Microwave backhaul (§3C.2).** `rf/MicrowaveLink`: an 18 GHz hop's budget (FSPL, two 32 dBi
+  dishes, 20 dBm), the blocks on its line (penetration × 3), a 6 dB penalty for the first Fresnel
+  zone's 60 % sampled on four offset paths, and rain fade (2.5 dB/km, 6.0 in a thunderstorm, none in
+  snow): UP above −50 dBm, DEGRADED above −70, else DOWN. `rf/BackhaulGraph`: FULL (fiber within 24
+  blocks of a Core Site, or an all-UP chain), LIMITED (a DEGRADED hop on the best path), NONE.
+  In game, Core Sites, Backhaul Dishes and the Link Tool build it; the server re-measures hops when
+  their region epochs, the topology or the weather change, under `backhaulMarchBudgetMs` (review fix 2).
+  LIMITED caps the devices a cell serves at FAIR (whatever the flag says, review fix 1); with
+  `requireBackhaul` on, a NONE cell goes off the air. The lens draws the hops green, orange or red.
+- **Wireless Storage Terminal (§3C.3).** Binds to a chest or barrel within 24 blocks of a Core Site and
+  opens it remotely with GOOD service on a tier-2 band. The session closes when the verdict drops,
+  the cell is backhaul-limited, the chest's chunk unloads or the core is broken. It never force-loads a
+  chunk and never lifts the lid.
+- **Proximity Scanner (§3C.4).** Held with GOOD service on a tier-3 band (band_3500), it lists up to 16
+  hostile mobs within 24 blocks on the HUD, with distance and bearing. Otherwise it says why
+  ("needs tier 3, you're on band_1800 (tier 2)"). It is a stand-in for a sensor feed, not radar.
+- **Power (§3C.5).** With `requirePower` on, a cell on the air draws `baseFe + 20 × P_rf_W / 0.3` FE
+  per tick from a 10,000 FE buffer (a mast column's base holds it). An empty cell goes off the air and
+  comes back above 10 %. A Site Generator burns furnace fuel into 40 FE/t, only while the energy is
+  taken, and feeds any mast of a tower. `DATA_VERSION` 4.
+- **Recipes and loot (§3C.6).** Fourteen shaped recipes, each with an advancement that unlocks it in
+  the recipe book; every block drops itself to a pickaxe; the creative tab lists all fourteen items.
+
+New COMMON config values: `requireBackhaul` false, `fiberRadiusBlocks` 24, `siteRadiusBlocks` 8,
+`backhaulRecomputeTicks` 100, `enableRainFade` true, `backhaulMarchBudgetMs` 0.25 (review, not §5),
+`scannerRangeBlocks` 24 (not §5), `requirePower` false, `powerBufferFe` 10,000,
+`powerRestartFraction` 0.10, the five power-model figures, `siteGeneratorFePerTick` 40 and
+`servedWindowMinutes` 5. Versions: `PROTOCOL_VERSION` 7 → 8 (slice 10) → 9 (slice 12) → 10
+(slice 14); `AntennaBlockEntity.DATA_VERSION` 2 → 3 (slice 10) → 4 (slice 15); `SignalSamplePayload`
+3 → 4 (the backhaul cap); new `BackhaulLinksPayload` v1, `ScannerPayload` v1, `BackhaulNetwork` and
+Site Generator `DataVersion` 1.
+
+### Measured numbers (Part 3C)
+
+| What | Number | Where |
+|---|---|---|
+| A 1000-block hop at 18 GHz | FSPL 117.55 dB, −33.55 dBm clear (16.45 dB margin), −69.55 dBm with one stone | slices 11, 12 |
+| One hop march | 0.14 µs per block over loaded ground; a recompute marching three hops 192 µs, none 36 µs | slice 12 |
+| 64 long hops re-marched at once | spread over 16-34 ticks, worst tick 0.31-0.76 ms (0.68 ms in row 16b's run), against 3.3-4.6 ms in one tick | review fix 2, row 16b |
+| Storage Terminal session check | 0.44 µs per tick | slice 13 |
+| Proximity Scanner scan | 23.7 µs with 20 mobs around, once per interval per holder | slice 14 |
+| Power draw | 0.064-0.070 µs per cell on the air (200 cells: 16.1-20.1 µs/tick) | slice 15 |
+| The fuel bill (3C done-when) | 30 dBm against 20 dBm: 2,120 against 320 burn ticks, ratio **6.625** (70.667 / 10.667 FE/t), identical in every run | slice 15, row 16b |
+| 200 radio links, steady state | median 32.5 µs/tick in row 16b's run (the 0.1 ms gate holds) | row 16b |
+
+### Review: Phase 3C review round 1 (row 16a), outcome
+
+One round (lean mode). **2 reported, 2 confirmed, 2 fixed, 0 rejected.** (1) The LIMITED cap applied
+only with `requireBackhaul` on; §3C.2 states it unconditionally, so it now applies with the flag off
+too, and a world with no Core Site is still untouched (every cell NONE, uncapped). (2) A recompute that
+had to re-march many long hops did it in one tick (3.3-4.6 ms for 64); the marches now go through a
+`BudgetedQueue` under `backhaulMarchBudgetMs`, and nothing is published until all are measured. Each
+fix has a game test that fails with it disabled. Detail: "Phase 3C review, round 1" above.
+
+### Owner decisions waiting (Part 3C)
+
+None blocks anything. From the `PHASE_3.md` follow-ups: whether `applyOn` should accept a band the
+antenna already has even if its tier no longer allows it (slice 10); the Sector Antenna's screen opens
+with any item in hand, not only an empty one (slice 10, behaviour kept); whether a site with no cell
+should relay backhaul (slice 11); solving at once when only the weather changed (slice 12); whether
+turning `requirePower` on should grant every loaded cell a full buffer once (slice 15); and, with
+`requireBackhaul` off, whether a cell that has a dish on its site should be capped at FAIR when it has
+no path at all (review finding 1).
+
+### Verification
+
+| Check | Result |
+|---|---|
+| `./gradlew build` | **625 passed, 0 failed, 0 skipped** (row 16b, after part 1) |
+| `./gradlew runGameTestServer` | "All 64 required tests passed" (row 16b) |
+| `rf` / `util` purity | `PackagePurityTest` passes |
+| In-game checklist | written in row 16c from the slice and review steps, checked against the code's thresholds; one review step corrected (row 16a step 1: one stone leaves a 30-block hop UP, since a clear hop there reads about −3 dBm; the checklist uses a 1000-block hop and a second Core Site for the chest) |
+| In game | not run by the agent; the route is at the end of `PHASE_3.md` |
