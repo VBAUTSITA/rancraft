@@ -2022,8 +2022,8 @@ centroid, so 7 × 16 + 1 = 113). (g)
 - **[ ] Deferred docs (from row 16b, owner chose to skip what can wait).** Independent of all code and of
   each other; any can be written later in any order: (a) NOTES.md "Phase 3C summary" (slices 10-16,
   the review's 2 fixes, measurements: fuel ratio 6.625, worst backhaul march tick 0.68 ms, 200 radio
-  links median 32.5 us/tick, 625 tests, 64/64 game tests); (b) README's Part 3C section and how to turn on
-  requireBackhaul / requirePower; (c) a consolidated "How to test Part 3C in game" checklist built from
+  links median 32.5 us/tick, 625 tests, 64/64 game tests); (b) ~~README's Part 3C section and how to turn on
+  requireBackhaul / requirePower~~ **done 2026-10-05** (README "Turn on backhaul and power"); (c) a consolidated "How to test Part 3C in game" checklist built from
   the slice check steps above.
 - **[x] Done in row 16b.** Two in-game steps written before the Phase 3C review no longer matched the
   code: slice 12 step 5 (with the flag off, a cell behind step 4's DEGRADED hop now reads "BH: LIMITED

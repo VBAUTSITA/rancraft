@@ -62,7 +62,8 @@ To run a headless dedicated server instead: `.\gradlew.bat runServer`
     a transmitter on its address is powered. Both ends need POOR service or better, updates arrive
     about once a second by design, and at low SINR some are lost (a lost update leaves the old
     state; at FAIR or better the link is solid). The lamp on top lights while the block has service.
-- **Phase 3C** (in progress) — infrastructure and progression:
+- **Phase 3C** — infrastructure and progression (backhaul and power are off until you turn them on;
+  see [Turn on backhaul and power](#turn-on-backhaul-and-power)):
   - *Radio tiers:* a Sector Antenna's radio takes band_700, band_900 and band_1800; band_3500 needs a
     **Wideband Radio Unit** (right-click the sector with it; breaking the sector drops it again). The
     configuration screen shows band_3500 greyed with "needs Wideband Radio Unit" until then. A sector
@@ -108,6 +109,40 @@ To run a headless dedicated server instead: `.\gradlew.bat runServer`
     what it builds on (copper shows the meter, the lens and the mast; a Signal Mast shows the network
     blocks). Every block drops itself to a pickaxe.
 
+## Turn on backhaul and power
+
+Out of the box, cells need neither backhaul nor power, so an existing world keeps working. Both are
+switches in the mod's COMMON config:
+
+| Run | Config file (inside this folder) |
+|---|---|
+| `runClient` | `run\client\config\rancraft-common.toml` |
+| `runServer` | `run\server\config\rancraft-common.toml` |
+
+1. Start the game once with the current build, then quit. Starting it adds any setting that is
+   missing to the file (a file from an older build has no `requireBackhaul` or `requirePower` line
+   until then).
+2. Open the file in a text editor and set either or both:
+   ```toml
+   requireBackhaul = true
+   requirePower = true
+   ```
+3. Save the file and start the game again.
+
+What changes:
+
+- **`requireBackhaul = true`:** a cell with no path to a Core Site goes off the air. The path can be
+  fiber (a Core Site within 24 blocks of the cell's base) or a chain of working microwave hops between
+  Backhaul Dishes. The RF Lens greys an off-air cell. `/rancraft backhaul status` lists the cells that
+  are off the air or limited.
+- **`requirePower = true`:** each cell on the air draws energy from its 10,000 FE buffer, and when the
+  buffer is empty it goes off the air. Put a Site Generator with fuel next to the antenna, or next to
+  any mast of its tower. `/rancraft power status` shows each cell's draw, buffer and state.
+
+A DEGRADED microwave hop caps the devices it serves at FAIR service even with `requireBackhaul` off.
+The other figures (radii, buffer size, generator output, the power model) are in the same file, each
+with a comment.
+
 See `VISION.md` for the full design of the vision feature, `VISION_STEP3.md` for Step 3 (the
 drive-test log, and the planned automatic problem diagnosis), and `NOTES.md` for the full build log,
 every tuning decision, every deviation from spec, and what's honestly modeled vs. simplified.
@@ -119,7 +154,7 @@ every tuning decision, every deviation from spec, and what's honestly modeled vs
 ```
 
 Compiles the mod and runs the full unit test suite (382 tests at the end of Phase 3A, 485 at the
-end of Phase 3B): the RF maths in `dev.rancraft.rf` and `dev.rancraft.util`, which is pure
+end of Phase 3B, 625 at the end of Phase 3C): the RF maths in `dev.rancraft.rf` and `dev.rancraft.util`, which is pure
 Java and must stay free of Minecraft (`PackagePurityTest` fails the build otherwise), plus the
 payloads, HUD text and device logic.
 
@@ -137,9 +172,10 @@ their transmitters, drop about half their updates at POOR (SINR about 1 dB) and 
 and survive a chunk reload; microwave backhaul chains go LIMITED and off the air as specified, and a
 marginal hop drops in a thunderstorm and recovers; a 30 dBm sector burns about 7x the fuel of a 20
 dBm one and an empty cell goes off the air until its buffer is above 10 %; the costs are logged too;
-48 tests in Phase 3C slice 15), and exits. The task fails
-if any test fails. It is separate from `build`.
+every block and item can be crafted from its recipe; 64 tests at the end of Phase 3C), and exits.
+The task fails if any test fails. It is separate from `build`.
 
-Phases 3A and 3B are complete in code and every headless check passes; what still needs a person
-at the client is listed step by step at the end of `PHASE_3.md` ("How to test Part 3A in game",
-"How to test Part 3B in game").
+Phases 3A, 3B and 3C are complete in code and every headless check passes. What still needs a
+person at the client is listed step by step in `PHASE_3.md`: "How to test Part 3A in game", "How to
+test Part 3B in game", and, for Part 3C, the check steps in each 3C slice's own section (a single
+3C checklist has not been written yet).

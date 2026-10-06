@@ -185,7 +185,8 @@ Tests: **485 → 625** unit tests, **30 → 64** game tests.
 You asked to skip what can wait. None of these touch code, and each can be done on its own:
 
 - [ ] `NOTES.md` "Phase 3C summary".
-- [ ] README's Part 3C section, including how to turn on `requireBackhaul` / `requirePower`.
+- [x] README's Part 3C section, including how to turn on `requireBackhaul` / `requirePower`
+      (done 2026-10-05: README, "Turn on backhaul and power").
 - [ ] A single "How to test Part 3C in game" checklist. Until it exists, each 3C slice's own check
       steps in `PHASE_3.md` cover the same ground.
 
